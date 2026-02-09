@@ -40,6 +40,7 @@ export type SolveResponse = {
     edges: Array<[string, string]>;
     terminals: Record<string, [string, string]>;
     tiles: Record<string, string[]>;
+    terminal_colors?: Record<string, string>;
   };
 };
 
@@ -47,30 +48,74 @@ export type GraphResponse = {
   graph: SolveResponse["graph"];
 };
 
+export type LevelGeometry = "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8";
+export type LevelModifier = "bridges" | "warps" | "walls";
+
+export type LevelTypeCandidate = {
+  id: string;
+  geometry: LevelGeometry;
+  modifiers: LevelModifier[];
+  confidence: number;
+  can_emit_flow: boolean;
+  recommended_target_type: LevelGeometry;
+  recommended_output_format: "flow" | "json";
+  reason?: string;
+};
+
+export type LevelType = LevelTypeCandidate & {
+  source: string;
+  candidates: LevelTypeCandidate[];
+  notes: string[];
+  signals?: Record<string, unknown>;
+};
+
 export type ImageCropResponse = {
   crop: { x: number; y: number; width: number; height: number } | null;
   image_size: { width: number; height: number };
+  seed_crop?: { x: number; y: number; width: number; height: number } | null;
   message?: string;
 };
 
+export type ImageClassifyResponse = {
+  level_type: LevelType;
+  candidates: LevelTypeCandidate[];
+  warnings: string[];
+  signals: Record<string, unknown>;
+  image_size: { width: number; height: number };
+  perspective?: Record<string, unknown> | null;
+};
+
 export type ImageGridResponse = {
-  grid: { rows: number; cols: number; vertical_lines: number; horizontal_lines: number } | null;
+  grid: { rows: number; cols: number; vertical_lines: number; horizontal_lines: number; mode?: string } | null;
   image_size: { width: number; height: number };
   message?: string;
   perspective?: Record<string, unknown> | null;
+  circle?: Record<string, unknown>;
 };
 
 export type ImageTerminalsResponse = {
   terminals: Array<{ row: number; col: number; letter: string; color: number[] }>;
   info: { clusters: Array<{ color: number[]; count: number }>; candidates: number; warnings: string[] };
   perspective?: Record<string, unknown> | null;
+  auto_crop?: Record<string, unknown> | null;
 };
 
 export type ImageGenerateResponse = {
   name: string;
   text: string;
   metadata: Record<string, string>;
-  detection: Record<string, unknown>;
+  detection: {
+    grid?: { rows: number; cols: number; vertical_lines?: number; horizontal_lines?: number };
+    terminals?: Array<{ row?: number; col?: number; node_id?: string; letter: string; color?: number[] }>;
+    terminal_info?: Record<string, unknown>;
+    warnings?: string[];
+    perspective?: Record<string, unknown> | null;
+    level_type?: LevelType;
+    level_type_candidates?: LevelTypeCandidate[];
+    target_type_requested?: string;
+    target_type_used?: string;
+    [key: string]: unknown;
+  };
 };
 
 export type CropTemplate = {
@@ -84,6 +129,7 @@ export type CropTemplate = {
   created_at?: number;
   has_preview?: boolean;
   pipeline?: {
+    classifier?: boolean;
     ocr?: boolean;
     grid?: boolean;
     terminals?: boolean;
@@ -91,7 +137,21 @@ export type CropTemplate = {
   };
 };
 
-export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+function resolveApiUrl() {
+  const explicit = (import.meta.env.VITE_API_URL ?? "").trim();
+  if (explicit) {
+    return explicit.replace(/\/+$/, "");
+  }
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const host = window.location.hostname;
+    const port = (import.meta.env.VITE_API_PORT ?? "8000").trim() || "8000";
+    return `${protocol}//${host}:${port}`;
+  }
+  return "http://localhost:8000";
+}
+
+export const API_URL = resolveApiUrl();
 
 function encodePath(path: string) {
   return path
@@ -212,9 +272,16 @@ export async function imageAutoCrop(params: {
   threshold: number;
   invert: boolean;
   padding: number;
+  crop?: { x: number; y: number; width: number; height: number } | null;
 }): Promise<ImageCropResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.crop) {
+    form.append("crop_x", String(params.crop.x));
+    form.append("crop_y", String(params.crop.y));
+    form.append("crop_width", String(params.crop.width));
+    form.append("crop_height", String(params.crop.height));
+  }
   form.append("threshold", String(params.threshold));
   form.append("invert", String(params.invert));
   form.append("padding", String(params.padding));
@@ -223,6 +290,7 @@ export async function imageAutoCrop(params: {
 
 export async function imageDetectGrid(params: {
   file: File;
+  targetType?: string;
   threshold: number;
   lineThreshold: number;
   invert: boolean;
@@ -231,6 +299,9 @@ export async function imageDetectGrid(params: {
 }): Promise<ImageGridResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.targetType) {
+    form.append("target_type", params.targetType);
+  }
   form.append("threshold", String(params.threshold));
   form.append("line_threshold", String(params.lineThreshold));
   form.append("invert", String(params.invert));
@@ -246,8 +317,38 @@ export async function imageDetectGrid(params: {
   return imageRequest<ImageGridResponse>("/image/grid/detect", form);
 }
 
+export async function imageClassify(params: {
+  file: File;
+  threshold: number;
+  lineThreshold: number;
+  invert: boolean;
+  perspective?: boolean;
+  levelHint?: string;
+  crop?: { x: number; y: number; width: number; height: number } | null;
+}): Promise<ImageClassifyResponse> {
+  const form = new FormData();
+  form.append("file", params.file);
+  form.append("threshold", String(params.threshold));
+  form.append("line_threshold", String(params.lineThreshold));
+  form.append("invert", String(params.invert));
+  if (params.perspective !== undefined) {
+    form.append("perspective", String(params.perspective));
+  }
+  if (params.levelHint) {
+    form.append("level_hint", params.levelHint);
+  }
+  if (params.crop) {
+    form.append("crop_x", String(params.crop.x));
+    form.append("crop_y", String(params.crop.y));
+    form.append("crop_width", String(params.crop.width));
+    form.append("crop_height", String(params.crop.height));
+  }
+  return imageRequest<ImageClassifyResponse>("/image/classify", form);
+}
+
 export async function imageDetectTerminals(params: {
   file: File;
+  targetType?: string;
   rows: number;
   cols: number;
   satThreshold: number;
@@ -261,6 +362,9 @@ export async function imageDetectTerminals(params: {
 }): Promise<ImageTerminalsResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.targetType) {
+    form.append("target_type", params.targetType);
+  }
   form.append("rows", String(params.rows));
   form.append("cols", String(params.cols));
   form.append("sat_threshold", String(params.satThreshold));
@@ -289,6 +393,14 @@ export async function imageGenerate(params: {
   graphLayout?: string;
   graphNodes?: number;
   autoTerminals?: boolean;
+  autoClassify?: boolean;
+  levelType?: LevelType | null;
+  edgeOverrides?: {
+    add?: Array<[string, string]>;
+    remove?: Array<[string, string]>;
+    warps?: Array<[string, string]>;
+    walls?: Array<[string, string]>;
+  };
   metadata?: Record<string, string>;
   crop?: { x: number; y: number; width: number; height: number } | null;
   threshold?: number;
@@ -319,6 +431,15 @@ export async function imageGenerate(params: {
   }
   if (params.autoTerminals !== undefined) {
     form.append("auto_terminals", String(params.autoTerminals));
+  }
+  if (params.autoClassify !== undefined) {
+    form.append("auto_classify", String(params.autoClassify));
+  }
+  if (params.levelType) {
+    form.append("level_type_json", JSON.stringify(params.levelType));
+  }
+  if (params.edgeOverrides) {
+    form.append("edge_overrides_json", JSON.stringify(params.edgeOverrides));
   }
   if (params.metadata) {
     form.append("metadata_json", JSON.stringify(params.metadata));
@@ -394,6 +515,7 @@ export async function saveCropTemplate(payload: {
   note?: string;
   preview_png_base64?: string;
   pipeline?: {
+    classifier?: boolean;
     ocr?: boolean;
     grid?: boolean;
     terminals?: boolean;

@@ -159,7 +159,13 @@ For arbitrary topologies, use JSON:
     "edges": [
       ["n0", "n1"],
       ["n1", "n2"]
-    ]
+    ],
+    "edge_overrides": {
+      "add": [["n0", "n2"]],
+      "remove": [["n1", "n2"]]
+    },
+    "warps": [["n0", "n2"]],
+    "walls": [["n1", "n2"]]
   },
   "terminals": {
     "A": ["n0", "n2"]
@@ -306,6 +312,7 @@ See `examples/puzzles/` for sample files:
 | Endpoint | Description |
 |----------|-------------|
 | `POST /image/crop/auto` | Auto-detect crop region |
+| `POST /image/classify` | Classify geometry/mode (square/hex/circle/graph + modifiers) |
 | `POST /image/grid/detect` | Detect grid dimensions |
 | `POST /image/terminals/detect` | Detect terminal positions |
 | `POST /image/generate` | Generate puzzle from image |

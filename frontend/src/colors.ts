@@ -58,6 +58,25 @@ export const GAME_PALETTE = [
   "#ffffff"
 ];
 
+function normalizeHexColor(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const raw = value.trim();
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+  if (!match) {
+    return null;
+  }
+  let hex = match[1].toLowerCase();
+  if (hex.length === 3) {
+    hex = `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
+  }
+  return `#${hex}`;
+}
+
 export function buildTerminalColorMaps(
   graph: SolveResponse["graph"],
   nodeColor?: Record<string, string | null> | null,
@@ -66,9 +85,11 @@ export function buildTerminalColorMaps(
   const terminalNodeColor: Record<string, string> = {};
   const terminalColors = Object.keys(graph.terminals ?? {}).sort();
   const colorToHex: Record<string, string> = {};
+  const overrides = graph.terminal_colors ?? {};
 
   terminalColors.forEach((color, idx) => {
-    colorToHex[color] = palette[idx % palette.length];
+    const overrideHex = normalizeHexColor(overrides[color]);
+    colorToHex[color] = overrideHex ?? palette[idx % palette.length];
     const pair = graph.terminals[color];
     if (pair && pair.length === 2) {
       terminalNodeColor[pair[0]] = color;

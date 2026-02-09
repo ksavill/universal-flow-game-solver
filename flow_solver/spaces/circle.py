@@ -9,6 +9,18 @@ from ..graph import Graph, Node, NodeId
 Color = str
 
 
+def _circle_theta(index: int, total: int) -> float:
+    """Angle convention shared with frontend/editor + image import.
+
+    - sector 0 starts at the top boundary (12 o'clock)
+    - node positions are at sector centers, so index uses a +0.5 offset
+    - sector index increases clockwise
+    """
+    if total <= 0:
+        return 0.0
+    return (math.pi / 2.0) - (2.0 * math.pi * (float(index) + 0.5) / float(total))
+
+
 def build_circle_space_from_tokens(
     tokens: Sequence[str],
 ) -> Tuple[Graph, Dict[str, List[NodeId]], Dict[Color, Tuple[NodeId, NodeId]]]:
@@ -40,7 +52,7 @@ def build_circle_space_from_tokens(
             continue
 
         node_id = str(i)
-        theta = 2.0 * math.pi * float(i) / float(n)
+        theta = _circle_theta(i, n)
         pos = (r * math.cos(theta), r * math.sin(theta), 0.0)
 
         if len(tok) == 1 and tok.isalpha() and tok.upper() == tok:
@@ -120,7 +132,7 @@ def build_circle_space_from_token_rows(
             tile = node_id
 
             r = base_r + float(y) * dr
-            theta = 2.0 * math.pi * float(x) / float(width)
+            theta = _circle_theta(x, width)
             pos = (r * math.cos(theta), r * math.sin(theta), 0.0)
 
             if len(tok) == 1 and tok.isalpha() and tok.upper() == tok:
@@ -164,5 +176,3 @@ def build_circle_space_from_token_rows(
         raise ValueError("No terminals found (need at least one A-Z pair)")
 
     return g, tiles, terminals
-
-

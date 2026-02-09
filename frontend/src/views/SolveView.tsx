@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   Card,
   CardContent,
+  CircularProgress,
   FormControlLabel,
   Grid,
   MenuItem,
@@ -15,7 +16,6 @@ import {
 } from "@mui/material";
 import { graphFromText, parsePuzzle, savePuzzle, solvePuzzle, ParseResponse, SolveResponse } from "../api";
 import { GameView } from "../components/GameView";
-import { GraphPlotly } from "../components/GraphPlotly";
 import { GraphPreview } from "../components/GraphPreview";
 
 type SolveViewProps = {
@@ -29,6 +29,9 @@ type SolveViewProps = {
 
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 1_000_000;
+const GraphPlotly = lazy(async () => ({
+  default: (await import("../components/GraphPlotly")).GraphPlotly
+}));
 
 export function SolveView({
   puzzleName,
@@ -339,12 +342,20 @@ export function SolveView({
                     height={320}
                   />
                 ) : viewMode === "plotly" ? (
-                  <GraphPlotly
-                    graph={graphResult}
-                    use3d={use3d}
-                    nodeColor={solveResult?.node_color}
-                    showSolution={showSolutionOverlay}
-                  />
+                  <Suspense
+                    fallback={
+                      <Box sx={{ py: 6, display: "flex", justifyContent: "center" }}>
+                        <CircularProgress size={24} />
+                      </Box>
+                    }
+                  >
+                    <GraphPlotly
+                      graph={graphResult}
+                      use3d={use3d}
+                      nodeColor={solveResult?.node_color}
+                      showSolution={showSolutionOverlay}
+                    />
+                  </Suspense>
                 ) : (
                   <GraphPreview
                     graph={graphResult}

@@ -26,26 +26,40 @@ import {
   cropTemplatePreviewUrl,
   deleteCropTemplate,
   imageAutoCrop,
+  imageClassify,
   imageDetectGrid,
   imageDetectTerminals,
   imageGenerate,
   imageOcr,
+  LevelType,
   listCropTemplates,
   saveCropTemplate,
   savePuzzle
 } from "../api";
+import {
+  EdgeOverrides,
+  formatEdgePairsText,
+  isEdgeOverridesEmpty,
+  parseEdgeOverrideTexts
+} from "../edgeOverrides";
 
 type TerminalPayload = { row: number; col: number; letter: string; color?: number[] };
+type NodeTerminalPayload = { nodeId: string; letter: string; color?: number[] };
+type BuilderType = "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8";
+type TargetType = "auto" | BuilderType;
 
 type ImageViewProps = {
   onGenerated: (name: string, text: string) => void;
   onSuggestedName?: (name: string) => void;
   onApplyGrid?: (payload: {
-    type: "square" | "hex" | "circle";
+    type: BuilderType;
     rows: number;
     cols: number;
     terminals: TerminalPayload[];
+    nodeTerminals?: NodeTerminalPayload[];
     suggestedName?: string | null;
+    levelType?: LevelType | null;
+    edgeOverrides?: EdgeOverrides;
   }) => void;
   compact?: boolean;
 };
@@ -55,6 +69,54 @@ type CropPixels = { x: number; y: number; width: number; height: number };
 const DEFAULT_CROP: Crop = { unit: "%", x: 0, y: 0, width: 100, height: 100 };
 
 type PipelineState = "idle" | "pending" | "ok" | "fail" | "skipped";
+
+function getBuilderType(
+  targetType: TargetType,
+  levelType: LevelType | null
+): BuilderType {
+  const recommended = levelType?.recommended_target_type;
+  const geometry = levelType?.geometry;
+  const mappedGeometry =
+    geometry === "square" ||
+    geometry === "hex" ||
+    geometry === "circle" ||
+    geometry === "graph" ||
+    geometry === "cube" ||
+    geometry === "star" ||
+    geometry === "figure8"
+      ? geometry
+      : "square";
+  if (targetType === "auto") {
+    if (recommended) {
+      return recommended as BuilderType;
+    }
+    return mappedGeometry;
+  }
+  return targetType;
+}
+
+function graphEdgeOverridesFromText(text: string): EdgeOverrides | null {
+  try {
+    const obj = JSON.parse(text) as {
+      space?: {
+        edge_overrides?: { add?: Array<[string, string]>; remove?: Array<[string, string]> };
+        warps?: Array<[string, string]>;
+        walls?: Array<[string, string]>;
+      };
+    };
+    if (!obj?.space) {
+      return null;
+    }
+    return {
+      add: obj.space.edge_overrides?.add ?? [],
+      remove: obj.space.edge_overrides?.remove ?? [],
+      warps: obj.space.warps ?? [],
+      walls: obj.space.walls ?? []
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact = false }: ImageViewProps) {
   const [file, setFile] = useState<File | null>(null);
@@ -70,10 +132,11 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
   const [padding, setPadding] = useState(6);
   const [gridWidth, setGridWidth] = useState(10);
   const [gridHeight, setGridHeight] = useState(10);
-  const [targetType, setTargetType] = useState<"square" | "hex" | "circle" | "graph">("square");
+  const [targetType, setTargetType] = useState<TargetType>("auto");
   const [graphLayout, setGraphLayout] = useState<"grid" | "line">("grid");
   const [graphNodes, setGraphNodes] = useState(12);
   const [autoTerminals, setAutoTerminals] = useState(true);
+  const [autoClassify, setAutoClassify] = useState(true);
   const [satThreshold, setSatThreshold] = useState(30);
   const [brightnessMin, setBrightnessMin] = useState(30);
   const [brightnessMax, setBrightnessMax] = useState(230);
@@ -98,17 +161,25 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
   const [templateStatus, setTemplateStatus] = useState<string | null>(null);
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
+  const [pipelineUseClassifier, setPipelineUseClassifier] = useState(true);
   const [pipelineUseOcr, setPipelineUseOcr] = useState(true);
   const [pipelineUseGrid, setPipelineUseGrid] = useState(true);
   const [pipelineUseTerminals, setPipelineUseTerminals] = useState(true);
   const [pipelineChecks, setPipelineChecks] = useState<{
+    classify: PipelineState;
     ocr: PipelineState;
     grid: PipelineState;
     terminals: PipelineState;
-  }>({ ocr: "idle", grid: "idle", terminals: "idle" });
+  }>({ classify: "idle", ocr: "idle", grid: "idle", terminals: "idle" });
   const [ocrText, setOcrText] = useState("");
   const [ocrSuggested, setOcrSuggested] = useState<string | null>(null);
   const [ocrWholeImage, setOcrWholeImage] = useState(true);
+  const [levelType, setLevelType] = useState<LevelType | null>(null);
+  const [levelTypeStatus, setLevelTypeStatus] = useState<string | null>(null);
+  const [edgeAddText, setEdgeAddText] = useState("");
+  const [edgeRemoveText, setEdgeRemoveText] = useState("");
+  const [edgeWarpsText, setEdgeWarpsText] = useState("");
+  const [edgeWallsText, setEdgeWallsText] = useState("");
 
   const imgRef = useRef<HTMLImageElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -131,6 +202,9 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
   useEffect(() => {
     const tmpl = templates.find((t) => t.id === templateId);
     if (tmpl?.pipeline) {
+      if (typeof tmpl.pipeline.classifier === "boolean") {
+        setPipelineUseClassifier(tmpl.pipeline.classifier);
+      }
       if (typeof tmpl.pipeline.ocr === "boolean") {
         setPipelineUseOcr(tmpl.pipeline.ocr);
       }
@@ -145,6 +219,32 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       }
     }
   }, [templateId, templates]);
+
+  const parsedEdgeOverrides = useMemo(() => {
+    try {
+      const parsed = parseEdgeOverrideTexts({
+        addText: edgeAddText,
+        removeText: edgeRemoveText,
+        warpsText: edgeWarpsText,
+        wallsText: edgeWallsText
+      });
+      return { value: parsed, error: null as string | null };
+    } catch (err) {
+      return {
+        value: null,
+        error: err instanceof Error ? err.message : "Invalid edge override input."
+      };
+    }
+  }, [edgeAddText, edgeRemoveText, edgeWarpsText, edgeWallsText]);
+
+  const manualEdgeOverrides = useMemo(() => {
+    if (!parsedEdgeOverrides.value || isEdgeOverridesEmpty(parsedEdgeOverrides.value)) {
+      return undefined;
+    }
+    return parsedEdgeOverrides.value;
+  }, [parsedEdgeOverrides.value]);
+  const graphTarget = targetType === "graph";
+  const topologyTarget = targetType === "cube" || targetType === "star" || targetType === "figure8";
 
 
   const imageSize = useMemo(() => {
@@ -280,6 +380,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       const scaleX = imgRef.current.width / imageDims.width;
       const scaleY = imgRef.current.height / imageDims.height;
       setCompletedCrop({
+        unit: "px",
         x: cropBox.x * scaleX,
         y: cropBox.y * scaleY,
         width: cropBox.width * scaleX,
@@ -304,7 +405,21 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       return;
     }
     try {
-      const res = await imageAutoCrop({ file, threshold, invert, padding });
+      const tmpl = templates.find((t) => t.id === templateId);
+      let seedCrop: CropPixels | null = null;
+      if (tmpl) {
+        seedCrop = templateCropPixels(tmpl);
+      }
+      if (!seedCrop) {
+        const current = getCropPixels();
+        if (current && imageDims) {
+          const ratio = (current.width * current.height) / Math.max(1, imageDims.width * imageDims.height);
+          if (ratio < 0.985) {
+            seedCrop = current;
+          }
+        }
+      }
+      const res = await imageAutoCrop({ file, threshold, invert, padding, crop: seedCrop });
       if (!res.crop) {
         setStatus(res.message ?? "Auto-crop failed.");
         return;
@@ -316,15 +431,41 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         const scaleX = imgRef.current.width / imageDims.width;
         const scaleY = imgRef.current.height / imageDims.height;
         setCompletedCrop({
+          unit: "px",
           x: res.crop.x * scaleX,
           y: res.crop.y * scaleY,
           width: res.crop.width * scaleX,
           height: res.crop.height * scaleY
         });
       }
-      setStatus("Auto-crop applied.");
+      setStatus(seedCrop ? "Auto-crop applied (refined from seed crop)." : "Auto-crop applied.");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Auto-crop failed.");
+    }
+  }
+
+  async function handleClassifyLevel(cropOverride?: CropPixels | null) {
+    if (!file) {
+      return null;
+    }
+    try {
+      const res = await imageClassify({
+        file,
+        threshold,
+        lineThreshold,
+        invert,
+        perspective,
+        levelHint: ocrSuggested ?? imageName,
+        crop: cropOverride === undefined ? getCropPixels() : cropOverride
+      });
+      setLevelType(res.level_type);
+      setLevelTypeStatus(
+        `Detected ${res.level_type.geometry} (${Math.round(res.level_type.confidence * 100)}% confidence).`
+      );
+      return res.level_type;
+    } catch (err) {
+      setLevelTypeStatus(err instanceof Error ? err.message : "Level type classification failed.");
+      return null;
     }
   }
 
@@ -333,8 +474,10 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       return;
     }
     try {
+      const builderType = getBuilderType(targetType, levelType);
       const res = await imageDetectGrid({
         file,
+        targetType: builderType,
         threshold,
         lineThreshold,
         invert,
@@ -350,16 +493,23 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       setGridDetection({ rows: res.grid.rows, cols: res.grid.cols });
       if (onApplyGrid) {
         onApplyGrid({
-          type: targetType === "graph" ? "square" : targetType,
+          type: builderType,
           rows: res.grid.rows,
           cols: res.grid.cols,
           terminals: terminalDetections.map((t) => ({ row: t.row, col: t.col, letter: t.letter, color: t.color })),
-          suggestedName: ocrSuggested
+          suggestedName: ocrSuggested,
+          levelType,
+          edgeOverrides: manualEdgeOverrides
         });
       }
-      setGridStatus(
-        `Detected ${res.grid.cols}x${res.grid.rows} grid (lines: ${res.grid.vertical_lines}x${res.grid.horizontal_lines}).`
-      );
+      const mode = String(res.grid.mode ?? "rect");
+      if (mode === "circle") {
+        setGridStatus(`Detected circle grid ${res.grid.cols} sectors x ${res.grid.rows} rings.`);
+      } else {
+        setGridStatus(
+          `Detected ${res.grid.cols}x${res.grid.rows} grid (lines: ${res.grid.vertical_lines}x${res.grid.horizontal_lines}).`
+        );
+      }
     } catch (err) {
       setGridStatus(err instanceof Error ? err.message : "Grid detection failed.");
     }
@@ -370,8 +520,10 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       return;
     }
     try {
+      const builderType = getBuilderType(targetType, levelType);
       const res = await imageDetectTerminals({
         file,
+        targetType: builderType,
         rows: gridHeight,
         cols: gridWidth,
         satThreshold,
@@ -392,12 +544,15 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         setGridDetection({ rows, cols });
       }
       if (onApplyGrid) {
+        const builderType = getBuilderType(targetType, levelType);
         onApplyGrid({
-          type: targetType === "graph" ? "square" : targetType,
+          type: builderType,
           rows,
           cols,
           terminals: res.terminals.map((t) => ({ row: t.row, col: t.col, letter: t.letter, color: t.color })),
-          suggestedName: ocrSuggested
+          suggestedName: ocrSuggested,
+          levelType,
+          edgeOverrides: manualEdgeOverrides
         });
       }
     } catch (err) {
@@ -410,6 +565,10 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       setStatus("Upload an image first.");
       return;
     }
+    if (parsedEdgeOverrides.error) {
+      setStatus(parsedEdgeOverrides.error);
+      return;
+    }
     try {
       const res = await imageGenerate({
         file,
@@ -419,6 +578,9 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         graphLayout,
         graphNodes,
         autoTerminals,
+        autoClassify,
+        levelType,
+        edgeOverrides: manualEdgeOverrides,
         metadata: {
           title: "",
           source: "image-import"
@@ -445,28 +607,97 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
             }
           : null
       );
-      if (res.detection?.terminals && Array.isArray(res.detection.terminals)) {
-        setTerminalDetections(
-          res.detection.terminals as Array<{ row: number; col: number; letter: string; color: number[] }>
+      const rawDetectedTerminals = Array.isArray(res.detection?.terminals)
+        ? (res.detection.terminals as Array<{
+            row?: number;
+            col?: number;
+            node_id?: string;
+            letter?: string;
+            color?: number[];
+          }>)
+        : [];
+      const detectedGridTerminals: Array<{ row: number; col: number; letter: string; color: number[] }> =
+        rawDetectedTerminals
+          .filter(
+            (terminal) =>
+              Number.isFinite(terminal.row) &&
+              Number.isFinite(terminal.col) &&
+              typeof terminal.letter === "string"
+          )
+          .map((terminal) => ({
+            row: Number(terminal.row),
+            col: Number(terminal.col),
+            letter: String(terminal.letter),
+            color: terminal.color ?? []
+          }));
+      const detectedNodeTerminals: NodeTerminalPayload[] = rawDetectedTerminals
+        .filter((terminal) => typeof terminal.node_id === "string" && terminal.node_id && typeof terminal.letter === "string")
+        .map((terminal) => ({
+          nodeId: String(terminal.node_id),
+          letter: String(terminal.letter),
+          color: terminal.color
+        }));
+      if (detectedGridTerminals.length) {
+        setTerminalDetections(detectedGridTerminals);
+      }
+      const detectedLevelType = (res.detection?.level_type as LevelType | undefined) ?? null;
+      if (detectedLevelType) {
+        setLevelType(detectedLevelType);
+        setLevelTypeStatus(
+          `Detected ${detectedLevelType.geometry} (${Math.round(detectedLevelType.confidence * 100)}% confidence).`
         );
       }
       setStatus("Generated puzzle text.");
-      if (onApplyGrid && targetType !== "graph") {
-        const rows = gridDetection?.rows ?? gridHeight;
-        const cols = gridDetection?.cols ?? gridWidth;
-        const terminals =
-          (res.detection?.terminals as Array<TerminalPayload> | undefined)?.map((t) => ({
-            row: t.row,
-            col: t.col,
-            letter: t.letter,
-            color: t.color
-          })) ?? [];
+      const targetUsed = String(res.detection?.target_type_used ?? targetType);
+      if (onApplyGrid) {
+        const rows =
+          (res.detection?.grid as { rows?: number } | undefined)?.rows ??
+          gridDetection?.rows ??
+          gridHeight;
+        const cols =
+          (res.detection?.grid as { cols?: number } | undefined)?.cols ??
+          gridDetection?.cols ??
+          gridWidth;
+        const terminals = detectedGridTerminals.map((terminal) => ({
+          row: terminal.row,
+          col: terminal.col,
+          letter: terminal.letter,
+          color: terminal.color
+        }));
+        const targetForBuilder =
+          targetUsed === "auto" ||
+          targetUsed === "square" ||
+          targetUsed === "hex" ||
+          targetUsed === "circle" ||
+          targetUsed === "graph" ||
+          targetUsed === "cube" ||
+          targetUsed === "star" ||
+          targetUsed === "figure8"
+            ? targetUsed
+            : targetType;
+        const builderType = getBuilderType(
+          targetForBuilder,
+          detectedLevelType ?? levelType
+        );
+        const graphOverrides =
+          targetUsed === "graph" || targetUsed === "cube" || targetUsed === "star" || targetUsed === "figure8"
+            ? graphEdgeOverridesFromText(res.text)
+            : null;
+        if (graphOverrides) {
+          setEdgeAddText(formatEdgePairsText(graphOverrides.add));
+          setEdgeRemoveText(formatEdgePairsText(graphOverrides.remove));
+          setEdgeWarpsText(formatEdgePairsText(graphOverrides.warps));
+          setEdgeWallsText(formatEdgePairsText(graphOverrides.walls));
+        }
         onApplyGrid({
-          type: targetType,
+          type: builderType,
           rows,
           cols,
           terminals,
-          suggestedName: ocrSuggested ?? res.name
+          nodeTerminals: detectedNodeTerminals,
+          suggestedName: ocrSuggested ?? res.name,
+          levelType: detectedLevelType ?? levelType,
+          edgeOverrides: graphOverrides ?? manualEdgeOverrides
         });
       }
     } catch (err) {
@@ -525,6 +756,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         note: templateNote,
         preview_png_base64: preview,
         pipeline: {
+          classifier: pipelineUseClassifier,
           ocr: pipelineUseOcr,
           grid: pipelineUseGrid,
           terminals: pipelineUseTerminals,
@@ -551,9 +783,14 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       setPipelineStatus("Upload an image first.");
       return;
     }
+    if (parsedEdgeOverrides.error) {
+      setPipelineStatus(parsedEdgeOverrides.error);
+      return;
+    }
     setPipelineBusy(true);
     setPipelineStatus(null);
     setPipelineChecks({
+      classify: pipelineUseClassifier ? "pending" : "skipped",
       ocr: pipelineUseOcr ? "pending" : "skipped",
       grid: pipelineUseGrid ? "pending" : "skipped",
       terminals: pipelineUseTerminals ? "pending" : "skipped"
@@ -576,6 +813,19 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
       let cols = gridDetection?.cols ?? gridWidth;
       let terminals: Array<TerminalPayload> = [];
       let suggestedName: string | null = ocrSuggested;
+      let detectedLevelType: LevelType | null = levelType;
+
+      if (pipelineUseClassifier) {
+        const classified = await handleClassifyLevel(crop);
+        if (classified) {
+          detectedLevelType = classified;
+          setPipelineChecks((prev) => ({ ...prev, classify: "ok" }));
+        } else {
+          setPipelineChecks((prev) => ({ ...prev, classify: "fail" }));
+        }
+      } else {
+        setPipelineChecks((prev) => ({ ...prev, classify: "skipped" }));
+      }
 
       if (pipelineUseOcr) {
         const ocrRes = await imageOcr({
@@ -598,9 +848,17 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         setPipelineChecks((prev) => ({ ...prev, ocr: "skipped" }));
       }
 
-      if (pipelineUseGrid) {
+      const builderType = getBuilderType(targetType, detectedLevelType);
+      const gridDrivenTarget =
+        builderType === "square" ||
+        builderType === "hex" ||
+        builderType === "circle" ||
+        (builderType === "graph" && graphLayout === "grid");
+
+      if (pipelineUseGrid && gridDrivenTarget) {
         const gridRes = await imageDetectGrid({
           file,
+          targetType: builderType,
           threshold,
           lineThreshold,
           invert,
@@ -617,17 +875,25 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         setGridWidth(cols);
         setGridHeight(rows);
         setGridDetection({ rows, cols });
-        setGridStatus(
-          `Detected ${cols}x${rows} grid (lines: ${gridRes.grid.vertical_lines}x${gridRes.grid.horizontal_lines}).`
-        );
+        const mode = String(gridRes.grid.mode ?? "rect");
+        if (mode === "circle") {
+          setGridStatus(`Detected circle grid ${cols} sectors x ${rows} rings.`);
+        } else {
+          setGridStatus(
+            `Detected ${cols}x${rows} grid (lines: ${gridRes.grid.vertical_lines}x${gridRes.grid.horizontal_lines}).`
+          );
+        }
         setPipelineChecks((prev) => ({ ...prev, grid: "ok" }));
+      } else if (pipelineUseGrid && !gridDrivenTarget) {
+        setPipelineChecks((prev) => ({ ...prev, grid: "skipped" }));
       } else {
         setPipelineChecks((prev) => ({ ...prev, grid: "skipped" }));
       }
 
-      if (pipelineUseTerminals) {
+      if (pipelineUseTerminals && gridDrivenTarget) {
         const termRes = await imageDetectTerminals({
           file,
+          targetType: builderType,
           rows,
           cols,
           satThreshold,
@@ -644,22 +910,29 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
         const warnings = termRes.info?.warnings?.length ? termRes.info.warnings.join(" ") : "No warnings.";
         setTerminalStatus(`Detected ${termRes.terminals.length} terminals. ${warnings}`);
         setPipelineChecks((prev) => ({ ...prev, terminals: "ok" }));
+      } else if (pipelineUseTerminals && !gridDrivenTarget) {
+        setPipelineChecks((prev) => ({ ...prev, terminals: "skipped" }));
+        setTerminalStatus("Terminal detection skipped for non-grid topology.");
       } else {
         setPipelineChecks((prev) => ({ ...prev, terminals: "skipped" }));
       }
 
-      if (onApplyGrid && (pipelineUseGrid || pipelineUseTerminals)) {
+      if (onApplyGrid) {
         onApplyGrid({
-          type: targetType === "graph" ? "square" : targetType,
+          type: builderType,
           rows,
           cols,
           terminals,
-          suggestedName
+          suggestedName,
+          levelType: detectedLevelType,
+          edgeOverrides: manualEdgeOverrides
         });
       }
-      setPipelineStatus("Pipeline applied to builder.");
+      const classificationNote = detectedLevelType ? ` (${detectedLevelType.geometry})` : "";
+      setPipelineStatus(`Pipeline applied to builder${classificationNote}.`);
     } catch (err) {
       setPipelineChecks((prev) => ({
+        classify: prev.classify === "pending" ? "fail" : prev.classify,
         ocr: prev.ocr === "pending" ? "fail" : prev.ocr,
         grid: prev.grid === "pending" ? "fail" : prev.grid,
         terminals: prev.terminals === "pending" ? "fail" : prev.terminals
@@ -715,12 +988,15 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
     const rows = gridDetection?.rows ?? gridHeight;
     const cols = gridDetection?.cols ?? gridWidth;
     const terminals = terminalDetections.map((t) => ({ row: t.row, col: t.col, letter: t.letter, color: t.color }));
+    const builderType = getBuilderType(targetType, levelType);
     onApplyGrid({
-      type: targetType === "graph" ? "square" : targetType,
+      type: builderType,
       rows,
       cols,
       terminals,
-      suggestedName: ocrSuggested
+      suggestedName: ocrSuggested,
+      levelType,
+      edgeOverrides: manualEdgeOverrides
     });
   };
 
@@ -798,6 +1074,12 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
             <Divider />
             <Typography variant="subtitle2">Import pipeline</Typography>
             <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
+              <FormControlLabel
+                control={
+                  <Switch checked={pipelineUseClassifier} onChange={(event) => setPipelineUseClassifier(event.target.checked)} />
+                }
+                label="Classifier"
+              />
               <FormControlLabel
                 control={<Switch checked={pipelineUseOcr} onChange={(event) => setPipelineUseOcr(event.target.checked)} />}
                 label="OCR"
@@ -926,6 +1208,9 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               onChange={(event) => setLineThreshold(Number(event.target.value))}
               size="small"
             />
+            <Button variant="outlined" onClick={() => void handleClassifyLevel()} disabled={!file}>
+              Classify level
+            </Button>
             <Button variant="outlined" onClick={handleDetectGrid} disabled={!file}>
               Auto-detect grid
             </Button>
@@ -938,6 +1223,11 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
           <Typography variant="caption" color="text.secondary">
             Line detection works best when grid lines are visible.
           </Typography>
+          {levelTypeStatus && (
+            <Typography variant="caption" color="text.secondary">
+              {levelTypeStatus}
+            </Typography>
+          )}
           {gridStatus && (
             <Typography variant="caption" color="text.secondary">
               {gridStatus}
@@ -1016,13 +1306,17 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               size="small"
               sx={{ maxWidth: 240 }}
             >
+              <MenuItem value="auto">auto (classifier)</MenuItem>
               <MenuItem value="square">square</MenuItem>
               <MenuItem value="hex">hex</MenuItem>
               <MenuItem value="circle">circle</MenuItem>
               <MenuItem value="graph">graph</MenuItem>
+              <MenuItem value="cube">cube</MenuItem>
+              <MenuItem value="star">star</MenuItem>
+              <MenuItem value="figure8">figure8</MenuItem>
             </TextField>
 
-            {targetType === "graph" ? (
+            {graphTarget ? (
               <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
                 <TextField
                   label="Graph layout"
@@ -1062,6 +1356,23 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
                   </>
                 )}
               </Stack>
+            ) : topologyTarget ? (
+              <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+                <TextField
+                  label="Topology detail"
+                  type="number"
+                  value={gridWidth}
+                  onChange={(event) => setGridWidth(Number(event.target.value))}
+                  size="small"
+                />
+                <TextField
+                  label="Height hint"
+                  type="number"
+                  value={gridHeight}
+                  onChange={(event) => setGridHeight(Number(event.target.value))}
+                  size="small"
+                />
+              </Stack>
             ) : (
               <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
                 <TextField
@@ -1087,6 +1398,67 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               control={<Switch checked={autoTerminals} onChange={(event) => setAutoTerminals(event.target.checked)} />}
               label="Auto-detect terminals"
             />
+            <FormControlLabel
+              control={<Switch checked={autoClassify} onChange={(event) => setAutoClassify(event.target.checked)} />}
+              label="Auto-classify level type"
+            />
+
+            <Typography variant="subtitle2">Manual graph edge overrides (optional)</Typography>
+            <Typography variant="caption" color="text.secondary">
+              One pair per line: <code>u v</code> or <code>u|v</code>. For grid graphs, node ids are <code>x,y</code>.
+            </Typography>
+            {parsedEdgeOverrides.error && <Alert severity="warning">{parsedEdgeOverrides.error}</Alert>}
+            <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+              <TextField
+                label="Add edges"
+                value={edgeAddText}
+                onChange={(event) => setEdgeAddText(event.target.value)}
+                multiline
+                minRows={3}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                label="Remove edges"
+                value={edgeRemoveText}
+                onChange={(event) => setEdgeRemoveText(event.target.value)}
+                multiline
+                minRows={3}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+            </Stack>
+            <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+              <TextField
+                label="Warp edges"
+                value={edgeWarpsText}
+                onChange={(event) => setEdgeWarpsText(event.target.value)}
+                multiline
+                minRows={2}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                label="Wall edges"
+                value={edgeWallsText}
+                onChange={(event) => setEdgeWallsText(event.target.value)}
+                multiline
+                minRows={2}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+            </Stack>
+            <Button
+              variant="text"
+              onClick={() => {
+                setEdgeAddText("");
+                setEdgeRemoveText("");
+                setEdgeWarpsText("");
+                setEdgeWallsText("");
+              }}
+            >
+              Clear edge overrides
+            </Button>
 
             <Button variant="contained" onClick={handleGenerate} disabled={!file}>
               Generate puzzle
@@ -1147,6 +1519,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               <input
                 type="file"
                 accept="image/*"
+                capture="environment"
                 onChange={(event) => {
                   const next = event.target.files?.[0] ?? null;
                   if (!next) {
@@ -1164,7 +1537,9 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
                   setTerminalStatus(null);
                   setGridDetection(null);
                   setTerminalDetections([]);
-                  setPipelineChecks({ ocr: "idle", grid: "idle", terminals: "idle" });
+                  setLevelType(null);
+                  setLevelTypeStatus(null);
+                  setPipelineChecks({ classify: "idle", ocr: "idle", grid: "idle", terminals: "idle" });
                 }}
               />
               {imageSrc ? (
@@ -1238,6 +1613,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               </Box>
               <Box display="flex" flexWrap="wrap" gap={1}>
                 {[
+                  ["Classifier", pipelineChecks.classify],
                   ["OCR", pipelineChecks.ocr],
                   ["Grid", pipelineChecks.grid],
                   ["Terminals", pipelineChecks.terminals]
@@ -1298,6 +1674,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
             <input
               type="file"
               accept="image/*"
+              capture="environment"
               onChange={(event) => {
                 const next = event.target.files?.[0] ?? null;
                 if (!next) {
@@ -1313,8 +1690,11 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
                 setGeneratedText("");
                 setStatus(null);
                 setTerminalStatus(null);
-            setGridDetection(null);
-            setTerminalDetections([]);
+                setGridDetection(null);
+                setTerminalDetections([]);
+                setLevelType(null);
+                setLevelTypeStatus(null);
+                setPipelineChecks({ classify: "idle", ocr: "idle", grid: "idle", terminals: "idle" });
               }}
             />
             {imageSrc ? (
@@ -1388,6 +1768,7 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
             </Box>
             <Box display="flex" flexWrap="wrap" gap={1}>
               {[
+                ["Classifier", pipelineChecks.classify],
                 ["OCR", pipelineChecks.ocr],
                 ["Grid", pipelineChecks.grid],
                 ["Terminals", pipelineChecks.terminals]
@@ -1497,6 +1878,12 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
             <Divider />
             <Typography variant="subtitle2">Import pipeline</Typography>
             <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
+              <FormControlLabel
+                control={
+                  <Switch checked={pipelineUseClassifier} onChange={(event) => setPipelineUseClassifier(event.target.checked)} />
+                }
+                label="Classifier"
+              />
               <FormControlLabel
                 control={<Switch checked={pipelineUseOcr} onChange={(event) => setPipelineUseOcr(event.target.checked)} />}
                 label="OCR"
@@ -1627,6 +2014,9 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               onChange={(event) => setLineThreshold(Number(event.target.value))}
               size="small"
             />
+            <Button variant="outlined" onClick={() => void handleClassifyLevel()} disabled={!file}>
+              Classify level
+            </Button>
             <Button variant="outlined" onClick={handleDetectGrid} disabled={!file}>
               Auto-detect grid
             </Button>
@@ -1639,6 +2029,11 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
           <Typography variant="caption" color="text.secondary">
             Line detection works best when grid lines are visible.
           </Typography>
+          {levelTypeStatus && (
+            <Typography variant="caption" color="text.secondary">
+              {levelTypeStatus}
+            </Typography>
+          )}
           {gridStatus && (
             <Typography variant="caption" color="text.secondary">
               {gridStatus}
@@ -1717,13 +2112,17 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               size="small"
               sx={{ maxWidth: 240 }}
             >
+              <MenuItem value="auto">auto (classifier)</MenuItem>
               <MenuItem value="square">square</MenuItem>
               <MenuItem value="hex">hex</MenuItem>
               <MenuItem value="circle">circle</MenuItem>
               <MenuItem value="graph">graph</MenuItem>
+              <MenuItem value="cube">cube</MenuItem>
+              <MenuItem value="star">star</MenuItem>
+              <MenuItem value="figure8">figure8</MenuItem>
             </TextField>
 
-            {targetType === "graph" ? (
+            {graphTarget ? (
               <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
                 <TextField
                   label="Graph layout"
@@ -1763,6 +2162,23 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
                   </>
                 )}
               </Stack>
+            ) : topologyTarget ? (
+              <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+                <TextField
+                  label="Topology detail"
+                  type="number"
+                  value={gridWidth}
+                  onChange={(event) => setGridWidth(Number(event.target.value))}
+                  size="small"
+                />
+                <TextField
+                  label="Height hint"
+                  type="number"
+                  value={gridHeight}
+                  onChange={(event) => setGridHeight(Number(event.target.value))}
+                  size="small"
+                />
+              </Stack>
             ) : (
               <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
                 <TextField
@@ -1790,6 +2206,67 @@ export function ImageView({ onGenerated, onSuggestedName, onApplyGrid, compact =
               }
               label="Auto-detect terminals"
             />
+            <FormControlLabel
+              control={<Switch checked={autoClassify} onChange={(event) => setAutoClassify(event.target.checked)} />}
+              label="Auto-classify level type"
+            />
+
+            <Typography variant="subtitle2">Manual graph edge overrides (optional)</Typography>
+            <Typography variant="caption" color="text.secondary">
+              One pair per line: <code>u v</code> or <code>u|v</code>. For grid graphs, node ids are <code>x,y</code>.
+            </Typography>
+            {parsedEdgeOverrides.error && <Alert severity="warning">{parsedEdgeOverrides.error}</Alert>}
+            <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+              <TextField
+                label="Add edges"
+                value={edgeAddText}
+                onChange={(event) => setEdgeAddText(event.target.value)}
+                multiline
+                minRows={3}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                label="Remove edges"
+                value={edgeRemoveText}
+                onChange={(event) => setEdgeRemoveText(event.target.value)}
+                multiline
+                minRows={3}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+            </Stack>
+            <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+              <TextField
+                label="Warp edges"
+                value={edgeWarpsText}
+                onChange={(event) => setEdgeWarpsText(event.target.value)}
+                multiline
+                minRows={2}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                label="Wall edges"
+                value={edgeWallsText}
+                onChange={(event) => setEdgeWallsText(event.target.value)}
+                multiline
+                minRows={2}
+                size="small"
+                sx={{ flex: 1 }}
+              />
+            </Stack>
+            <Button
+              variant="text"
+              onClick={() => {
+                setEdgeAddText("");
+                setEdgeRemoveText("");
+                setEdgeWarpsText("");
+                setEdgeWallsText("");
+              }}
+            >
+              Clear edge overrides
+            </Button>
 
             <Button variant="contained" onClick={handleGenerate} disabled={!file}>
               Generate puzzle

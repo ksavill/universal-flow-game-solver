@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import replace
@@ -27,15 +28,25 @@ from backend.image_utils import (
     apply_crop,
     auto_crop,
     auto_perspective,
+    build_graph_terminals_from_node_placements,
     build_flow_text,
     build_graph_json,
     build_grid,
+    classify_level_type,
+    detect_circle_grid,
+    detect_circle_terminals,
     detect_grid,
+    detect_terminals_on_nodes,
+    detect_wall_edges,
     detect_terminals,
     load_image,
 )
 
 MAX_TIMEOUT_MS = 1_000_000
+SUPPORTED_LEVEL_GEOMETRIES = {"square", "hex", "circle", "graph", "cube", "star", "figure8"}
+SUPPORTED_LEVEL_MODIFIERS = {"bridges", "warps", "walls"}
+FLOW_LEVEL_GEOMETRIES = {"square", "hex", "circle"}
+TOPOLOGY_LEVEL_GEOMETRIES = {"cube", "star", "figure8"}
 
 
 def _crop_templates_dir() -> Path:
@@ -140,20 +151,25 @@ def _scan_flow_text(text: str) -> Tuple[str, bool, Dict[str, str], List[List[str
 
 def _scan_json_text(text: str) -> Tuple[str, Dict[str, str], Dict[str, int]]:
     obj = json.loads(text)
-    kind = obj.get("space", {}).get("type", "graph")
+    space = obj.get("space", {})
+    kind = space.get("type", "graph")
+    if kind == "graph":
+        topo = str(space.get("topology", "")).strip().lower()
+        if topo in {"cube", "star", "figure8"}:
+            kind = topo
     meta_raw = obj.get("meta", {})
     meta = _normalize_meta(meta_raw) if isinstance(meta_raw, dict) else {}
     metrics: Dict[str, int] = {}
 
     if kind == "square":
-        grid = obj.get("space", {}).get("grid", [])
+        grid = space.get("grid", [])
         height = len(grid) if isinstance(grid, list) else 0
         width = max((len(r) for r in grid), default=0) if isinstance(grid, list) else 0
         metrics["width"] = width
         metrics["height"] = height
-    elif kind == "graph":
-        nodes = obj.get("space", {}).get("nodes", {})
-        edges = obj.get("space", {}).get("edges", [])
+    elif kind in {"graph", "cube", "star", "figure8"}:
+        nodes = space.get("nodes", {})
+        edges = space.get("edges", [])
         metrics["nodes"] = len(nodes) if isinstance(nodes, dict) else 0
         metrics["edges"] = len(edges) if isinstance(edges, list) else 0
 
@@ -178,6 +194,8 @@ def _type_size_from_text(text: str, *, name: str) -> Tuple[str, str]:
         kind, _meta, metrics = _scan_json_text(text)
         if kind == "square" and "width" in metrics and "height" in metrics:
             return kind, f"{metrics['width']}x{metrics['height']}"
+        if kind in {"graph", "cube", "star", "figure8"} and metrics.get("nodes"):
+            return kind, f"{metrics['nodes']} nodes"
         return kind, "graph"
 
     kind, _fill, _meta, token_rows = _scan_flow_text(text)
@@ -194,7 +212,7 @@ def _format_size_label(kind: str, metrics: Dict[str, int], nodes: Optional[int])
         return f"{metrics['width']}x{metrics['height']}"
     if kind == "circle" and metrics.get("rings") and metrics.get("sectors"):
         return f"{metrics['rings']}x{metrics['sectors']}"
-    if kind == "graph" and nodes is not None:
+    if kind in {"graph", "cube", "star", "figure8"} and nodes is not None:
         return f"{nodes} nodes"
     return "-"
 
@@ -310,7 +328,121 @@ def _graph_payload(puzzle: Puzzle) -> Dict[str, Any]:
         )
     edges = [[u, v] for u, v in puzzle.graph.edges()]
     terminals = {c: [a, b] for c, (a, b) in puzzle.terminals.items()}
-    return {"nodes": nodes, "edges": edges, "terminals": terminals, "tiles": puzzle.tiles}
+    payload = {"nodes": nodes, "edges": edges, "terminals": terminals, "tiles": puzzle.tiles}
+    terminal_colors = {
+        key: value
+        for key, value in _terminal_color_map_from_meta(puzzle.meta).items()
+        if key in terminals
+    }
+    if terminal_colors:
+        payload["terminal_colors"] = terminal_colors
+    return payload
+
+
+_HEX_COLOR_RE = re.compile(r"^[0-9a-fA-F]{6}$")
+_HEX_SHORT_COLOR_RE = re.compile(r"^[0-9a-fA-F]{3}$")
+
+
+def _normalize_hex_color(raw: Any) -> Optional[str]:
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return None
+        if value.startswith("#"):
+            value = value[1:]
+        if _HEX_SHORT_COLOR_RE.match(value):
+            value = "".join(ch * 2 for ch in value)
+        if _HEX_COLOR_RE.match(value):
+            return f"#{value.lower()}"
+        return None
+    if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+        try:
+            r = max(0, min(255, int(round(float(raw[0])))))
+            g = max(0, min(255, int(round(float(raw[1])))))
+            b = max(0, min(255, int(round(float(raw[2])))))
+            return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            return None
+    return None
+
+
+def _parse_terminal_color_pairs(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for part in re.split(r"[;,]", text):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        if "=" in chunk:
+            key, value = chunk.split("=", 1)
+        elif ":" in chunk:
+            key, value = chunk.split(":", 1)
+        else:
+            bits = chunk.split()
+            if len(bits) < 2:
+                continue
+            key, value = bits[0], bits[1]
+        label = str(key).strip().upper()
+        if not label:
+            continue
+        color = _normalize_hex_color(value)
+        if color is None:
+            continue
+        out[label] = color
+    return out
+
+
+def _parse_terminal_color_map(raw: Any) -> Dict[str, str]:
+    if isinstance(raw, dict):
+        out: Dict[str, str] = {}
+        for key, value in raw.items():
+            label = str(key).strip().upper()
+            if not label:
+                continue
+            color = _normalize_hex_color(value)
+            if color is None:
+                continue
+            out[label] = color
+        return out
+
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        parsed: Any = None
+        if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+        if isinstance(parsed, dict):
+            return _parse_terminal_color_map(parsed)
+        if isinstance(parsed, list):
+            out: Dict[str, str] = {}
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("letter") if "letter" in item else item.get("color_id")
+                value = item.get("color")
+                if key is None:
+                    continue
+                label = str(key).strip().upper()
+                color = _normalize_hex_color(value)
+                if label and color is not None:
+                    out[label] = color
+            return out
+        return _parse_terminal_color_pairs(text)
+
+    return {}
+
+
+def _terminal_color_map_from_meta(meta: Dict[str, Any]) -> Dict[str, str]:
+    if not isinstance(meta, dict):
+        return {}
+    for key in ("terminal_colors", "terminal_colours"):
+        for candidate_key, candidate_value in meta.items():
+            if str(candidate_key).strip().lower() == key:
+                return _parse_terminal_color_map(candidate_value)
+    return {}
 
 
 def _parse_crop_box(
@@ -347,6 +479,246 @@ def _maybe_perspective(image: Image.Image, enabled: bool) -> Tuple[Image.Image, 
     if not enabled:
         return image, None
     return auto_perspective(image)
+
+
+def _normalize_level_geometry(raw: str, *, default: str = "square") -> str:
+    val = str(raw or "").strip().lower()
+    if val in SUPPORTED_LEVEL_GEOMETRIES:
+        return val
+    return default
+
+
+def _normalize_level_modifiers(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    out: List[str] = []
+    if isinstance(raw, str):
+        items = [part.strip().lower() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        items = [str(part).strip().lower() for part in raw]
+    else:
+        items = [str(raw).strip().lower()]
+    for item in items:
+        if item in SUPPORTED_LEVEL_MODIFIERS and item not in out:
+            out.append(item)
+    return out
+
+
+def _can_emit_flow(geometry: str, modifiers: List[str]) -> bool:
+    if geometry not in FLOW_LEVEL_GEOMETRIES:
+        return False
+    if not modifiers:
+        return True
+    # Current .flow format only has explicit support for square bridges.
+    return geometry == "square" and set(modifiers) <= {"bridges"}
+
+
+def _recommended_target_type(geometry: str, modifiers: List[str]) -> str:
+    geom = _normalize_level_geometry(geometry)
+    if geom in TOPOLOGY_LEVEL_GEOMETRIES:
+        return geom
+    return geom if _can_emit_flow(geom, modifiers) else "graph"
+
+
+def _level_type_id(geometry: str, modifiers: List[str]) -> str:
+    if not modifiers:
+        return geometry
+    return f"{geometry}:{'+'.join(modifiers)}"
+
+
+def _build_level_type_candidate(
+    geometry: str,
+    modifiers: List[str],
+    *,
+    confidence: float,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    geom = _normalize_level_geometry(geometry)
+    mods = _normalize_level_modifiers(modifiers)
+    can_emit = _can_emit_flow(geom, mods)
+    target = _recommended_target_type(geom, mods)
+    candidate = {
+        "id": _level_type_id(geom, mods),
+        "geometry": geom,
+        "modifiers": mods,
+        "confidence": round(max(0.0, min(1.0, float(confidence))), 4),
+        "can_emit_flow": can_emit,
+        "recommended_target_type": target,
+        "recommended_output_format": "flow" if can_emit else "json",
+    }
+    if reason:
+        candidate["reason"] = reason
+    return candidate
+
+
+def _build_level_type_payload(
+    geometry: str,
+    modifiers: List[str],
+    *,
+    confidence: float,
+    source: str,
+    candidates: Optional[List[Dict[str, Any]]] = None,
+    notes: Optional[List[str]] = None,
+    signals: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    geom = _normalize_level_geometry(geometry)
+    mods = _normalize_level_modifiers(modifiers)
+    can_emit = _can_emit_flow(geom, mods)
+    target = _recommended_target_type(geom, mods)
+    payload: Dict[str, Any] = {
+        "id": _level_type_id(geom, mods),
+        "geometry": geom,
+        "modifiers": mods,
+        "confidence": round(max(0.0, min(1.0, float(confidence))), 4),
+        "source": source,
+        "can_emit_flow": can_emit,
+        "recommended_target_type": target,
+        "recommended_output_format": "flow" if can_emit else "json",
+        "candidates": candidates or [],
+        "notes": notes or [],
+    }
+    if signals is not None:
+        payload["signals"] = signals
+    return payload
+
+
+def _parse_level_type_payload(raw: Dict[str, Any], *, source_fallback: str = "manual") -> Dict[str, Any]:
+    geometry = _normalize_level_geometry(str(raw.get("geometry", "square")))
+    modifiers = _normalize_level_modifiers(raw.get("modifiers"))
+    confidence = float(raw.get("confidence", 0.65))
+    source = str(raw.get("source", source_fallback))
+
+    raw_candidates = raw.get("candidates")
+    candidates: List[Dict[str, Any]] = []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates[:4]:
+            if not isinstance(item, dict):
+                continue
+            candidates.append(
+                _build_level_type_candidate(
+                    str(item.get("geometry", geometry)),
+                    _normalize_level_modifiers(item.get("modifiers")),
+                    confidence=float(item.get("confidence", 0.0)),
+                    reason=str(item.get("reason")) if item.get("reason") is not None else None,
+                )
+            )
+
+    notes_raw = raw.get("notes")
+    notes = [str(x) for x in notes_raw] if isinstance(notes_raw, list) else []
+    signals = raw.get("signals") if isinstance(raw.get("signals"), dict) else None
+    return _build_level_type_payload(
+        geometry,
+        modifiers,
+        confidence=confidence,
+        source=source,
+        candidates=candidates,
+        notes=notes,
+        signals=signals,
+    )
+
+
+def _classify_level_type_payload(
+    image: Image.Image,
+    *,
+    threshold: int,
+    line_threshold: float,
+    invert: bool,
+    file_hint: Optional[str],
+) -> Dict[str, Any]:
+    detection = classify_level_type(
+        image,
+        threshold=threshold,
+        line_threshold=line_threshold,
+        invert=invert,
+        file_hint=file_hint,
+    )
+    candidates = [
+        _build_level_type_candidate(
+            cand.geometry,
+            list(cand.modifiers),
+            confidence=cand.confidence,
+            reason=cand.reason,
+        )
+        for cand in detection.candidates
+    ]
+    return _build_level_type_payload(
+        detection.geometry,
+        list(detection.modifiers),
+        confidence=detection.confidence,
+        source="classifier",
+        candidates=candidates,
+        notes=list(detection.warnings),
+        signals=dict(detection.signals),
+    )
+
+
+def _grid_wrap_edges(width: int, height: int) -> List[Tuple[str, str]]:
+    edges: List[Tuple[str, str]] = []
+    if width > 2:
+        for y in range(height):
+            edges.append((f"0,{y}", f"{width - 1},{y}"))
+    if height > 2:
+        for x in range(width):
+            edges.append((f"{x},0", f"{x},{height - 1}"))
+    return edges
+
+
+def _candidate_confidence(raw: Any) -> float:
+    if not isinstance(raw, dict):
+        return 0.0
+    try:
+        return max(0.0, float(raw.get("confidence", 0.0)))
+    except Exception:
+        return 0.0
+
+
+def _best_topology_candidate(level_type: Dict[str, Any]) -> Optional[Tuple[str, float]]:
+    raw_candidates = level_type.get("candidates")
+    if not isinstance(raw_candidates, list):
+        return None
+    best: Optional[Tuple[str, float]] = None
+    for raw in raw_candidates:
+        if not isinstance(raw, dict):
+            continue
+        geom = _normalize_level_geometry(str(raw.get("geometry", "")), default="")
+        if geom not in TOPOLOGY_LEVEL_GEOMETRIES:
+            continue
+        conf = _candidate_confidence(raw)
+        if best is None or conf > best[1]:
+            best = (geom, conf)
+    return best
+
+
+def _parse_edge_pairs(raw: Any, *, field: str) -> List[Tuple[str, str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{field} must be a list of [u, v] pairs")
+    out: List[Tuple[str, str]] = []
+    for idx, pair in enumerate(raw):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(f"{field}[{idx}] must be [u, v]")
+        u = str(pair[0]).strip()
+        v = str(pair[1]).strip()
+        if not u or not v:
+            raise ValueError(f"{field}[{idx}] contains an empty endpoint")
+        if u == v:
+            raise ValueError(f"{field}[{idx}] contains a self-loop")
+        out.append((u, v))
+    return out
+
+
+def _parse_edge_overrides_payload(raw: Any) -> Dict[str, List[Tuple[str, str]]]:
+    if raw is None:
+        return {"add": [], "remove": [], "warps": [], "walls": []}
+    if not isinstance(raw, dict):
+        raise ValueError("edge_overrides_json must be a JSON object")
+    return {
+        "add": _parse_edge_pairs(raw.get("add"), field="edge_overrides.add"),
+        "remove": _parse_edge_pairs(raw.get("remove"), field="edge_overrides.remove"),
+        "warps": _parse_edge_pairs(raw.get("warps"), field="edge_overrides.warps"),
+        "walls": _parse_edge_pairs(raw.get("walls"), field="edge_overrides.walls"),
+    }
 
 
 def _apply_flow_metadata(text: str, meta_updates: Dict[str, str], *, drop_empty: bool) -> str:
@@ -440,11 +812,12 @@ class CropTemplateRequest(BaseModel):
 
 app = FastAPI(title="Flow Solver API", version="0.1.0")
 
-cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+cors_raw = os.environ.get("CORS_ORIGINS", "*")
 cors_list = [c.strip() for c in cors_raw.split(",") if c.strip()]
+allow_all_cors = cors_raw.strip() == "*" or "*" in cors_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_list or ["*"],
+    allow_origins=["*"] if allow_all_cors else (cors_list or ["*"]),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -730,7 +1103,14 @@ def _render_thumbnail(puzzle: Puzzle, *, size: Tuple[int, int] = (240, 180)) -> 
     # nodes
     terminals = puzzle.terminal_nodes()
     colors = puzzle.all_colors()
-    color_to_rgb = {c: hex_to_rgb(palette[i % len(palette)]) for i, c in enumerate(colors)}
+    terminal_color_overrides = _terminal_color_map_from_meta(puzzle.meta)
+    color_to_rgb: Dict[str, Tuple[int, int, int]] = {}
+    for i, c in enumerate(colors):
+        override = terminal_color_overrides.get(c)
+        if override:
+            color_to_rgb[c] = hex_to_rgb(override)
+        else:
+            color_to_rgb[c] = hex_to_rgb(palette[i % len(palette)])
     for node_id, node in puzzle.graph.nodes.items():
         cx, cy = map_x(node.pos[0]), map_y(node.pos[1])
         r = 4 if node_id in terminals else 2
@@ -781,28 +1161,118 @@ def get_puzzle(source: str, name: str) -> Dict[str, Any]:
 @app.post("/image/crop/auto")
 async def image_auto_crop(
     file: UploadFile = File(...),
+    crop_x: Optional[int] = Form(None),
+    crop_y: Optional[int] = Form(None),
+    crop_width: Optional[int] = Form(None),
+    crop_height: Optional[int] = Form(None),
     threshold: int = Form(230),
     invert: bool = Form(False),
     padding: int = Form(6),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
-    crop = auto_crop(image, threshold=threshold, invert=invert, padding=padding)
+    seed_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    image_for_crop = apply_crop(image, seed_crop)
+    crop = auto_crop(image_for_crop, threshold=threshold, invert=invert, padding=padding)
+    if crop is not None and seed_crop is not None:
+        crop = CropBox(
+            x=seed_crop.x + crop.x,
+            y=seed_crop.y + crop.y,
+            width=crop.width,
+            height=crop.height,
+        )
+    elif crop is None and seed_crop is not None:
+        # If refinement within the seed failed, retry on the full image.
+        crop = auto_crop(image, threshold=threshold, invert=invert, padding=padding)
+        if crop is None:
+            # Last-resort behavior keeps the user-provided/templated seed.
+            crop = seed_crop
     if crop is None:
         return {
             "crop": None,
             "image_size": {"width": image.width, "height": image.height},
+            "seed_crop": (
+                {"x": seed_crop.x, "y": seed_crop.y, "width": seed_crop.width, "height": seed_crop.height}
+                if seed_crop
+                else None
+            ),
             "message": "No crop detected.",
         }
     return {
         "crop": {"x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height},
         "image_size": {"width": image.width, "height": image.height},
+        "seed_crop": (
+            {"x": seed_crop.x, "y": seed_crop.y, "width": seed_crop.width, "height": seed_crop.height}
+            if seed_crop
+            else None
+        ),
+    }
+
+
+@app.post("/image/classify")
+async def image_classify(
+    file: UploadFile = File(...),
+    crop_x: Optional[int] = Form(None),
+    crop_y: Optional[int] = Form(None),
+    crop_width: Optional[int] = Form(None),
+    crop_height: Optional[int] = Form(None),
+    threshold: int = Form(230),
+    line_threshold: float = Form(0.6),
+    invert: bool = Form(False),
+    perspective: bool = Form(False),
+    level_hint: Optional[str] = Form(None),
+) -> Dict[str, Any]:
+    data = await file.read()
+    image = load_image(data)
+    manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    crop = manual_crop
+    auto_crop_info: Dict[str, Any] = {
+        "applied": False,
+        "source": "manual" if manual_crop is not None else "auto",
+    }
+    if crop is None:
+        inferred_crop = auto_crop(
+            image,
+            threshold=threshold,
+            invert=invert,
+            padding=max(8, int(min(image.width, image.height) * 0.01)),
+        )
+        if inferred_crop is not None:
+            crop = inferred_crop
+            auto_crop_info = {
+                "applied": True,
+                "source": "auto",
+                "x": crop.x,
+                "y": crop.y,
+                "width": crop.width,
+                "height": crop.height,
+            }
+    cropped = apply_crop(image, crop)
+    warped, perspective_info = _maybe_perspective(cropped, perspective)
+
+    hint = level_hint if level_hint else file.filename
+    level_type = _classify_level_type_payload(
+        warped,
+        threshold=threshold,
+        line_threshold=line_threshold,
+        invert=invert,
+        file_hint=hint,
+    )
+    return {
+        "level_type": level_type,
+        "candidates": level_type.get("candidates", []),
+        "warnings": level_type.get("notes", []),
+        "signals": level_type.get("signals", {}),
+        "image_size": {"width": image.width, "height": image.height},
+        "perspective": perspective_info,
+        "auto_crop": auto_crop_info,
     }
 
 
 @app.post("/image/grid/detect")
 async def image_grid_detect(
     file: UploadFile = File(...),
+    target_type: str = Form("square"),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
     crop_width: Optional[int] = Form(None),
@@ -814,15 +1284,82 @@ async def image_grid_detect(
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
-    crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    crop = manual_crop
+    auto_crop_info: Dict[str, Any] = {
+        "applied": False,
+        "source": "manual" if manual_crop is not None else "auto",
+    }
+    if crop is None:
+        inferred_crop = auto_crop(
+            image,
+            threshold=threshold,
+            invert=invert,
+            padding=max(8, int(min(image.width, image.height) * 0.01)),
+        )
+        if inferred_crop is not None:
+            crop = inferred_crop
+            auto_crop_info = {
+                "applied": True,
+                "source": "auto",
+                "x": crop.x,
+                "y": crop.y,
+                "width": crop.width,
+                "height": crop.height,
+            }
     cropped = apply_crop(image, crop)
     warped, perspective_info = _maybe_perspective(cropped, perspective)
+    raw_target = str(target_type or "square").strip().lower()
+    normalized_target = _normalize_level_geometry(raw_target, default="square")
+
+    if normalized_target == "circle":
+        circle_grid, circle_info = detect_circle_grid(warped, min_sectors=3, max_sectors=32)
+        if circle_grid is None:
+            return {
+                "grid": None,
+                "image_size": {"width": image.width, "height": image.height},
+                "perspective": perspective_info,
+                "auto_crop": auto_crop_info,
+                "circle": circle_info,
+                "message": "Circle grid detection failed.",
+            }
+        return {
+            "grid": {
+                "rows": circle_grid.rings,
+                "cols": circle_grid.sectors,
+                "vertical_lines": circle_grid.sectors,
+                "horizontal_lines": circle_grid.rings,
+                "mode": "circle",
+            },
+            "circle": circle_info,
+            "image_size": {"width": image.width, "height": image.height},
+            "perspective": perspective_info,
+            "auto_crop": auto_crop_info,
+        }
+
     grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+    if grid is None and raw_target in {"auto", ""}:
+        circle_grid, circle_info = detect_circle_grid(warped, min_sectors=3, max_sectors=32)
+        if circle_grid is not None:
+            return {
+                "grid": {
+                    "rows": circle_grid.rings,
+                    "cols": circle_grid.sectors,
+                    "vertical_lines": circle_grid.sectors,
+                    "horizontal_lines": circle_grid.rings,
+                    "mode": "circle",
+                },
+                "circle": circle_info,
+                "image_size": {"width": image.width, "height": image.height},
+                "perspective": perspective_info,
+                "auto_crop": auto_crop_info,
+            }
     if grid is None:
         return {
             "grid": None,
             "image_size": {"width": image.width, "height": image.height},
             "perspective": perspective_info,
+            "auto_crop": auto_crop_info,
             "message": "Grid detection failed.",
         }
     return {
@@ -831,15 +1368,18 @@ async def image_grid_detect(
             "cols": grid.cols,
             "vertical_lines": grid.vertical_lines,
             "horizontal_lines": grid.horizontal_lines,
+            "mode": "rect",
         },
         "image_size": {"width": image.width, "height": image.height},
         "perspective": perspective_info,
+        "auto_crop": auto_crop_info,
     }
 
 
 @app.post("/image/terminals/detect")
 async def image_terminals_detect(
     file: UploadFile = File(...),
+    target_type: str = Form("square"),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
     crop_width: Optional[int] = Form(None),
@@ -856,20 +1396,64 @@ async def image_terminals_detect(
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
-    crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    crop = manual_crop
+    auto_crop_info: Dict[str, Any] = {
+        "applied": False,
+        "source": "manual" if manual_crop is not None else "auto",
+    }
+    if crop is None:
+        inferred_crop = auto_crop(
+            image,
+            threshold=230,
+            invert=False,
+            padding=max(8, int(min(image.width, image.height) * 0.01)),
+        )
+        if inferred_crop is not None:
+            crop = inferred_crop
+            auto_crop_info = {
+                "applied": True,
+                "source": "auto",
+                "x": crop.x,
+                "y": crop.y,
+                "width": crop.width,
+                "height": crop.height,
+            }
     cropped = apply_crop(image, crop)
     warped, perspective_info = _maybe_perspective(cropped, perspective)
-    placements, info = detect_terminals(
-        warped,
-        rows=rows,
-        cols=cols,
-        sat_threshold=sat_threshold,
-        brightness_min=brightness_min,
-        brightness_max=brightness_max,
-        margin_ratio=margin_ratio,
-        cluster_threshold=cluster_threshold,
-        bg_threshold=bg_threshold,
-    )
+    normalized_target = _normalize_level_geometry(str(target_type or "square"), default="square")
+    if normalized_target == "circle":
+        circle_grid, circle_info = detect_circle_grid(
+            warped,
+            min_sectors=max(3, min(cols, 12)),
+            max_sectors=max(cols + 6, 24),
+        )
+        placements, info = detect_circle_terminals(
+            warped,
+            rings=rows,
+            sectors=cols,
+            sat_threshold=sat_threshold,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+            margin_ratio=margin_ratio,
+            cluster_threshold=cluster_threshold,
+            bg_threshold=bg_threshold,
+            circle_grid=circle_grid,
+        )
+        if circle_info:
+            info["circle_detection"] = circle_info
+    else:
+        placements, info = detect_terminals(
+            warped,
+            rows=rows,
+            cols=cols,
+            sat_threshold=sat_threshold,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+            margin_ratio=margin_ratio,
+            cluster_threshold=cluster_threshold,
+            bg_threshold=bg_threshold,
+        )
     return {
         "terminals": [
             {
@@ -882,18 +1466,22 @@ async def image_terminals_detect(
         ],
         "info": info,
         "perspective": perspective_info,
+        "auto_crop": auto_crop_info,
     }
 
 
 @app.post("/image/generate")
 async def image_generate(
     file: UploadFile = File(...),
-    target_type: str = Form("square"),
+    target_type: str = Form("auto"),
     grid_width: Optional[int] = Form(None),
     grid_height: Optional[int] = Form(None),
     graph_layout: str = Form("grid"),
     graph_nodes: int = Form(10),
     auto_terminals: bool = Form(True),
+    auto_classify: bool = Form(True),
+    level_type_json: Optional[str] = Form(None),
+    edge_overrides_json: Optional[str] = Form(None),
     metadata_json: Optional[str] = Form(None),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
@@ -912,7 +1500,29 @@ async def image_generate(
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
-    crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    crop = manual_crop
+    auto_crop_info: Dict[str, Any] = {
+        "applied": False,
+        "source": "manual" if manual_crop is not None else "auto",
+    }
+    if crop is None:
+        inferred_crop = auto_crop(
+            image,
+            threshold=threshold,
+            invert=invert,
+            padding=max(8, int(min(image.width, image.height) * 0.01)),
+        )
+        if inferred_crop is not None:
+            crop = inferred_crop
+            auto_crop_info = {
+                "applied": True,
+                "source": "auto",
+                "x": crop.x,
+                "y": crop.y,
+                "width": crop.width,
+                "height": crop.height,
+            }
     cropped = apply_crop(image, crop)
     warped, perspective_info = _maybe_perspective(cropped, perspective)
 
@@ -925,6 +1535,14 @@ async def image_generate(
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid metadata_json: {e}") from e
 
+    manual_edge_overrides = {"add": [], "remove": [], "warps": [], "walls": []}
+    if edge_overrides_json:
+        try:
+            manual_raw = json.loads(edge_overrides_json)
+            manual_edge_overrides = _parse_edge_overrides_payload(manual_raw)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid edge_overrides_json: {e}") from e
+
     meta = _image_meta(
         image_name=file.filename or "image",
         image_size=(image.width, image.height),
@@ -932,23 +1550,165 @@ async def image_generate(
         base=extra_meta,
     )
 
-    detection_info: Dict[str, Any] = {}
+    detection_info: Dict[str, Any] = {"perspective": perspective_info, "auto_crop": auto_crop_info}
+    requested_target = str(target_type or "auto").strip().lower() or "auto"
+    classification_warnings: List[str] = []
 
-    if target_type in {"square", "hex", "circle"}:
-        if grid_width is None or grid_height is None:
-            grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
-            if grid is None:
-                raise HTTPException(status_code=400, detail="Grid size not provided and auto-detection failed.")
-            grid_width = grid.cols
-            grid_height = grid.rows
-            detection_info["grid"] = {
-                "rows": grid.rows,
-                "cols": grid.cols,
-                "vertical_lines": grid.vertical_lines,
-                "horizontal_lines": grid.horizontal_lines,
+    if level_type_json:
+        try:
+            raw_level = json.loads(level_type_json)
+            if not isinstance(raw_level, dict):
+                raise ValueError("level_type_json must be a JSON object")
+            level_type = _parse_level_type_payload(raw_level, source_fallback="hint")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid level_type_json: {e}") from e
+    elif auto_classify or requested_target == "auto":
+        level_type = _classify_level_type_payload(
+            warped,
+            threshold=threshold,
+            line_threshold=line_threshold,
+            invert=invert,
+            file_hint=file.filename,
+        )
+    else:
+        manual_geometry = _normalize_level_geometry(requested_target, default="square")
+        base_candidate = _build_level_type_candidate(
+            manual_geometry,
+            [],
+            confidence=1.0,
+            reason="manual target selection",
+        )
+        level_type = _build_level_type_payload(
+            manual_geometry,
+            [],
+            confidence=1.0,
+            source="manual",
+            candidates=[base_candidate],
+        )
+
+    if requested_target == "auto":
+        target_used = str(level_type.get("recommended_target_type", "square"))
+    elif requested_target in SUPPORTED_LEVEL_GEOMETRIES:
+        target_used = requested_target
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown target_type: {target_type}")
+
+    auto_target_adjustment: Optional[Dict[str, Any]] = None
+    if requested_target == "auto" and target_used in FLOW_LEVEL_GEOMETRIES:
+        top_conf = 0.0
+        raw_candidates = level_type.get("candidates")
+        if isinstance(raw_candidates, list) and raw_candidates:
+            top_conf = _candidate_confidence(raw_candidates[0])
+        best_topology = _best_topology_candidate(level_type)
+        level_signals = level_type.get("signals")
+        has_grid_signal = isinstance(level_signals, dict) and isinstance(level_signals.get("grid"), dict)
+        if (
+            not has_grid_signal
+            and top_conf <= 0.34
+            and best_topology is not None
+            and best_topology[1] >= max(0.12, top_conf * 0.45)
+            and best_topology[0] in TOPOLOGY_LEVEL_GEOMETRIES
+        ):
+            previous_target = target_used
+            target_used = best_topology[0]
+            auto_target_adjustment = {
+                "from": previous_target,
+                "to": target_used,
+                "reason": "weak_grid_signal",
+                "top_confidence": round(float(top_conf), 4),
+                "topology_confidence": round(float(best_topology[1]), 4),
             }
+            classification_warnings.append(
+                f"Auto target changed from {previous_target} to {target_used} due weak grid signal."
+            )
+
+    if target_used not in SUPPORTED_LEVEL_GEOMETRIES:
+        raise HTTPException(status_code=400, detail=f"Unsupported target_type after classification: {target_used}")
+
+    if requested_target in FLOW_LEVEL_GEOMETRIES and target_used in FLOW_LEVEL_GEOMETRIES:
+        if not bool(level_type.get("can_emit_flow", True)):
+            classification_warnings.append(
+                "Detected modifiers may not fit .flow output; consider target_type=graph."
+            )
+
+    detection_info["level_type"] = level_type
+    detection_info["level_type_candidates"] = level_type.get("candidates", [])
+    detection_info["target_type_requested"] = requested_target
+    detection_info["target_type_used"] = target_used
+    if auto_target_adjustment is not None:
+        detection_info["auto_target_adjustment"] = auto_target_adjustment
+    level_notes = level_type.get("notes")
+    if isinstance(level_notes, list):
+        classification_warnings.extend(str(note) for note in level_notes if str(note))
+
+    level_geometry = str(level_type.get("geometry", "square"))
+    level_modifiers = _normalize_level_modifiers(level_type.get("modifiers"))
+    meta["level_type_geometry"] = level_geometry
+    meta["level_type_modifiers"] = ",".join(level_modifiers)
+    meta["level_type_source"] = str(level_type.get("source", "classifier"))
+    meta["recommended_output"] = str(level_type.get("recommended_output_format", "flow"))
+    if any(manual_edge_overrides.values()):
+        detection_info["manual_edge_overrides"] = {
+            "add": len(manual_edge_overrides["add"]),
+            "remove": len(manual_edge_overrides["remove"]),
+            "warps": len(manual_edge_overrides["warps"]),
+            "walls": len(manual_edge_overrides["walls"]),
+        }
+
+    if target_used in {"square", "hex", "circle"}:
+        if any(manual_edge_overrides.values()):
+            classification_warnings.append("Manual edge overrides are only applied for graph target output.")
+        circle_grid = None
+        circle_grid_info: Dict[str, Any] = {}
+        if grid_width is None or grid_height is None:
+            if target_used == "circle":
+                circle_grid, circle_grid_info = detect_circle_grid(
+                    warped,
+                    min_sectors=3,
+                    max_sectors=32,
+                )
+                if circle_grid is None:
+                    detail = "Circle grid size not provided and auto-detection failed."
+                    if circle_grid_info.get("warnings"):
+                        detail = f"{detail} ({'; '.join(str(w) for w in circle_grid_info['warnings'])})"
+                    raise HTTPException(status_code=400, detail=detail)
+                grid_width = int(circle_grid.sectors)
+                grid_height = int(circle_grid.rings)
+                detection_info["grid"] = {
+                    "rows": int(circle_grid.rings),
+                    "cols": int(circle_grid.sectors),
+                    "vertical_lines": int(circle_grid.sectors),
+                    "horizontal_lines": int(circle_grid.rings),
+                    "mode": "circle",
+                }
+                detection_info["circle_grid"] = circle_grid_info
+            else:
+                grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+                if grid is None:
+                    raise HTTPException(status_code=400, detail="Grid size not provided and auto-detection failed.")
+                grid_width = grid.cols
+                grid_height = grid.rows
+                detection_info["grid"] = {
+                    "rows": grid.rows,
+                    "cols": grid.cols,
+                    "vertical_lines": grid.vertical_lines,
+                    "horizontal_lines": grid.horizontal_lines,
+                    "mode": "rect",
+                }
         else:
-            detection_info["grid"] = {"rows": grid_height, "cols": grid_width}
+            detection_info["grid"] = {
+                "rows": grid_height,
+                "cols": grid_width,
+                "mode": "circle" if target_used == "circle" else "rect",
+            }
+            if target_used == "circle":
+                circle_grid, circle_grid_info = detect_circle_grid(
+                    warped,
+                    min_sectors=max(3, min(int(grid_width), 12)),
+                    max_sectors=max(int(grid_width) + 6, 24),
+                )
+                if circle_grid_info:
+                    detection_info["circle_grid"] = circle_grid_info
 
         if grid_width <= 0 or grid_height <= 0:
             raise HTTPException(status_code=400, detail="Invalid grid size.")
@@ -957,17 +1717,31 @@ async def image_generate(
         terminal_warnings: List[str] = []
         terminal_info: Dict[str, Any] = {}
         if auto_terminals:
-            placements, info = detect_terminals(
-                warped,
-                rows=grid_height,
-                cols=grid_width,
-                sat_threshold=sat_threshold,
-                brightness_min=brightness_min,
-                brightness_max=brightness_max,
-                margin_ratio=margin_ratio,
-                cluster_threshold=cluster_threshold,
-                bg_threshold=bg_threshold,
-            )
+            if target_used == "circle":
+                placements, info = detect_circle_terminals(
+                    warped,
+                    rings=grid_height,
+                    sectors=grid_width,
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                    circle_grid=circle_grid,
+                )
+            else:
+                placements, info = detect_terminals(
+                    warped,
+                    rows=grid_height,
+                    cols=grid_width,
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                )
             grid_tokens, grid_warnings = build_grid(rows=grid_height, cols=grid_width, terminals=placements)
             terminal_warnings = grid_warnings + info.get("warnings", [])
             terminal_info = info
@@ -984,28 +1758,224 @@ async def image_generate(
             grid_tokens, grid_warnings = build_grid(rows=grid_height, cols=grid_width, terminals=[])
             terminal_warnings = grid_warnings
 
-        flow_text = build_flow_text(target_type, grid_tokens, meta)
-        name = f"{Path(meta.get('source_image', 'image')).stem}_{target_type}_{grid_width}x{grid_height}.flow"
+        flow_text = build_flow_text(target_used, grid_tokens, meta)
+        name = f"{Path(meta.get('source_image', 'image')).stem}_{target_used}_{grid_width}x{grid_height}.flow"
         detection_info["terminals"] = terminals_payload
         detection_info["terminal_info"] = terminal_info
-        detection_info["warnings"] = terminal_warnings
-        detection_info["perspective"] = perspective_info
+        detection_info["warnings"] = classification_warnings + terminal_warnings
         return {"name": name, "text": flow_text, "metadata": meta, "detection": detection_info}
 
-    if target_type == "graph":
-        if graph_layout == "line":
+    if target_used in {"graph", "cube", "star", "figure8"}:
+        warp_edges: List[Tuple[str, str]] = []
+        wall_edges: List[Tuple[str, str]] = []
+        add_edges: List[Tuple[str, str]] = list(manual_edge_overrides["add"])
+        remove_edges: List[Tuple[str, str]] = list(manual_edge_overrides["remove"])
+        modifier_info: Dict[str, Any] = {}
+        graph_terminal_payload: List[Dict[str, Any]] = []
+        graph_terminal_info: Dict[str, Any] = {}
+        graph_terminal_warnings: List[str] = []
+
+        if target_used in {"cube", "star", "figure8"}:
+            topo_width = int(grid_width) if grid_width is not None and grid_width > 0 else max(6, int(graph_nodes))
+            topo_height = int(grid_height) if grid_height is not None and grid_height > 0 else topo_width
+            warp_edges.extend(manual_edge_overrides["warps"])
+            wall_edges.extend(manual_edge_overrides["walls"])
+            if "warps" in level_modifiers:
+                classification_warnings.append(
+                    "Warp modifier detected; auto-warp inference is only available for grid graph layout."
+                )
+            if "walls" in level_modifiers:
+                classification_warnings.append(
+                    "Wall modifier auto-detection is only available for grid graph layout."
+                )
+            obj = build_graph_json(
+                layout=target_used,
+                width=topo_width,
+                height=topo_height,
+                nodes=graph_nodes,
+                meta=meta,
+                warp_edges=warp_edges,
+                wall_edges=wall_edges,
+                edge_additions=add_edges,
+                edge_removals=remove_edges,
+            )
+            modifier_info["topology"] = {
+                "name": target_used,
+                "width_hint": topo_width,
+                "height_hint": topo_height,
+            }
+            if auto_terminals:
+                node_placements, node_info = detect_terminals_on_nodes(
+                    warped,
+                    nodes=obj.get("space", {}).get("nodes", {}),
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                )
+                graph_terminal_info = node_info
+                graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
+                graph_terminal_payload = [
+                    {
+                        "node_id": placement.node_id,
+                        "letter": placement.letter,
+                        "color": [round(c, 2) for c in placement.color],
+                    }
+                    for placement in node_placements
+                ]
+                inferred_terminals = build_graph_terminals_from_node_placements(node_placements)
+                if inferred_terminals:
+                    obj["terminals"] = inferred_terminals
+                else:
+                    graph_terminal_warnings.append("No topology terminals were confidently detected.")
+            name = f"{Path(meta.get('source_image', 'image')).stem}_{target_used}_{topo_width}x{topo_height}.json"
+        elif graph_layout == "line":
             if graph_nodes < 2:
                 raise HTTPException(status_code=400, detail="Line graphs need at least 2 nodes.")
-            obj = build_graph_json(layout="line", width=0, height=0, nodes=graph_nodes, meta=meta)
+            if "warps" in level_modifiers and graph_nodes >= 3:
+                warp_edges = [("0", str(graph_nodes - 1))]
+                modifier_info["warps"] = {"count": len(warp_edges), "mode": "line-endpoint-wrap"}
+            warp_edges.extend(manual_edge_overrides["warps"])
+            wall_edges.extend(manual_edge_overrides["walls"])
+            if "walls" in level_modifiers:
+                classification_warnings.append("Wall modifiers are currently only inferred for grid graph layout.")
+            obj = build_graph_json(
+                layout="line",
+                width=0,
+                height=0,
+                nodes=graph_nodes,
+                meta=meta,
+                warp_edges=warp_edges,
+                wall_edges=wall_edges,
+                edge_additions=add_edges,
+                edge_removals=remove_edges,
+            )
+            if auto_terminals:
+                node_placements, node_info = detect_terminals_on_nodes(
+                    warped,
+                    nodes=obj.get("space", {}).get("nodes", {}),
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                )
+                graph_terminal_info = node_info
+                graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
+                graph_terminal_payload = [
+                    {
+                        "node_id": placement.node_id,
+                        "letter": placement.letter,
+                        "color": [round(c, 2) for c in placement.color],
+                    }
+                    for placement in node_placements
+                ]
+                inferred_terminals = build_graph_terminals_from_node_placements(node_placements)
+                if inferred_terminals:
+                    obj["terminals"] = inferred_terminals
             name = f"{Path(meta.get('source_image', 'image')).stem}_line_{graph_nodes}.json"
         else:
+            if grid_width is None or grid_height is None:
+                grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+                if grid is not None:
+                    grid_width = grid.cols
+                    grid_height = grid.rows
+                    detection_info["grid"] = {
+                        "rows": grid.rows,
+                        "cols": grid.cols,
+                        "vertical_lines": grid.vertical_lines,
+                        "horizontal_lines": grid.horizontal_lines,
+                    }
             if grid_width is None or grid_height is None or grid_width * grid_height < 2:
                 raise HTTPException(status_code=400, detail="Grid graphs need a valid width/height.")
-            obj = build_graph_json(layout="grid", width=grid_width, height=grid_height, nodes=0, meta=meta)
+            if "warps" in level_modifiers:
+                warp_edges = _grid_wrap_edges(grid_width, grid_height)
+                modifier_info["warps"] = {"count": len(warp_edges), "mode": "toroidal-wrap"}
+                if not warp_edges:
+                    classification_warnings.append("Warp modifier detected, but grid is too small for wrap edges.")
+            warp_edges.extend(manual_edge_overrides["warps"])
+            if "walls" in level_modifiers:
+                wall_edges, wall_info = detect_wall_edges(
+                    warped,
+                    rows=grid_height,
+                    cols=grid_width,
+                )
+                modifier_info["walls"] = wall_info
+                if not wall_edges:
+                    classification_warnings.append(
+                        "Walls modifier detected, but no wall edges were confidently detected."
+                    )
+            wall_edges.extend(manual_edge_overrides["walls"])
+            obj = build_graph_json(
+                layout="grid",
+                width=grid_width,
+                height=grid_height,
+                nodes=0,
+                meta=meta,
+                warp_edges=warp_edges,
+                wall_edges=wall_edges,
+                edge_additions=add_edges,
+                edge_removals=remove_edges,
+            )
+            if auto_terminals:
+                placements, term_info = detect_terminals(
+                    warped,
+                    rows=grid_height,
+                    cols=grid_width,
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                )
+                graph_terminal_info = term_info
+                graph_terminal_warnings.extend([str(w) for w in term_info.get("warnings", [])])
+                graph_terminal_payload = [
+                    {
+                        "row": placement.row,
+                        "col": placement.col,
+                        "node_id": f"{placement.col},{placement.row}",
+                        "letter": placement.letter,
+                        "color": [round(c, 2) for c in placement.color],
+                    }
+                    for placement in placements
+                ]
+                graph_terminals: Dict[str, List[str]] = {}
+                for placement in placements:
+                    node_id = f"{placement.col},{placement.row}"
+                    graph_terminals.setdefault(placement.letter, []).append(node_id)
+                mapped_terminals = {
+                    letter: node_ids[:2]
+                    for letter, node_ids in graph_terminals.items()
+                    if len(node_ids) >= 2
+                }
+                if mapped_terminals:
+                    obj["terminals"] = mapped_terminals
+                else:
+                    graph_terminal_warnings.append("No graph-grid terminals were confidently detected.")
             name = f"{Path(meta.get('source_image', 'image')).stem}_graph_{grid_width}x{grid_height}.json"
+        manual_applied = len(add_edges) + len(remove_edges) + len(manual_edge_overrides["warps"]) + len(manual_edge_overrides["walls"])
+        if manual_applied:
+            modifier_info["manual_edge_overrides"] = {
+                "add": len(add_edges),
+                "remove": len(remove_edges),
+                "warps": len(manual_edge_overrides["warps"]),
+                "walls": len(manual_edge_overrides["walls"]),
+            }
+        if modifier_info:
+            detection_info["modifier_info"] = modifier_info
+        if graph_terminal_payload:
+            detection_info["terminals"] = graph_terminal_payload
+        if graph_terminal_info:
+            detection_info["terminal_info"] = graph_terminal_info
+        detection_info["warnings"] = classification_warnings + graph_terminal_warnings
         return {"name": name, "text": json.dumps(obj, indent=2), "metadata": meta, "detection": detection_info}
 
-    raise HTTPException(status_code=400, detail=f"Unknown target_type: {target_type}")
+    raise HTTPException(status_code=400, detail=f"Unknown target_type after classification: {target_used}")
 
 
 @app.post("/image/ocr")

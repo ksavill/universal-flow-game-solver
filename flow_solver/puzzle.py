@@ -13,6 +13,26 @@ from .spaces.square import build_square_space_from_tokens
 Color = str
 
 
+def _edge_pairs_from_json(raw: Any, *, field: str) -> List[Tuple[NodeId, NodeId]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"{field} must be a list of [u, v] edge pairs")
+
+    out: List[Tuple[NodeId, NodeId]] = []
+    for idx, pair in enumerate(raw):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise ValueError(f"{field}[{idx}] must be [u, v]")
+        u = str(pair[0])
+        v = str(pair[1])
+        if not u or not v:
+            raise ValueError(f"{field}[{idx}] has an empty endpoint")
+        if u == v:
+            raise ValueError(f"{field}[{idx}] has a self-loop ({u!r})")
+        out.append((u, v))
+    return out
+
+
 @dataclass
 class Puzzle:
     """A Flow/Numberlink puzzle defined on a graph.
@@ -69,6 +89,27 @@ class Puzzle:
 
             for u, v in space.get("edges", []):
                 g.add_edge(str(u), str(v))
+
+            edge_adds: List[Tuple[NodeId, NodeId]] = []
+            edge_removes: List[Tuple[NodeId, NodeId]] = []
+
+            overrides = space.get("edge_overrides", {})
+            if overrides is not None:
+                if not isinstance(overrides, dict):
+                    raise ValueError("space.edge_overrides must be an object with optional add/remove lists")
+                edge_adds.extend(_edge_pairs_from_json(overrides.get("add"), field="space.edge_overrides.add"))
+                edge_removes.extend(_edge_pairs_from_json(overrides.get("remove"), field="space.edge_overrides.remove"))
+
+            # Convenience aliases:
+            # - `warps` add long-range adjacencies
+            # - `walls` remove adjacencies
+            edge_adds.extend(_edge_pairs_from_json(space.get("warps"), field="space.warps"))
+            edge_removes.extend(_edge_pairs_from_json(space.get("walls"), field="space.walls"))
+
+            for u, v in edge_removes:
+                g.remove_edge(u, v)
+            for u, v in edge_adds:
+                g.add_edge(u, v)
 
             # Tiles default to 1:1 with nodes unless specified.
             tiles_obj = obj.get("tiles")
@@ -173,5 +214,4 @@ class Puzzle:
     ) -> "Puzzle":
         g, tiles, terminals = build_square_space_from_tokens(token_rows)
         return Puzzle(graph=g, tiles=tiles, terminals=terminals, fill=fill, meta=meta or {})
-
 

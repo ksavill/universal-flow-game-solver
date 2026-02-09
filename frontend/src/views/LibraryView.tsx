@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -153,7 +153,7 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
     setSizeFilter(event.target.value);
   };
 
-  const handleViewMode = (event: SelectChangeEvent<string>) => {
+  const handleViewMode = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setViewMode(event.target.value as "grid" | "list");
   };
 

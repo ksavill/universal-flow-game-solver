@@ -12,357 +12,204 @@ type GameViewProps = {
   compact?: boolean;
 };
 
-type CellData = {
+type RenderNode = {
+  id: string;
   x: number;
   y: number;
-  nodeId: string;
-  color: string | null;
-  isTerminal: boolean;
+  sx: number;
+  sy: number;
+  kind: string;
   terminalColor: string | null;
-  connections: {
-    top: boolean;
-    right: boolean;
-    bottom: boolean;
-    left: boolean;
-  };
+  solutionColor: string | null;
 };
+
+type RenderEdge = {
+  u: string;
+  v: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  length: number;
+  warpLike: boolean;
+  solutionColor: string | null;
+};
+
+function median(values: number[]): number {
+  if (!values.length) {
+    return 1;
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
 
 export function GameView({
   graph,
   nodeColor,
   showSolution = false,
   height = 320,
-  cellSize: customCellSize,
-  compact = false,
+  cellSize,
+  compact = false
 }: GameViewProps) {
-  // Build color mapping from terminal colors
   const { colorToHex, terminalNodeColor } = useMemo(
     () => buildTerminalColorMaps(graph, nodeColor, GAME_PALETTE),
     [graph, nodeColor]
   );
 
-  // Parse grid dimensions and build cell data
-  const { cells, gridWidth, gridHeight, minX, minY } = useMemo(() => {
-    const cells: Map<string, CellData> = new Map();
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
+  const rendered = useMemo(() => {
+    const baseNodes = graph.nodes.map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      kind: node.kind,
+      terminalColor: terminalNodeColor[node.id] ?? null,
+      solutionColor: showSolution && nodeColor ? nodeColor[node.id] ?? null : null
+    }));
 
-    // Parse node positions - they use "x,y" format for square grids
-    const nodePositions: Map<string, { x: number; y: number }> = new Map();
+    if (!baseNodes.length) {
+      return {
+        nodes: [] as RenderNode[],
+        edges: [] as RenderEdge[],
+        width: compact ? 220 : 320,
+        height: compact ? 140 : height,
+        scale: 24
+      };
+    }
 
-    for (const node of graph.nodes) {
-      // Try to parse grid coordinates from node ID or data
-      let gridX: number | null = null;
-      let gridY: number | null = null;
+    const minX = Math.min(...baseNodes.map((node) => node.x));
+    const maxX = Math.max(...baseNodes.map((node) => node.x));
+    const minY = Math.min(...baseNodes.map((node) => node.y));
+    const maxY = Math.max(...baseNodes.map((node) => node.y));
+    const spanX = Math.max(0.001, maxX - minX);
+    const spanY = Math.max(0.001, maxY - minY);
 
-      // Check if tile data contains coordinates
-      const tile = (node.data as { tile?: string })?.tile;
-      if (tile && tile.includes(",")) {
-        const [xStr, yStr] = tile.split(",");
-        gridX = parseInt(xStr, 10);
-        gridY = parseInt(yStr, 10);
-      } else if (node.id.includes(",")) {
-        // Try parsing from node ID
-        const [xStr, yStr] = node.id.split(",");
-        gridX = parseInt(xStr, 10);
-        gridY = parseInt(yStr, 10);
-      } else {
-        // For circle/other spaces, use x/y coordinates rounded
-        gridX = Math.round(node.x);
-        gridY = Math.round(-node.y); // Flip Y since graph uses negative Y
+    const padding = compact ? 12 : 18;
+    const maxWidth = compact ? 320 : 700;
+    const targetHeight = compact ? 140 : height;
+    const scaleByHeight = (targetHeight - padding * 2) / spanY;
+    const scaleByWidth = (maxWidth - padding * 2) / spanX;
+    const scale = clamp(cellSize ?? Math.min(scaleByHeight, scaleByWidth), 8, 96);
+    const width = Math.max(140, Math.min(maxWidth, spanX * scale + padding * 2));
+    const viewHeight = Math.max(96, spanY * scale + padding * 2);
+
+    const mapX = (x: number) => padding + (x - minX) * scale;
+    const mapY = (y: number) => padding + (maxY - y) * scale;
+
+    const nodes: RenderNode[] = baseNodes.map((node) => ({
+      ...node,
+      sx: mapX(node.x),
+      sy: mapY(node.y)
+    }));
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+
+    const lengths: number[] = [];
+    const rawEdges: Array<Omit<RenderEdge, "warpLike">> = [];
+    for (const [u, v] of graph.edges) {
+      const a = nodeById.get(u);
+      const b = nodeById.get(v);
+      if (!a || !b) {
+        continue;
       }
-
-      if (gridX !== null && gridY !== null && !isNaN(gridX) && !isNaN(gridY)) {
-        nodePositions.set(node.id, { x: gridX, y: gridY });
-        minX = Math.min(minX, gridX);
-        maxX = Math.max(maxX, gridX);
-        minY = Math.min(minY, gridY);
-        maxY = Math.max(maxY, gridY);
-
-        const cellKey = `${gridX},${gridY}`;
-        const solutionColor = showSolution && nodeColor ? nodeColor[node.id] : null;
-        const termColor = terminalNodeColor[node.id] || null;
-
-        cells.set(cellKey, {
-          x: gridX,
-          y: gridY,
-          nodeId: node.id,
-          color: solutionColor || termColor,
-          isTerminal: node.kind === "terminal",
-          terminalColor: termColor,
-          connections: { top: false, right: false, bottom: false, left: false },
-        });
-      }
-    }
-
-    // Build edge connections for solution paths
-    if (showSolution && nodeColor) {
-      for (const [u, v] of graph.edges) {
-        const colorU = nodeColor[u];
-        const colorV = nodeColor[v];
-        if (!colorU || colorU !== colorV) continue;
-
-        const posU = nodePositions.get(u);
-        const posV = nodePositions.get(v);
-        if (!posU || !posV) continue;
-
-        const cellU = cells.get(`${posU.x},${posU.y}`);
-        const cellV = cells.get(`${posV.x},${posV.y}`);
-        if (!cellU || !cellV) continue;
-
-        // Determine direction
-        const dx = posV.x - posU.x;
-        const dy = posV.y - posU.y;
-
-        if (dx === 1 && dy === 0) {
-          cellU.connections.right = true;
-          cellV.connections.left = true;
-        } else if (dx === -1 && dy === 0) {
-          cellU.connections.left = true;
-          cellV.connections.right = true;
-        } else if (dx === 0 && dy === 1) {
-          cellU.connections.bottom = true;
-          cellV.connections.top = true;
-        } else if (dx === 0 && dy === -1) {
-          cellU.connections.top = true;
-          cellV.connections.bottom = true;
-        }
-      }
-    }
-
-    const gridWidth = maxX - minX + 1;
-    const gridHeight = maxY - minY + 1;
-
-    return {
-      cells: Array.from(cells.values()),
-      gridWidth: isFinite(gridWidth) ? gridWidth : 1,
-      gridHeight: isFinite(gridHeight) ? gridHeight : 1,
-      minX: isFinite(minX) ? minX : 0,
-      minY: isFinite(minY) ? minY : 0,
-    };
-  }, [graph, nodeColor, showSolution, terminalNodeColor]);
-
-  // Calculate cell size to fit the height
-  const padding = compact ? 4 : 8;
-  const effectiveHeight = compact ? 140 : height;
-  const cellSize = customCellSize || Math.floor((effectiveHeight - padding * 2) / Math.max(gridWidth, gridHeight));
-  const svgWidth = gridWidth * cellSize + padding * 2;
-  const svgHeight = gridHeight * cellSize + padding * 2;
-
-  // Render a cell with proper pipe connections
-  const renderCell = (cell: CellData) => {
-    const cx = padding + (cell.x - minX) * cellSize + cellSize / 2;
-    const cy = padding + (cell.y - minY) * cellSize + cellSize / 2;
-    const color = cell.color ? colorToHex[cell.color] || "#888" : null;
-
-    if (!color) {
-      return null;
-    }
-
-    const pipeWidth = cellSize * 0.45;
-    const halfPipe = pipeWidth / 2;
-    const halfCell = cellSize / 2;
-    const terminalRadius = cellSize * 0.35;
-
-    const elements: JSX.Element[] = [];
-    const { top, right, bottom, left } = cell.connections;
-
-    // Draw pipe segments for each connection
-    if (top) {
-      elements.push(
-        <rect
-          key={`${cell.nodeId}-top`}
-          x={cx - halfPipe}
-          y={cy - halfCell}
-          width={pipeWidth}
-          height={halfCell}
-          fill={color}
-        />
-      );
-    }
-    if (bottom) {
-      elements.push(
-        <rect
-          key={`${cell.nodeId}-bottom`}
-          x={cx - halfPipe}
-          y={cy}
-          width={pipeWidth}
-          height={halfCell}
-          fill={color}
-        />
-      );
-    }
-    if (left) {
-      elements.push(
-        <rect
-          key={`${cell.nodeId}-left`}
-          x={cx - halfCell}
-          y={cy - halfPipe}
-          width={halfCell}
-          height={pipeWidth}
-          fill={color}
-        />
-      );
-    }
-    if (right) {
-      elements.push(
-        <rect
-          key={`${cell.nodeId}-right`}
-          x={cx}
-          y={cy - halfPipe}
-          width={halfCell}
-          height={pipeWidth}
-          fill={color}
-        />
-      );
-    }
-
-    // Draw center junction for pipes
-    const hasConnections = top || right || bottom || left;
-    if (hasConnections && !cell.isTerminal) {
-      elements.push(
-        <rect
-          key={`${cell.nodeId}-center`}
-          x={cx - halfPipe}
-          y={cy - halfPipe}
-          width={pipeWidth}
-          height={pipeWidth}
-          fill={color}
-        />
-      );
-    }
-
-    // Draw terminal circle (larger, on top)
-    if (cell.isTerminal) {
-      elements.push(
-        <circle
-          key={`${cell.nodeId}-terminal`}
-          cx={cx}
-          cy={cy}
-          r={terminalRadius}
-          fill={color}
-          stroke="rgba(255,255,255,0.3)"
-          strokeWidth={2}
-        />
-      );
-    }
-
-    return elements;
-  };
-
-  // Render grid lines
-  const renderGridLines = () => {
-    const lines: JSX.Element[] = [];
-    const strokeColor = "rgba(80, 80, 80, 0.8)";
-    const strokeWidth = 2;
-
-    // Vertical lines
-    for (let i = 0; i <= gridWidth; i++) {
-      const x = padding + i * cellSize;
-      lines.push(
-        <line
-          key={`v-${i}`}
-          x1={x}
-          y1={padding}
-          x2={x}
-          y2={padding + gridHeight * cellSize}
-          stroke={strokeColor}
-          strokeWidth={strokeWidth}
-        />
-      );
-    }
-
-    // Horizontal lines
-    for (let i = 0; i <= gridHeight; i++) {
-      const y = padding + i * cellSize;
-      lines.push(
-        <line
-          key={`h-${i}`}
-          x1={padding}
-          y1={y}
-          x2={padding + gridWidth * cellSize}
-          y2={y}
-          stroke={strokeColor}
-          strokeWidth={strokeWidth}
-        />
-      );
-    }
-
-    return lines;
-  };
-
-  // Render terminal markers for unsolved puzzles
-  const renderTerminalMarkers = () => {
-    if (showSolution) return null;
-
-    return cells
-      .filter((cell) => cell.isTerminal && cell.terminalColor)
-      .map((cell) => {
-        const cx = padding + (cell.x - minX) * cellSize + cellSize / 2;
-        const cy = padding + (cell.y - minY) * cellSize + cellSize / 2;
-        const color = colorToHex[cell.terminalColor!] || "#888";
-        const radius = cellSize * 0.35;
-
-        return (
-          <circle
-            key={`terminal-${cell.nodeId}`}
-            cx={cx}
-            cy={cy}
-            r={radius}
-            fill={color}
-            stroke="rgba(255,255,255,0.3)"
-            strokeWidth={2}
-          />
-        );
+      const length = Math.hypot(a.x - b.x, a.y - b.y);
+      lengths.push(length);
+      rawEdges.push({
+        u,
+        v,
+        x1: a.sx,
+        y1: a.sy,
+        x2: b.sx,
+        y2: b.sy,
+        length,
+        solutionColor:
+          showSolution && nodeColor && nodeColor[u] && nodeColor[u] === nodeColor[v]
+            ? (nodeColor[u] as string)
+            : null
       });
-  };
+    }
+
+    const medianLength = Math.max(0.001, median(lengths));
+    const edges: RenderEdge[] = rawEdges.map((edge) => ({
+      ...edge,
+      warpLike: edge.length > medianLength * 1.7
+    }));
+
+    return { nodes, edges, width, height: viewHeight, scale };
+  }, [graph, nodeColor, showSolution, terminalNodeColor, compact, height, cellSize]);
+
+  const nodeRadius = clamp(rendered.scale * 0.12, compact ? 2.5 : 3, compact ? 6 : 9);
+  const terminalRadius = nodeRadius * 1.55;
+  const baseEdgeWidth = clamp(rendered.scale * 0.06, 1, compact ? 1.8 : 2.2);
+  const solutionEdgeWidth = clamp(rendered.scale * 0.2, compact ? 2.5 : 3.2, compact ? 5 : 8);
 
   return (
-    <Box
-      sx={{
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
+    <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", overflowX: "auto" }}>
       <svg
-        width={svgWidth}
-        height={svgHeight}
-        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        width={rendered.width}
+        height={rendered.height}
+        viewBox={`0 0 ${rendered.width} ${rendered.height}`}
         style={{
           background: "linear-gradient(145deg, #1a1a2e 0%, #0f0f1a 100%)",
-          borderRadius: compact ? 4 : 8,
+          borderRadius: compact ? 6 : 10,
           border: compact ? "1px solid #333" : "2px solid #333",
+          minWidth: rendered.width
         }}
       >
-        {/* Background cells */}
-        {Array.from({ length: gridWidth * gridHeight }).map((_, idx) => {
-          const gx = idx % gridWidth;
-          const gy = Math.floor(idx / gridWidth);
+        {rendered.edges.map((edge) => (
+          <line
+            key={`edge-${edge.u}-${edge.v}`}
+            x1={edge.x1}
+            y1={edge.y1}
+            x2={edge.x2}
+            y2={edge.y2}
+            stroke="rgba(156,163,175,0.42)"
+            strokeWidth={baseEdgeWidth}
+            strokeDasharray={edge.warpLike ? `${baseEdgeWidth * 2.4} ${baseEdgeWidth * 1.9}` : undefined}
+          />
+        ))}
+
+        {showSolution &&
+          rendered.edges.map((edge) => {
+            if (!edge.solutionColor) {
+              return null;
+            }
+            const hex = colorToHex[edge.solutionColor] ?? "#ff5252";
+            return (
+              <line
+                key={`sol-${edge.u}-${edge.v}`}
+                x1={edge.x1}
+                y1={edge.y1}
+                x2={edge.x2}
+                y2={edge.y2}
+                stroke={hex}
+                strokeWidth={solutionEdgeWidth}
+                strokeLinecap="round"
+                strokeDasharray={edge.warpLike ? `${solutionEdgeWidth * 2.2} ${solutionEdgeWidth * 1.8}` : undefined}
+              />
+            );
+          })}
+
+        {rendered.nodes.map((node) => {
+          const terminal = node.terminalColor ? colorToHex[node.terminalColor] ?? "#ff5252" : null;
+          const solved = node.solutionColor ? colorToHex[node.solutionColor] ?? "#ff5252" : null;
+          const fill = terminal ?? solved ?? "rgba(220,220,220,0.86)";
+          const radius = terminal ? terminalRadius : nodeRadius;
           return (
-            <rect
-              key={`bg-${gx}-${gy}`}
-              x={padding + gx * cellSize + 1}
-              y={padding + gy * cellSize + 1}
-              width={cellSize - 2}
-              height={cellSize - 2}
-              fill="rgba(20, 20, 35, 0.9)"
-              rx={4}
-              ry={4}
+            <circle
+              key={`node-${node.id}`}
+              cx={node.sx}
+              cy={node.sy}
+              r={radius}
+              fill={fill}
+              stroke={terminal ? "rgba(255,255,255,0.44)" : "rgba(0,0,0,0.35)"}
+              strokeWidth={terminal ? 1.7 : 1}
             />
           );
         })}
-
-        {/* Grid lines */}
-        {renderGridLines()}
-
-        {/* Solution pipes */}
-        {showSolution && cells.map((cell) => renderCell(cell))}
-
-        {/* Terminal markers (when not showing solution) */}
-        {renderTerminalMarkers()}
       </svg>
     </Box>
   );

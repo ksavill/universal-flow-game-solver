@@ -18,13 +18,17 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Typography
+  Typography,
+  useMediaQuery
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import {
   CropTemplate,
+  imageClassify,
   imageDetectGrid,
   imageGenerate,
   imageOcr,
+  LevelType,
   listCropTemplates,
   listPuzzles,
   savePuzzle
@@ -44,6 +48,7 @@ type BatchItem = {
   text?: string;
   metadata?: Record<string, string>;
   detection?: Record<string, unknown>;
+  levelType?: LevelType | null;
   kind?: string;
   sizeLabel?: string;
   selected: boolean;
@@ -82,8 +87,12 @@ function inferSignature(text: string | undefined): { kind?: string; sizeLabel?: 
   }
   if (raw.startsWith("{")) {
     try {
-      const obj = JSON.parse(raw) as { space?: { type?: string; nodes?: Record<string, unknown> } };
-      const kind = obj?.space?.type ?? "graph";
+      const obj = JSON.parse(raw) as { space?: { type?: string; topology?: string; nodes?: Record<string, unknown> } };
+      const graphTopology = obj?.space?.topology?.toLowerCase();
+      const kind =
+        obj?.space?.type === "graph" && graphTopology && ["cube", "star", "figure8"].includes(graphTopology)
+          ? graphTopology
+          : (obj?.space?.type ?? "graph");
       const nodes = obj?.space?.nodes ? Object.keys(obj.space.nodes).length : 0;
       const sizeLabel = nodes ? `${nodes} nodes` : "graph";
       return { kind, sizeLabel };
@@ -273,11 +282,14 @@ export function BulkImportView() {
   const [templates, setTemplates] = useState<CropTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [templateNote, setTemplateNote] = useState("");
+  const [pipelineUseClassifier, setPipelineUseClassifier] = useState(true);
   const [pipelineUseOcr, setPipelineUseOcr] = useState(true);
   const [pipelineUseGrid, setPipelineUseGrid] = useState(true);
   const [pipelineUseTerminals, setPipelineUseTerminals] = useState(true);
   const [ocrWholeImage, setOcrWholeImage] = useState(true);
-  const [targetType, setTargetType] = useState<"square" | "hex" | "circle" | "graph">("square");
+  const [targetType, setTargetType] = useState<
+    "auto" | "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8"
+  >("auto");
   const [gridWidth, setGridWidth] = useState(10);
   const [gridHeight, setGridHeight] = useState(10);
   const [graphLayout, setGraphLayout] = useState<"grid" | "line">("grid");
@@ -295,6 +307,8 @@ export function BulkImportView() {
   const [runBusy, setRunBusy] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [existingPuzzles, setExistingPuzzles] = useState<ExistingPuzzle[]>([]);
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
   const duplicates = useMemo(() => computeDuplicates(items, existingPuzzles), [items, existingPuzzles]);
 
@@ -345,6 +359,9 @@ export function BulkImportView() {
     }
     setTemplateNote(tmpl.note ?? "");
     if (tmpl.pipeline) {
+      if (typeof tmpl.pipeline.classifier === "boolean") {
+        setPipelineUseClassifier(tmpl.pipeline.classifier);
+      }
       if (typeof tmpl.pipeline.ocr === "boolean") {
         setPipelineUseOcr(tmpl.pipeline.ocr);
       }
@@ -401,6 +418,7 @@ export function BulkImportView() {
         text: undefined,
         metadata: undefined,
         detection: undefined,
+        levelType: undefined,
         selected: true,
         saveStatus: "idle",
         saveMessage: undefined
@@ -442,12 +460,31 @@ export function BulkImportView() {
           suggestedName = ocrRes.suggested_name ?? null;
         }
 
+        let detectedLevelType: LevelType | null = null;
+        if (pipelineUseClassifier || targetType === "auto") {
+          const classifyRes = await imageClassify({
+            file: item.file,
+            threshold,
+            lineThreshold,
+            invert,
+            perspective,
+            levelHint: suggestedName ?? item.file.name,
+            crop
+          });
+          detectedLevelType = classifyRes.level_type;
+        }
+
         let rows: number | undefined;
         let cols: number | undefined;
-        if (targetType !== "graph") {
+        const targetForSizing =
+          targetType === "auto" ? detectedLevelType?.recommended_target_type ?? "square" : targetType;
+        const topologyTarget = targetForSizing === "cube" || targetForSizing === "star" || targetForSizing === "figure8";
+        const needsGridDimensions = (targetForSizing === "graph" && graphLayout === "grid") || (!topologyTarget && targetForSizing !== "graph");
+        if (needsGridDimensions) {
           if (pipelineUseGrid) {
             const gridRes = await imageDetectGrid({
               file: item.file,
+              targetType: targetForSizing,
               threshold,
               lineThreshold,
               invert,
@@ -468,14 +505,17 @@ export function BulkImportView() {
           }
         }
 
+        const shouldServerClassify = !detectedLevelType && targetType === "auto";
         const gen = await imageGenerate({
           file: item.file,
           targetType,
-          gridWidth: targetType === "graph" ? gridWidth : cols,
-          gridHeight: targetType === "graph" ? gridHeight : rows,
+          gridWidth: cols ?? gridWidth,
+          gridHeight: rows ?? gridHeight,
           graphLayout,
           graphNodes,
           autoTerminals: pipelineUseTerminals,
+          autoClassify: shouldServerClassify,
+          levelType: detectedLevelType ?? undefined,
           metadata: DEFAULT_METADATA,
           crop,
           threshold,
@@ -494,9 +534,19 @@ export function BulkImportView() {
         const warnings = Array.isArray(gen.detection?.warnings)
           ? (gen.detection?.warnings as string[]).join(" ")
           : "";
+        const levelTypeForItem = (gen.detection?.level_type as LevelType | undefined) ?? detectedLevelType;
+        const levelLabel = levelTypeForItem
+          ? `${levelTypeForItem.geometry}${levelTypeForItem.modifiers.length ? `+${levelTypeForItem.modifiers.join("+")}` : ""}`
+          : "";
+        const targetUsed = String(gen.detection?.target_type_used ?? targetType);
         const gridLabel = rows && cols ? `grid ${cols}x${rows}` : "";
-        const messageParts = [gridLabel, warnings].filter((part) => Boolean(part));
-        const message = messageParts.join(" · ");
+        const messageParts = [
+          levelLabel ? `type ${levelLabel}` : "",
+          targetUsed ? `target ${targetUsed}` : "",
+          gridLabel,
+          warnings
+        ].filter((part) => Boolean(part));
+        const message = messageParts.join(" | ");
 
         const signature = inferSignature(gen.text);
 
@@ -510,7 +560,8 @@ export function BulkImportView() {
           text: gen.text,
           metadata: gen.metadata,
           detection: gen.detection,
-          kind: signature.kind ?? targetType,
+          levelType: levelTypeForItem,
+          kind: signature.kind ?? targetUsed,
           sizeLabel: signature.sizeLabel,
           selected: true
         }));
@@ -595,6 +646,9 @@ export function BulkImportView() {
   };
 
   const selectedCount = items.filter((item) => item.selected && item.status === "ready").length;
+  const readyCount = items.filter((item) => item.status === "ready").length;
+  const errorCount = items.filter((item) => item.status === "error").length;
+  const processingCount = items.filter((item) => item.status === "processing").length;
 
   return (
     <Stack spacing={3}>
@@ -607,7 +661,15 @@ export function BulkImportView() {
             <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
               <Button variant="contained" component="label" disabled={runBusy}>
                 Select images
-                <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={handleFilesChange} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  hidden
+                  onChange={handleFilesChange}
+                />
               </Button>
               <Button variant="outlined" onClick={clearItems} disabled={runBusy || items.length === 0}>
                 Clear list
@@ -632,7 +694,7 @@ export function BulkImportView() {
               value={templateId}
               onChange={(event) => setTemplateId(event.target.value)}
               size="small"
-              sx={{ maxWidth: 320 }}
+              sx={{ maxWidth: 320, width: isMobile ? "100%" : undefined }}
             >
               <MenuItem value="">No template</MenuItem>
               {templates.map((tmpl) => (
@@ -643,6 +705,12 @@ export function BulkImportView() {
             </TextField>
             {templateNote && <Typography variant="body2">{templateNote}</Typography>}
             <Box display="flex" flexWrap="wrap" gap={2}>
+              <FormControlLabel
+                control={
+                  <Switch checked={pipelineUseClassifier} onChange={(event) => setPipelineUseClassifier(event.target.checked)} />
+                }
+                label="Run classifier"
+              />
               <FormControlLabel
                 control={<Switch checked={pipelineUseOcr} onChange={(event) => setPipelineUseOcr(event.target.checked)} />}
                 label="Run OCR"
@@ -679,15 +747,19 @@ export function BulkImportView() {
                 value={targetType}
                 onChange={(event) => setTargetType(event.target.value as typeof targetType)}
                 size="small"
-                sx={{ maxWidth: 240 }}
+                sx={{ maxWidth: 240, width: isMobile ? "100%" : undefined }}
               >
+                <MenuItem value="auto">auto (classifier)</MenuItem>
                 <MenuItem value="square">square</MenuItem>
                 <MenuItem value="hex">hex</MenuItem>
                 <MenuItem value="circle">circle</MenuItem>
                 <MenuItem value="graph">graph</MenuItem>
+                <MenuItem value="cube">cube</MenuItem>
+                <MenuItem value="star">star</MenuItem>
+                <MenuItem value="figure8">figure8</MenuItem>
               </TextField>
 
-              {targetType === "graph" ? (
+              {targetType === "graph" || targetType === "auto" ? (
                 <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
                   <TextField
                     label="Graph layout"
@@ -726,6 +798,23 @@ export function BulkImportView() {
                       />
                     </>
                   )}
+                </Stack>
+              ) : targetType === "cube" || targetType === "star" || targetType === "figure8" ? (
+                <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
+                  <TextField
+                    label="Topology detail"
+                    type="number"
+                    value={gridWidth}
+                    onChange={(event) => setGridWidth(Number(event.target.value))}
+                    size="small"
+                  />
+                  <TextField
+                    label="Height hint"
+                    type="number"
+                    value={gridHeight}
+                    onChange={(event) => setGridHeight(Number(event.target.value))}
+                    size="small"
+                  />
                 </Stack>
               ) : (
                 <Stack spacing={2} direction={{ xs: "column", md: "row" }}>
@@ -845,6 +934,12 @@ export function BulkImportView() {
           <Typography variant="h6" gutterBottom>
             Results
           </Typography>
+          <Box display="flex" flexWrap="wrap" gap={1} mb={2}>
+            <Chip label={`Ready ${readyCount}`} size="small" color="success" variant="outlined" />
+            <Chip label={`Processing ${processingCount}`} size="small" color="warning" variant="outlined" />
+            <Chip label={`Errors ${errorCount}`} size="small" color="error" variant="outlined" />
+            <Chip label={`Selected ${selectedCount}`} size="small" color="info" variant="outlined" />
+          </Box>
           <Box display="flex" flexWrap="wrap" gap={2} alignItems="center" mb={2}>
             <Button variant="outlined" onClick={() => selectAll(true)} disabled={runBusy}>
               Select all
@@ -856,103 +951,180 @@ export function BulkImportView() {
               Save selected ({selectedCount})
             </Button>
           </Box>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell padding="checkbox" />
-                <TableCell>File</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Generated name</TableCell>
-                <TableCell>Duplicates</TableCell>
-                <TableCell>Save</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
+          {isMobile ? (
+            <Stack spacing={1.5}>
               {items.map((item) => {
                 const dup = duplicates.get(item.id);
                 const statusColor =
                   item.status === "ready" ? "success" : item.status === "error" ? "error" : "default";
                 const saveColor = item.saveStatus === "saved" ? "success" : item.saveStatus === "error" ? "error" : "default";
                 return (
-                  <TableRow key={item.id}>
-                    <TableCell padding="checkbox">
-                      <Checkbox
-                        checked={item.selected}
-                        onChange={(event) =>
-                          updateItem(item.id, (prev) => ({ ...prev, selected: event.target.checked }))
-                        }
-                        disabled={item.status !== "ready" || runBusy}
-                      />
-                    </TableCell>
-                    <TableCell>{item.file.name}</TableCell>
-                    <TableCell>
-                      <Stack spacing={0.5}>
-                        <Chip label={item.status} size="small" color={statusColor} variant="outlined" />
+                  <Card key={item.id} variant="outlined" sx={{ borderColor: "rgba(255,255,255,0.12)" }}>
+                    <CardContent sx={{ "&:last-child": { pb: 2 } }}>
+                      <Stack spacing={1.25}>
+                        <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1}>
+                          <Typography variant="subtitle2" sx={{ wordBreak: "break-word" }}>
+                            {item.file.name}
+                          </Typography>
+                          <Checkbox
+                            size="small"
+                            checked={item.selected}
+                            onChange={(event) =>
+                              updateItem(item.id, (prev) => ({ ...prev, selected: event.target.checked }))
+                            }
+                            disabled={item.status !== "ready" || runBusy}
+                          />
+                        </Box>
+                        <Box display="flex" flexWrap="wrap" gap={1}>
+                          <Chip label={item.status} size="small" color={statusColor} variant="outlined" />
+                          {dup && (
+                            <Chip
+                              label={dup.conflicts.length ? "Conflict" : "Potential duplicate"}
+                              size="small"
+                              color={dup.conflicts.length ? "error" : "warning"}
+                              variant="outlined"
+                              title={[...dup.conflicts, ...dup.warnings].join(", ")}
+                            />
+                          )}
+                          {item.saveStatus !== "idle" && (
+                            <Chip label={item.saveStatus} size="small" color={saveColor} variant="outlined" />
+                          )}
+                        </Box>
                         {item.message && (
                           <Typography variant="caption" color="text.secondary">
                             {item.message}
                           </Typography>
                         )}
-                      </Stack>
-                    </TableCell>
-                    <TableCell>
-                      <TextField
-                        value={item.name ?? ""}
-                        onChange={(event) =>
-                          updateItem(item.id, (prev) => ({ ...prev, name: event.target.value }))
-                        }
-                        size="small"
-                        disabled={item.status !== "ready" || runBusy}
-                        helperText={item.suggestedName && item.suggestedName !== item.name ? `OCR: ${item.suggestedName}` : " "}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      {dup ? (
-                        <Chip
-                          label={dup.conflicts.length ? "Conflict" : "Potential"}
+                        <TextField
+                          label="Generated name"
+                          value={item.name ?? ""}
+                          onChange={(event) =>
+                            updateItem(item.id, (prev) => ({ ...prev, name: event.target.value }))
+                          }
                           size="small"
-                          color={dup.conflicts.length ? "error" : "warning"}
-                          variant="outlined"
-                          title={[...dup.conflicts, ...dup.warnings].join(", ")}
+                          fullWidth
+                          disabled={item.status !== "ready" || runBusy}
+                          helperText={
+                            item.suggestedName && item.suggestedName !== item.name ? `OCR: ${item.suggestedName}` : " "
+                          }
                         />
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          —
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {item.saveStatus !== "idle" ? (
-                        <Stack spacing={0.5}>
-                          <Chip label={item.saveStatus} size="small" color={saveColor} variant="outlined" />
-                          {item.saveMessage && (
-                            <Typography variant="caption" color="text.secondary">
-                              {item.saveMessage}
-                            </Typography>
-                          )}
-                        </Stack>
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          —
-                        </Typography>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                        {item.saveMessage && (
+                          <Typography variant="caption" color="text.secondary">
+                            {item.saveMessage}
+                          </Typography>
+                        )}
+                      </Stack>
+                    </CardContent>
+                  </Card>
                 );
               })}
-              {!items.length && (
-                <TableRow>
-                  <TableCell colSpan={6}>
-                    <Typography variant="body2" color="text.secondary">
-                      Add images to start a batch import.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              {!items.length && <Alert severity="info">Add images to start a batch import.</Alert>}
+            </Stack>
+          ) : (
+            <Box sx={{ overflowX: "auto" }}>
+              <Table size="small" sx={{ minWidth: 760 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell padding="checkbox" />
+                    <TableCell>File</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Generated name</TableCell>
+                    <TableCell>Duplicates</TableCell>
+                    <TableCell>Save</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {items.map((item) => {
+                    const dup = duplicates.get(item.id);
+                    const statusColor =
+                      item.status === "ready" ? "success" : item.status === "error" ? "error" : "default";
+                    const saveColor =
+                      item.saveStatus === "saved" ? "success" : item.saveStatus === "error" ? "error" : "default";
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={item.selected}
+                            onChange={(event) =>
+                              updateItem(item.id, (prev) => ({ ...prev, selected: event.target.checked }))
+                            }
+                            disabled={item.status !== "ready" || runBusy}
+                          />
+                        </TableCell>
+                        <TableCell>{item.file.name}</TableCell>
+                        <TableCell>
+                          <Stack spacing={0.5}>
+                            <Chip label={item.status} size="small" color={statusColor} variant="outlined" />
+                            {item.message && (
+                              <Typography variant="caption" color="text.secondary">
+                                {item.message}
+                              </Typography>
+                            )}
+                          </Stack>
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            value={item.name ?? ""}
+                            onChange={(event) =>
+                              updateItem(item.id, (prev) => ({ ...prev, name: event.target.value }))
+                            }
+                            size="small"
+                            disabled={item.status !== "ready" || runBusy}
+                            helperText={
+                              item.suggestedName && item.suggestedName !== item.name ? `OCR: ${item.suggestedName}` : " "
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {dup ? (
+                            <Chip
+                              label={dup.conflicts.length ? "Conflict" : "Potential"}
+                              size="small"
+                              color={dup.conflicts.length ? "error" : "warning"}
+                              variant="outlined"
+                              title={[...dup.conflicts, ...dup.warnings].join(", ")}
+                            />
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              -
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {item.saveStatus !== "idle" ? (
+                            <Stack spacing={0.5}>
+                              <Chip label={item.saveStatus} size="small" color={saveColor} variant="outlined" />
+                              {item.saveMessage && (
+                                <Typography variant="caption" color="text.secondary">
+                                  {item.saveMessage}
+                                </Typography>
+                              )}
+                            </Stack>
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">
+                              -
+                            </Typography>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {!items.length && (
+                    <TableRow>
+                      <TableCell colSpan={6}>
+                        <Typography variant="body2" color="text.secondary">
+                          Add images to start a batch import.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </Box>
+          )}
         </CardContent>
       </Card>
     </Stack>
   );
 }
+

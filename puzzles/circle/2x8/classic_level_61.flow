@@ -1,0 +1,6 @@
+# type: circle
+# fill: true
+# size: 8x2
+# terminal_colors: {"A":"#008d00","B":"#ecdf00","C":"#ff0000","D":"#0a29ff"}
+...AB...
+AC.CD.DB
