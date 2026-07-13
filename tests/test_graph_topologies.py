@@ -89,6 +89,35 @@ class GraphTopologyTests(unittest.TestCase):
         topology_info = modifier_info.get("topology", {})
         self.assertEqual(topology_info.get("name"), "cube")
 
+    def test_image_generate_cube_schema_v2_types_face_seams(self) -> None:
+        image = Image.new("RGB", (120, 120), color=(255, 255, 255))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        response = TestClient(app).post(
+            "/image/generate",
+            files={"file": ("unit_cube_v2.png", buf.getvalue(), "image/png")},
+            data={
+                "target_type": "cube",
+                "grid_width": "2",
+                "grid_height": "2",
+                "auto_terminals": "false",
+                "auto_classify": "false",
+                "output_schema_version": "2",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, msg=response.text)
+        payload = json.loads(response.json()["text"])
+        self.assertEqual(payload["format"], "flow-solver-puzzle")
+        adjacencies = payload["topology"]["adjacencies"]
+        self.assertEqual(sum(item["kind"] == "seam" for item in adjacencies), 6)
+        self.assertEqual(sum(item["kind"] == "local" for item in adjacencies), 12)
+        self.assertIn("seam", payload["catalog"]["mechanics"])
+        self.assertEqual(
+            {cell["face"] for cell in payload["display"]["cells"].values()},
+            {"0", "1", "2"},
+        )
+
     def test_detect_terminals_on_topology_nodes(self) -> None:
         obj = build_graph_json(
             layout="cube",
@@ -122,6 +151,39 @@ class GraphTopologyTests(unittest.TestCase):
         )
         terminals = build_graph_terminals_from_node_placements(placements)
         self.assertIn("A", terminals, msg=f"missing A terminals; info={info}")
+        self.assertEqual(set(terminals["A"]), set(chosen_ids))
+
+    def test_detects_pure_white_terminals_above_color_brightness_ceiling(self) -> None:
+        obj = build_graph_json(
+            layout="cube",
+            width=2,
+            height=2,
+            nodes=2,
+            meta={"source": "unit-test"},
+        )
+        nodes = obj["space"]["nodes"]
+        projected = self._project_nodes(nodes, width=360, height=360, margin_ratio=0.15)
+        chosen_ids = list(nodes)[:2]
+
+        image = Image.new("RGB", (360, 360), color=(10, 10, 12))
+        draw = ImageDraw.Draw(image)
+        for node_id in chosen_ids:
+            x, y = projected[node_id]
+            draw.ellipse((x - 13, y - 13, x + 13, y + 13), fill=(255, 255, 255))
+
+        placements, info = detect_terminals_on_nodes(
+            image,
+            nodes=nodes,
+            sat_threshold=30.0,
+            brightness_min=30.0,
+            brightness_max=230.0,
+            margin_ratio=0.15,
+            cluster_threshold=60.0,
+            bg_threshold=40.0,
+        )
+        terminals = build_graph_terminals_from_node_placements(placements)
+
+        self.assertIn("A", terminals, msg=f"missing white terminals; info={info}")
         self.assertEqual(set(terminals["A"]), set(chosen_ids))
 
 

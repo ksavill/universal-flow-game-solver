@@ -1,13 +1,20 @@
-# Flow Solver v2
+# Universal Flow Game Solver
 
 A **Python + React** toolkit for solving *Flow / Numberlink*-style puzzles on **arbitrary graph spaces**:
 
 - **Square/rectangular grids** (with holes, walls, and bridges)
 - **Hex grids** (6-neighbor adjacency)
 - **Circular/ring boards** (radial + wrap-around connections)
-- **Freeform graphs** (arbitrary node/edge structures via JSON)
+- **Shaped surfaces** (cube, radial star, and linked figure-eight templates)
+- **Warped/freeform graphs** (typed seams, warps, walls, and arbitrary adjacencies)
 
-The solver converts any board into a constraint problem (Z3 or DFS) and provides interactive visualization.
+The exact solver models selected path edges directly, validates both inputs and
+solutions, and provides interactive visualization. See
+[Architecture](docs/ARCHITECTURE.md) for the diagrammed system map (solver
+pipeline, screenshot detection, free-form region import, storage), and
+[Flow variants and solver architecture](docs/FLOW_VARIANTS_AND_ARCHITECTURE.md)
+for the product research, schema-v2 design, topology contracts, and performance
+methodology.
 
 ---
 
@@ -36,7 +43,15 @@ That's it! Open http://localhost:5173 to start creating and solving puzzles.
 
 ## Using the UI
 
-The React UI has three main tabs: **New Puzzle**, **Bulk Import**, and **Library**.
+The React UI centers on four destinations: **Import**, **Create**, **Library**, and **Batch**. On phones these stay reachable from a persistent bottom navigation bar.
+
+### Import Screenshot
+
+This is the default starting point. Choose a screenshot from Photos or Files, crop to the board, and press **Process screenshot**. The guided pipeline reports progress for board type, level name, cells, and color pairs, then offers **Open in solver** or **Save to library**. Detection controls remain available under Advanced settings.
+
+The screenshot may be portrait, landscape, square, letterboxed, or ultrawide and may use any practical resolution. Auto-crop and the detectors normalize against the recovered puzzle bounds, provided the complete board remains visible and has enough pixels to distinguish its cell boundaries.
+
+Every completed or failed processing run is archived under `data/image_imports/`. The **Screenshot library** on the Import tab can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
 
 ### New Puzzle Tab
 
@@ -64,7 +79,7 @@ Process multiple puzzle images at once:
 3. **Configure the pipeline**:
    - **OCR**: detect level name from the image
    - **Grid**: auto-detect grid dimensions
-   - **Terminals**: auto-detect colored dot positions
+   - **Terminals**: auto-detect colored dot positions and preserve their sampled screenshot colors in the builder, solver, archive, and saved puzzle
 4. **Run pipeline** — processes all images in batch
 5. **Review and save** — edit names, check for duplicates, and save to library
 
@@ -84,7 +99,7 @@ After loading a puzzle (from any tab), you enter the Solve View:
 
 1. **Edit the puzzle text** directly if needed
 2. **Choose a solver**:
-   - `Z3 (SMT)` — constraint-based solver (recommended)
+   - `Z3 (exact)` — explicit edge-path model compiled to native SAT when PySAT is available, with a pure-Z3 fallback
    - `DFS` — depth-first search (experimental)
 3. **Set timeout** (default 30 seconds)
 4. Click **Solve** to find a solution
@@ -185,8 +200,13 @@ The UI can extract puzzles from screenshots:
    - **OCR** detects level names/numbers (requires Tesseract)
    - **Grid detection** finds row/column lines
    - **Terminal detection** locates colored dots and assigns letters
-4. **Apply to builder** populates the grid editor
-5. **Save** the generated puzzle
+   - **Warp detection** recovers the real lattice inside the one-cell shadow border, ignores duplicated shadow terminals, and emits only open opposite-edge gates
+   - **Region topology** derives cells and adjacencies directly from non-rectangular shaped boards
+   - **Bridge detection** recognizes legacy crosses and the official double-rail/double-arch glyph, then creates independent horizontal and vertical channels
+4. **Review the result** and open it directly in the solver, or apply it to the manual builder for corrections
+5. **Save** the generated puzzle to the searchable library
+
+Completed and failed processing attempts retain their source screenshot in the import archive. Failed entries include the pipeline stage and error so future detector improvements can be tested against the original sample.
 
 ### OCR Setup (Optional)
 
@@ -196,6 +216,12 @@ Install Tesseract for level name detection:
 - **Ubuntu**: `sudo apt-get install tesseract-ocr`
 
 Set `TESSERACT_CMD` environment variable if Tesseract isn't in your PATH.
+
+### Acceleration
+
+`FLOW_ACCELERATOR=auto` is the default. A CUDA-capable OpenCV build is preferred; otherwise a CUDA-enabled PyTorch installation supplies cached GPU grayscale staging for detection and image annotation. `FLOW_ACCELERATOR=cpu` forces the deterministic CPU path, while `FLOW_ACCELERATOR=cuda` requests CUDA with safe CPU fallbacks for unavailable kernels.
+
+Exact solving uses bundled native CPU SAT engines (Maple/CaDiCaL selected by topology), because Z3 and the supported exact SAT engines do not expose a CUDA backend. `GET /capabilities` and solve statistics report that distinction explicitly. Set `FLOW_DISABLE_PYSAT=1` to use the pure-Z3 diagnostic fallback.
 
 ---
 
@@ -248,10 +274,19 @@ python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 
 # Solve a puzzle
-.\.venv\Scripts\python -m flow_solver solve examples/puzzles/square_5x5_basic.flow --out out/solution.html
+.\.venv\Scripts\python -m flow_solver solve puzzles/square/5x5/classic_level_1.flow --out out/solution.html
 
 # Visualize the graph (no solving)
-.\.venv\Scripts\python -m flow_solver visualize examples/puzzles/square_5x5_basic.flow --out out/graph.html
+.\.venv\Scripts\python -m flow_solver visualize puzzles/square/5x5/classic_level_1.flow --out out/graph.html
+
+# Validate structure and prove solvability
+.\.venv\Scripts\python -m flow_solver validate puzzles/square/5x5/classic_level_1.flow --solve --json
+
+# Migrate a legacy puzzle to deterministic canonical schema-v2 JSON
+.\.venv\Scripts\python -m flow_solver migrate puzzles/square/5x5/classic_level_1.flow --out out/classic_level_1.json
+
+# Benchmark representative stored levels (5x5 through 15x15)
+.\.venv\Scripts\python scripts/benchmark_solver.py
 ```
 
 Open the generated `.html` file in your browser.
@@ -283,15 +318,9 @@ Lines starting with `# key: value` set metadata:
 | `+` | Bridge (2 channels) |
 | `A-Z` | Terminal (must appear exactly twice) |
 
-### Examples
+### Curated puzzle corpus
 
-See `examples/puzzles/` for sample files:
-
-- `square_5x5_basic.flow` — simple square grid
-- `square_3x3_bridge_cross.flow` — bridge crossing
-- `hex_4x4_pairs_8colors.flow` — hex grid
-- `circle_rings_2x8_core_8colors.flow` — circular with core
-- `graph_line_6.json` — freeform graph
+Release-quality sample puzzles live under `puzzles/`, organized by geometry and size. The corpus includes classic square and circle boards plus screenshot-verified bridge, warp, wall, and irregular-region levels. Deliberately trivial mechanic POCs are kept in focused automated tests instead of appearing in the user-facing library.
 
 ---
 
@@ -305,7 +334,9 @@ See `examples/puzzles/` for sample files:
 | `POST /puzzles` | Save a new puzzle |
 | `POST /solve` | Solve a puzzle |
 | `POST /parse` | Parse and validate |
+| `POST /validate` | Return structural validation issues and statistics |
 | `POST /graph` | Build graph from text |
+| `GET /capabilities` | Report CUDA/image and exact-solver acceleration backends |
 
 ### Image Processing
 
@@ -318,6 +349,17 @@ See `examples/puzzles/` for sample files:
 | `POST /image/generate` | Generate puzzle from image |
 | `POST /image/ocr` | Extract text from image |
 
+### Screenshot Archive
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /image-imports?limit=1000` | List retained screenshot samples and latest outcomes |
+| `GET /image-imports/{id}` | Read a sample, its latest result, and prior run summaries |
+| `GET /image-imports/{id}/image` | Read the retained source screenshot |
+| `POST /image-imports/{id}/failure` | Record an in-place reprocessing failure |
+| `POST /image-imports/bulk-delete` | Delete selected screenshot samples |
+| `DELETE /image-imports/{id}` | Delete one screenshot sample |
+
 ### Crop Templates
 
 | Endpoint | Description |
@@ -329,9 +371,77 @@ See `examples/puzzles/` for sample files:
 
 ---
 
-## What's Next
+## Format and architecture
 
-- Richer wall syntax in `.flow` files
-- Step-by-step solving visualization (state space / search tree)
-- Additional solver algorithms
-- Puzzle dataset export for ML/RL research
+Legacy `.flow` and graph JSON remain supported. New integrations should prefer
+canonical schema v2 (`format: flow-solver-puzzle`, `schema_version: 2`), which
+separates physical cells, routing channels, typed port adjacencies, display
+geometry, rules, and catalog provenance. This is what allows bridges, seams,
+warps, and shaped boards to share one solver without topology-specific logic.
+
+### Architecture at a glance
+
+The full, diagrammed system map lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+(also readable in-app via the **Docs** button), covering the universal puzzle
+model, the exact solver, screenshot detection, free-form region import,
+storage, and the single-node concurrency model. The bird's-eye view:
+
+```mermaid
+flowchart LR
+    subgraph Frontend["React frontend (Vite + MUI)"]
+        SV[Solve view]
+        NV[Builder]
+        IV[Screenshot importer<br/>single + batch]
+        LV[Library<br/>puzzles + uploaded screenshots]
+        GV[GameView renderer]
+    end
+
+    subgraph Backend["FastAPI backend (:8000)"]
+        API["/parse /graph /solve /validate"]
+        IMG["/image/* detection pipeline"]
+        LIB["/puzzles CRUD"]
+        ARC["/image-imports archive"]
+    end
+
+    subgraph Core["flow_solver (pure Python)"]
+        P[Puzzle / Graph model]
+        S2[schema_v2 parser + compiler]
+        SOL[Exact edge solver<br/>python-sat preferred, Z3 fallback]
+        VAL[Structural + solution validators]
+        TOP[Topology registry<br/>cube, star, figure8, grid, hex, ring]
+    end
+
+    subgraph Storage["Disk (single node)"]
+        PUZ["puzzles/ curated library"]
+        IMP["data/image_imports/&lt;id&gt;/"]
+        GOLD["tests/golden/puzzle_baseline.json"]
+    end
+
+    SV & NV & IV & LV --> API
+    IV --> IMG
+    LV --> ARC
+    API --> P
+    IMG --> TOP
+    S2 --> P
+    P --> VAL --> SOL --> VAL
+    LIB --> PUZ
+    ARC --> IMP
+    GV -. "renders graph + path_edges" .-> SV & LV & IV
+```
+
+Highlights, each diagrammed in the architecture doc:
+
+- **One model for every variant** — a level is physical cells, routing
+  channels, and typed port adjacencies (`local`/`seam`/`warp`, `open`/`blocked`);
+  square, hex, circle, bridges, walls, warps, and shaped boards are all
+  instances of it.
+- **Exact solving with lazy connectivity** — a Boolean edge model solved by a
+  native SAT engine (Z3 fallback), with stray cycles removed by incremental
+  cut-set constraints, and every solution re-verified by an independent
+  validator before it is returned.
+- **Evidence-driven screenshot import** — auto-crop, classification, grid or
+  region detection, terminal clustering, and bridge/wall/warp detectors; every
+  upload is archived and can be bulk-reprocessed as the pipeline improves.
+- **Regression safety** — `scripts/validate_puzzles.py` re-solves the whole
+  library (and optionally the archive) against a golden baseline, and
+  `scripts/benchmark_solver.py` tracks solve-time drift.

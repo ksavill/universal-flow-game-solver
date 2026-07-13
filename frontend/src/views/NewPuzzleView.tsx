@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Badge,
   Box,
   Button,
   Card,
@@ -17,18 +18,19 @@ import {
   useMediaQuery
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
+import { AutoAwesome, BackspaceOutlined } from "@mui/icons-material";
 import { LevelType, listPuzzles, savePuzzle } from "../api";
 import { TERMINAL_PALETTE } from "../colors";
 import {
+  EMPTY_EDGE_OVERRIDES,
   EdgeOverrides,
   formatEdgePairsText,
-  isEdgeOverridesEmpty,
   parseEdgeOverrideTexts
 } from "../edgeOverrides";
 import { ImageView } from "./ImageView";
 
 type NewPuzzleViewProps = {
-  onCreatePuzzle: (name: string, text: string) => void;
+  onCreatePuzzle: (name: string, text: string, opts?: { autoSolve?: boolean }) => void;
 };
 
 type BuilderType = "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8";
@@ -135,20 +137,13 @@ function buildFlowText(boardType: FlowType, grid: string[][], meta?: Record<stri
   return `${lines.join("\n")}\n`;
 }
 
-function toNodeObject(spec: TopologySpec) {
-  const nodes: Record<string, { pos: [number, number, number] }> = {};
-  spec.nodes.forEach((node) => {
-    nodes[node.id] = { pos: [node.x, node.y, node.z] };
-  });
-  return nodes;
-}
-
 function buildGraphTextFromTopology(
   type: GraphLikeType,
   spec: TopologySpec,
   nodeLetters: Record<string, string>,
   meta?: Record<string, string>,
-  edgeOverrides?: EdgeOverrides
+  edgeOverrides?: EdgeOverrides,
+  dimensions?: { cols: number; rows: number }
 ) {
   const terminalsByLetter: Record<string, string[]> = {};
   const knownNodeIds = new Set(spec.nodes.map((node) => node.id));
@@ -168,34 +163,130 @@ function buildGraphTextFromTopology(
     }
   });
 
-  const space: Record<string, unknown> = {
-    type: "graph",
-    nodes: toNodeObject(spec),
-    edges: spec.edges
-  };
-  if (type !== "graph") {
-    space.topology = type;
-  }
-  if (edgeOverrides && !isEdgeOverridesEmpty(edgeOverrides)) {
-    if (edgeOverrides.add.length || edgeOverrides.remove.length) {
-      space.edge_overrides = {
-        ...(edgeOverrides.add.length ? { add: edgeOverrides.add } : {}),
-        ...(edgeOverrides.remove.length ? { remove: edgeOverrides.remove } : {})
+  const canonicalPair = (u: string, v: string): [string, string] => (u < v ? [u, v] : [v, u]);
+  const pairKey = (u: string, v: string) => JSON.stringify(canonicalPair(u, v));
+  const edgeRecords = new Map<
+    string,
+    { pair: [string, string]; kind: "local" | "seam" | "warp" | "custom"; state: "open" | "blocked"; group?: string }
+  >();
+  spec.edges.forEach(([u, v]) => {
+    const faceOf = (nodeId: string) => {
+      const parts = nodeId.split(":");
+      return parts.length >= 3 && (parts[0] === "cube" || parts[0] === "star") ? parts[1] : null;
+    };
+    const leftFace = faceOf(u);
+    const rightFace = faceOf(v);
+    const kind = leftFace !== null && rightFace !== null && leftFace !== rightFace ? "seam" : "local";
+    edgeRecords.set(pairKey(u, v), { pair: canonicalPair(u, v), kind, state: "open" });
+  });
+
+  const overrides = edgeOverrides ?? EMPTY_EDGE_OVERRIDES;
+  [...overrides.remove, ...overrides.walls].forEach(([u, v]) => {
+    const key = pairKey(u, v);
+    const previous = edgeRecords.get(key);
+    edgeRecords.set(key, {
+      pair: canonicalPair(u, v),
+      kind: previous?.kind ?? "local",
+      state: "blocked"
+    });
+  });
+  overrides.add.forEach(([u, v]) => {
+    edgeRecords.set(pairKey(u, v), { pair: canonicalPair(u, v), kind: "custom", state: "open" });
+  });
+  overrides.warps.forEach(([u, v], index) => {
+    edgeRecords.set(pairKey(u, v), {
+      pair: canonicalPair(u, v),
+      kind: "warp",
+      state: "open",
+      group: `warp-${index + 1}`
+    });
+  });
+
+  const portsByNode: Record<string, Record<string, Record<string, never>>> = {};
+  spec.nodes.forEach((node) => {
+    portsByNode[node.id] = {};
+  });
+  const adjacencyRecords = [...edgeRecords.values()]
+    .sort((left, right) => pairKey(...left.pair).localeCompare(pairKey(...right.pair)))
+    .map((record, index) => {
+      const [u, v] = record.pair;
+      const uPort = `edge-${index}:a`;
+      const vPort = `edge-${index}:b`;
+      portsByNode[u] = portsByNode[u] ?? {};
+      portsByNode[v] = portsByNode[v] ?? {};
+      portsByNode[u][uPort] = {};
+      portsByNode[v][vPort] = {};
+      return {
+        id: `edge-${String(index).padStart(4, "0")}`,
+        a: { channel: u, port: uPort },
+        b: { channel: v, port: vPort },
+        kind: record.kind,
+        state: record.state,
+        ...(record.group ? { group: record.group } : {})
       };
-    }
-    if (edgeOverrides.warps.length) {
-      space.warps = edgeOverrides.warps;
-    }
-    if (edgeOverrides.walls.length) {
-      space.walls = edgeOverrides.walls;
-    }
-  }
+    });
+
+  const topologyId = type === "graph" ? "grid" : type === "star" ? "radial_star" : type;
+  const mechanics = [
+    ...new Set(
+      adjacencyRecords.flatMap((edge) => {
+        const values: string[] = [];
+        if (edge.kind === "warp") values.push("warps");
+        if (edge.kind === "seam") values.push("seams");
+        if (edge.kind === "custom") values.push("custom-edges");
+        if (edge.state === "blocked") values.push("walls");
+        return values;
+      })
+    )
+  ];
+  const cells = Object.fromEntries(spec.nodes.map((node) => [node.id, { kind: "ordinary" }]));
+  const channels = Object.fromEntries(
+    spec.nodes.map((node) => [
+      node.id,
+      { cell: node.id, kind: "cell", ports: portsByNode[node.id] ?? {} }
+    ])
+  );
+  const displayChannels = Object.fromEntries(
+    spec.nodes.map((node) => [node.id, { position: [node.x, node.y, node.z] }])
+  );
 
   return `${JSON.stringify(
     {
-      space,
-      terminals,
-      meta
+      format: "flow-solver-puzzle",
+      schema_version: 2,
+      topology: {
+        template: {
+          id: topologyId,
+          parameters: dimensions
+            ? { width: dimensions.cols, height: dimensions.rows }
+            : {}
+        },
+        cells,
+        channels,
+        adjacencies: adjacencyRecords
+      },
+      terminals: Object.fromEntries(
+        Object.entries(terminals).map(([color, endpoints]) => [color, { endpoints }])
+      ),
+      rules: {
+        coverage: { mode: "all-cells", overrides: {} },
+        paths: { endpoint_degree: 1, internal_degree: 2, connected: true },
+        multi_channel_cell_color_policy: "distinct"
+      },
+      display: { dimension: 2, channels: displayChannels },
+      catalog: {
+        variant: type === "graph" ? "custom" : "shapes",
+        display_size: dimensions
+          ? {
+              label: `${dimensions.cols}x${dimensions.rows}`,
+              width: dimensions.cols,
+              height: dimensions.rows,
+              unit: "template"
+            }
+          : undefined,
+        mechanics
+      },
+      meta: meta ?? {}
     },
     null,
     2
@@ -277,89 +368,186 @@ function buildGridTopology(cols: number, rows: number): TopologySpec {
   return { nodes, edges };
 }
 
-function buildCubeTopology(detail: number): TopologySpec {
-  const baseNodes: Record<string, [number, number, number]> = {
-    f0: [-1.1, 1, 0],
-    f1: [1, 1, 0],
-    f2: [1, -1.1, 0],
-    f3: [-1.1, -1.1, 0],
-    b0: [-0.25, 1.8, 0],
-    b1: [1.85, 1.8, 0],
-    b2: [1.85, -0.25, 0],
-    b3: [-0.25, -0.25, 0]
+const SQRT3_OVER_2 = Math.sqrt(3) / 2;
+
+function axialToXY(q: number, r: number) {
+  return {
+    x: q + 0.5 * r,
+    y: -SQRT3_OVER_2 * r
   };
-  const baseEdges: Array<[string, string]> = [
-    ["f0", "f1"],
-    ["f1", "f2"],
-    ["f2", "f3"],
-    ["f3", "f0"],
-    ["b0", "b1"],
-    ["b1", "b2"],
-    ["b2", "b3"],
-    ["b3", "b0"],
-    ["f0", "b0"],
-    ["f1", "b1"],
-    ["f2", "b2"],
-    ["f3", "b3"]
+}
+
+function pointInPolygon(x: number, y: number, polygon: Array<{ x: number; y: number }>) {
+  if (polygon.length < 3) {
+    return false;
+  }
+  let inside = false;
+  let j = polygon.length - 1;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const pi = polygon[i];
+    const pj = polygon[j];
+    const intersects = (pi.y > y) !== (pj.y > y);
+    if (intersects) {
+      const denom = pj.y - pi.y;
+      if (Math.abs(denom) > 1e-12) {
+        const xCross = ((pj.x - pi.x) * (y - pi.y)) / denom + pi.x;
+        if (x < xCross) {
+          inside = !inside;
+        }
+      }
+    }
+    j = i;
+  }
+  return inside;
+}
+
+function buildLatticeTopologyFromMask(
+  prefix: string,
+  qExtent: number,
+  rExtent: number,
+  mask: (x: number, y: number) => boolean
+) {
+  const qLim = Math.max(2, Math.floor(qExtent));
+  const rLim = Math.max(2, Math.floor(rExtent));
+  const nodes: TopologyNode[] = [];
+  const nodeByCoord = new Map<string, TopologyNode>();
+
+  for (let q = -qLim; q <= qLim; q += 1) {
+    for (let r = -rLim; r <= rLim; r += 1) {
+      const p = axialToXY(q, r);
+      if (!mask(p.x, p.y)) {
+        continue;
+      }
+      const id = `${prefix}:${q},${r}`;
+      const node = { id, x: p.x, y: p.y, z: 0 };
+      nodes.push(node);
+      nodeByCoord.set(`${q},${r}`, node);
+    }
+  }
+
+  const edgeSet = new Set<string>();
+  const edges: Array<[string, string]> = [];
+  const dirs: Array<[number, number]> = [
+    [1, 0],
+    [0, 1],
+    [1, -1]
   ];
-  const expanded = edgeSubdivide(baseNodes, baseEdges, Math.max(1, detail), "cube");
-  return { ...expanded, topology: "cube" };
+
+  nodes.forEach((node) => {
+    const raw = node.id.slice(prefix.length + 1);
+    const parts = raw.split(",");
+    if (parts.length !== 2) {
+      return;
+    }
+    const q = Number(parts[0]);
+    const r = Number(parts[1]);
+    if (!Number.isFinite(q) || !Number.isFinite(r)) {
+      return;
+    }
+    dirs.forEach(([dq, dr]) => {
+      const nb = nodeByCoord.get(`${q + dq},${r + dr}`);
+      if (!nb) {
+        return;
+      }
+      const mx = (node.x + nb.x) * 0.5;
+      const my = (node.y + nb.y) * 0.5;
+      if (!mask(mx, my)) {
+        return;
+      }
+      const a = node.id < nb.id ? node.id : nb.id;
+      const b = node.id < nb.id ? nb.id : node.id;
+      const key = `${a}|${b}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        edges.push([a, b]);
+      }
+    });
+  });
+
+  return { nodes, edges };
 }
 
-function buildStarTopology(detail: number): TopologySpec {
-  const outerR = 2.2;
-  const innerR = 0.95;
-  const baseNodes: Record<string, [number, number, number]> = {
-    c: [0, 0, 0]
-  };
-  for (let i = 0; i < 5; i += 1) {
-    const outerTheta = -Math.PI / 2 + (2 * Math.PI * i) / 5;
-    const innerTheta = outerTheta + Math.PI / 5;
-    baseNodes[`o${i}`] = [outerR * Math.cos(outerTheta), outerR * Math.sin(outerTheta), 0];
-    baseNodes[`i${i}`] = [innerR * Math.cos(innerTheta), innerR * Math.sin(innerTheta), 0];
+function buildRadialFanTopology(
+  prefix: "cube" | "star",
+  topology: "cube" | "star",
+  faces: number,
+  size: number
+): TopologySpec {
+  const side = Math.max(1, Math.floor(size));
+  const nodes: TopologyNode[] = [];
+  const edges: Array<[string, string]> = [];
+  const rays = Array.from({ length: faces }, (_, face) => {
+    const angle = Math.PI / 2 - (2 * Math.PI * face) / faces;
+    return { x: Math.cos(angle), y: Math.sin(angle) };
+  });
+  const nodeId = (face: number, u: number, v: number) => `${prefix}:${face}:${u},${v}`;
+
+  for (let face = 0; face < faces; face += 1) {
+    const rayA = rays[face];
+    const rayB = rays[(face + 1) % faces];
+    for (let v = 0; v < side; v += 1) {
+      for (let u = 0; u < side; u += 1) {
+        const alongA = (u + 0.5) / side;
+        const alongB = (v + 0.5) / side;
+        const id = nodeId(face, u, v);
+        nodes.push({
+          id,
+          x: alongA * rayA.x + alongB * rayB.x,
+          y: alongA * rayA.y + alongB * rayB.y,
+          z: 0
+        });
+        if (u + 1 < side) {
+          edges.push([id, nodeId(face, u + 1, v)]);
+        }
+        if (v + 1 < side) {
+          edges.push([id, nodeId(face, u, v + 1)]);
+        }
+      }
+    }
   }
-  const baseEdges: Array<[string, string]> = [];
-  for (let i = 0; i < 5; i += 1) {
-    baseEdges.push([`o${i}`, `i${i}`]);
-    baseEdges.push([`i${i}`, `o${(i + 1) % 5}`]);
-    baseEdges.push([`o${i}`, `o${(i + 2) % 5}`]);
-    baseEdges.push(["c", `i${i}`]);
+
+  for (let face = 0; face < faces; face += 1) {
+    const nextFace = (face + 1) % faces;
+    for (let offset = 0; offset < side; offset += 1) {
+      edges.push([nodeId(face, 0, offset), nodeId(nextFace, offset, 0)]);
+    }
   }
-  const expanded = edgeSubdivide(baseNodes, baseEdges, Math.max(1, detail), "star");
-  return { ...expanded, topology: "star" };
+
+  return { nodes, edges, topology };
 }
 
-function buildFigure8Topology(detail: number): TopologySpec {
-  const n = Math.max(6, Math.floor(detail));
-  const radius = 1.15;
-  const baseNodes: Record<string, [number, number, number]> = {
-    c: [0, 0, 0]
+function buildCubeTopology(cols: number, rows: number): TopologySpec {
+  return buildRadialFanTopology("cube", "cube", 3, Math.max(cols, rows));
+}
+
+function buildStarTopology(cols: number, rows: number): TopologySpec {
+  return buildRadialFanTopology("star", "star", 5, Math.max(cols, rows));
+}
+
+function buildFigure8Topology(): TopologySpec {
+  const positions: Array<[number, number]> = [
+    [0, 5.28], [0.99, 4.94], [-0.99, 4.94], [1.55, 4.05], [-1.55, 4.05],
+    [1.43, 3.01], [-1.43, 3.01], [-0.74, 2.22], [0.74, 2.22], [0, 1.48],
+    [0.73, 0.73], [-0.73, 0.73], [0, 0], [1.47, -0.01], [-1.47, -0.01],
+    [0.75, -0.73], [-0.75, -0.73], [2.33, -1.1], [-2.33, -1.1],
+    [1.44, -1.52], [-1.44, -1.52], [-1.56, -2.57], [1.56, -2.57],
+    [2.51, -2.79], [-2.51, -2.79], [1, -3.47], [-1, -3.47], [0, -3.82],
+    [-1.6, -4.22], [1.6, -4.22], [0, -4.79]
+  ];
+  const indexEdges: Array<[number, number]> = [
+    [0, 1], [1, 3], [3, 5], [5, 8], [8, 9], [9, 7], [7, 6], [6, 4],
+    [4, 2], [2, 0], [9, 10], [9, 11], [10, 12], [10, 13], [11, 12],
+    [11, 14], [12, 15], [12, 16], [13, 15], [13, 17], [14, 16], [14, 18],
+    [15, 19], [16, 20], [17, 19], [17, 23], [18, 20], [18, 24], [19, 22],
+    [20, 21], [21, 24], [21, 26], [22, 23], [22, 25], [23, 29], [24, 28],
+    [25, 27], [25, 29], [26, 27], [26, 28], [27, 30], [28, 30], [29, 30]
+  ];
+  const nodeId = (index: number) => `fig8:n${String(index).padStart(2, "0")}`;
+  return {
+    topology: "figure8",
+    nodes: positions.map(([x, y], index) => ({ id: nodeId(index), x, y, z: 0 })),
+    edges: indexEdges.map(([u, v]) => [nodeId(u), nodeId(v)])
   };
-  const leftIds: string[] = [];
-  for (let k = 1; k < n; k += 1) {
-    const angle = (2 * Math.PI * k) / n;
-    const nodeId = `l${k}`;
-    baseNodes[nodeId] = [-1.5 + radius * Math.cos(angle), radius * Math.sin(angle), 0];
-    leftIds.push(nodeId);
-  }
-  const rightIds: string[] = [];
-  for (let k = 0; k < n - 1; k += 1) {
-    const angle = (2 * Math.PI * k) / n;
-    const nodeId = `r${k}`;
-    baseNodes[nodeId] = [1.5 + radius * Math.cos(angle), radius * Math.sin(angle), 0];
-    rightIds.push(nodeId);
-  }
-  const baseEdges: Array<[string, string]> = [];
-  const leftSequence = ["c", ...leftIds];
-  const rightSequence = ["c", ...rightIds];
-  for (let i = 0; i < leftSequence.length; i += 1) {
-    baseEdges.push([leftSequence[i], leftSequence[(i + 1) % leftSequence.length]]);
-  }
-  for (let i = 0; i < rightSequence.length; i += 1) {
-    baseEdges.push([rightSequence[i], rightSequence[(i + 1) % rightSequence.length]]);
-  }
-  const expanded = edgeSubdivide(baseNodes, baseEdges, 1, "fig8");
-  return { ...expanded, topology: "figure8" };
 }
 
 function buildTopologySpec(type: GraphLikeType, cols: number, rows: number): TopologySpec {
@@ -367,12 +555,12 @@ function buildTopologySpec(type: GraphLikeType, cols: number, rows: number): Top
     return buildGridTopology(cols, rows);
   }
   if (type === "cube") {
-    return buildCubeTopology(Math.max(1, cols));
+    return buildCubeTopology(Math.max(1, cols), Math.max(1, rows));
   }
   if (type === "star") {
-    return buildStarTopology(Math.max(1, cols));
+    return buildStarTopology(Math.max(1, cols), Math.max(1, rows));
   }
-  return buildFigure8Topology(Math.max(6, cols));
+  return buildFigure8Topology();
 }
 
 function polarPoint(cx: number, cy: number, radius: number, angle: number) {
@@ -549,7 +737,14 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
       meta.terminal_colors = terminalColorsMeta;
     }
     if (graphLike && topologySpec) {
-      return buildGraphTextFromTopology(spaceType, topologySpec, graphNodeLetters, meta, parsedEdgeOverrides.value);
+      return buildGraphTextFromTopology(
+        spaceType,
+        topologySpec,
+        graphNodeLetters,
+        meta,
+        parsedEdgeOverrides.value,
+        { cols, rows }
+      );
     }
     return buildFlowText(spaceType as FlowType, grid, meta);
   }, [
@@ -565,30 +760,49 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
     detectedColors
   ]);
 
+  // After a color has both endpoints placed, jump to the next unused color so
+  // plotting a whole board is a continuous tap-tap-tap flow.
+  const advanceColorIfPairComplete = (placedLetter: string, countForLetter: number) => {
+    if (countForLetter !== 2 || selectedColor !== placedLetter) {
+      return;
+    }
+    const nextLetter = LETTERS.find((letter) => (letter === placedLetter ? false : (counts[letter] ?? 0) === 0));
+    if (nextLetter) {
+      setSelectedColor(nextLetter);
+    }
+  };
+
   const handleGridCellClick = (r: number, c: number) => {
-    setGrid((prev) => {
-      const next = prev.map((row) => row.slice());
-      const current = next[r][c];
-      if (!selectedColor || current === selectedColor) {
-        next[r][c] = ".";
-      } else {
-        next[r][c] = selectedColor;
-      }
-      return next;
-    });
+    const next = grid.map((row) => row.slice());
+    const current = next[r][c];
+    if (!selectedColor || current === selectedColor) {
+      next[r][c] = ".";
+    } else {
+      next[r][c] = selectedColor;
+    }
+    setGrid(next);
+    if (selectedColor && next[r][c] === selectedColor) {
+      const count = next.reduce(
+        (total, row) => total + row.filter((cell) => cell === selectedColor).length,
+        0
+      );
+      advanceColorIfPairComplete(selectedColor, count);
+    }
   };
 
   const handleNodeClick = (nodeId: string) => {
-    setGraphNodeLetters((prev) => {
-      const next = { ...prev };
-      const current = next[nodeId];
-      if (!selectedColor || current === selectedColor) {
-        delete next[nodeId];
-      } else {
-        next[nodeId] = selectedColor;
-      }
-      return next;
-    });
+    const next = { ...graphNodeLetters };
+    const current = next[nodeId];
+    if (!selectedColor || current === selectedColor) {
+      delete next[nodeId];
+    } else {
+      next[nodeId] = selectedColor;
+    }
+    setGraphNodeLetters(next);
+    if (selectedColor && next[nodeId] === selectedColor) {
+      const count = Object.values(next).filter((letter) => letter === selectedColor).length;
+      advanceColorIfPairComplete(selectedColor, count);
+    }
   };
 
   const applyDetectedGrid = (payload: {
@@ -708,6 +922,7 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
               return (
                 <Box
                   key={`${r}-${c}`}
+                  data-cell={`${r}-${c}`}
                   onClick={() => handleGridCellClick(r, c)}
                   sx={{
                     width: cellSize,
@@ -912,10 +1127,18 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
           value={mobilePanel}
           onChange={(_, value) => setMobilePanel(value)}
           variant="fullWidth"
-          sx={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
+          sx={{
+            position: "sticky",
+            top: 56,
+            zIndex: 5,
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 2,
+            backgroundColor: "rgba(15,17,22,0.96)",
+            backdropFilter: "blur(12px)"
+          }}
         >
           <Tab value="builder" label="Builder" />
-          <Tab value="import" label="Import" />
+          <Tab value="import" label="Screenshot" />
           <Tab value="preview" label="Preview" />
         </Tabs>
       )}
@@ -979,31 +1202,79 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                     <Typography variant="subtitle2" gutterBottom>
                       Color palette
                     </Typography>
-                    <Box display="flex" flexWrap="wrap" gap={1}>
-                      <Button
-                        variant={selectedColor === null ? "contained" : "outlined"}
-                        size="small"
+                    <Box display="flex" flexWrap="wrap" gap={1} alignItems="center">
+                      <Box
+                        component="button"
+                        type="button"
                         onClick={() => setSelectedColor(null)}
+                        aria-label="Eraser"
+                        title="Eraser"
+                        sx={{
+                          width: 38,
+                          height: 38,
+                          borderRadius: "50%",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          p: 0,
+                          border:
+                            selectedColor === null
+                              ? "3px solid rgba(255,255,255,0.9)"
+                              : "2px dashed rgba(255,255,255,0.35)",
+                          backgroundColor: "transparent",
+                          color: "rgba(255,255,255,0.75)"
+                        }}
                       >
-                        No color
-                      </Button>
-                      {LETTERS.map((letter) => (
-                        <Button
-                          key={letter}
-                          variant={selectedColor === letter ? "contained" : "outlined"}
-                          size="small"
-                          onClick={() => setSelectedColor(letter)}
-                          sx={{
-                            borderColor: letterColor(letter, detectedColors),
-                            color: selectedColor === letter ? "#0f1116" : letterColor(letter, detectedColors),
-                            backgroundColor:
-                              selectedColor === letter ? letterColor(letter, detectedColors) : "transparent"
-                          }}
-                        >
-                          {letter} ({counts[letter]})
-                        </Button>
-                      ))}
+                        <BackspaceOutlined sx={{ fontSize: 18 }} />
+                      </Box>
+                      {LETTERS.map((letter) => {
+                        const swatch = letterColor(letter, detectedColors);
+                        const isSelected = selectedColor === letter;
+                        const count = counts[letter] ?? 0;
+                        return (
+                          <Badge
+                            key={letter}
+                            overlap="circular"
+                            badgeContent={count}
+                            invisible={count === 0}
+                            color={count === 2 ? "success" : "warning"}
+                          >
+                            <Box
+                              component="button"
+                              type="button"
+                              onClick={() => setSelectedColor(letter)}
+                              aria-label={`Color ${letter}`}
+                              sx={{
+                                width: 38,
+                                height: 38,
+                                borderRadius: "50%",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                p: 0,
+                                fontWeight: 800,
+                                fontSize: 14,
+                                fontFamily: "inherit",
+                                border: isSelected
+                                  ? "3px solid rgba(255,255,255,0.95)"
+                                  : "2px solid rgba(255,255,255,0.18)",
+                                boxShadow: isSelected ? `0 0 0 3px ${swatch}55` : "none",
+                                backgroundColor: swatch,
+                                color: "#0f1116"
+                              }}
+                            >
+                              {letter}
+                            </Box>
+                          </Badge>
+                        );
+                      })}
                     </Box>
+                    <Typography variant="caption" color="text.secondary" display="block" mt={1}>
+                      Tap two cells to place a pair — the palette advances to the next color automatically.
+                      Tap a placed cell (or use the eraser) to remove it.
+                    </Typography>
                   </Box>
 
                   {board}
@@ -1085,26 +1356,44 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                     </Stack>
                   )}
 
-                  <Box display="flex" gap={2} flexWrap="wrap">
-                    <Button variant="contained" disabled={!canSubmit} onClick={() => onCreatePuzzle(name, puzzleText)}>
-                      Load into editor
+                  <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                    <Button
+                      variant="contained"
+                      size="large"
+                      startIcon={<AutoAwesome />}
+                      disabled={!canSubmit}
+                      onClick={() => onCreatePuzzle(name, puzzleText, { autoSolve: true })}
+                      sx={{ minHeight: 48 }}
+                      fullWidth={isMobile}
+                    >
+                      Solve puzzle
                     </Button>
-                    <Button variant="outlined" disabled={!canSubmit} onClick={handleSave}>
+                    <Button
+                      variant="outlined"
+                      disabled={!canSubmit}
+                      onClick={() => onCreatePuzzle(name, puzzleText)}
+                      fullWidth={isMobile}
+                    >
+                      Open in editor
+                    </Button>
+                    <Button variant="outlined" disabled={!canSubmit} onClick={handleSave} fullWidth={isMobile}>
                       Save to library
                     </Button>
                     <Button
                       variant="text"
+                      fullWidth={isMobile}
                       onClick={() => {
                         if (graphLike) {
                           setGraphNodeLetters({});
                         } else {
                           setGrid(buildGrid(rows, cols));
                         }
+                        setSelectedColor("A");
                       }}
                     >
                       Clear board
                     </Button>
-                  </Box>
+                  </Stack>
                   {(saveStatus || saveError) && (
                     <Alert severity={saveError ? "error" : "success"}>{saveError ?? saveStatus}</Alert>
                   )}
@@ -1118,8 +1407,19 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
             <Stack spacing={2}>
               {(!isMobile || mobilePanel === "import") && (
                 <ImageView
-                  compact
-                  onGenerated={onCreatePuzzle}
+                  embedded
+                  preferredTargetType={
+                    spaceType === "cube" ||
+                    spaceType === "star" ||
+                    spaceType === "figure8" ||
+                    spaceType === "graph"
+                      ? spaceType
+                      : undefined
+                  }
+                  onGenerated={(generatedName, generatedText) =>
+                    onCreatePuzzle(generatedName, generatedText, { autoSolve: true })
+                  }
+                  onApplied={() => setMobilePanel("builder")}
                   onSuggestedName={(suggested) => {
                     setName(suggested);
                     setAutoName(false);

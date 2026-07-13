@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from .graph import Graph, Node, NodeId
 from .spaces.circle import build_circle_space_from_token_rows
 from .spaces.hex import build_hex_space_from_tokens
 from .spaces.square import build_square_space_from_tokens
+
+if TYPE_CHECKING:
+    from .schema_v2 import PuzzleSpec
 
 Color = str
 
@@ -48,6 +51,7 @@ class Puzzle:
     terminals: Dict[Color, Tuple[NodeId, NodeId]]
     fill: bool = True
     meta: Dict[str, Any] = field(default_factory=dict)
+    source_spec: Optional["PuzzleSpec"] = field(default=None, repr=False, compare=False)
 
     def all_colors(self) -> List[Color]:
         return sorted(self.terminals.keys())
@@ -69,6 +73,14 @@ class Puzzle:
     @staticmethod
     def from_json(text: str) -> "Puzzle":
         obj = json.loads(text)
+        # A document that declares either v2 marker must be parsed strictly as v2.
+        # In particular, malformed/unknown versions must not silently fall back to
+        # the permissive legacy graph format below.
+        from .schema_v2 import compile_puzzle_spec, has_v2_marker, parse_v2_dict
+
+        if has_v2_marker(obj):
+            return compile_puzzle_spec(parse_v2_dict(obj))
+
         kind = obj.get("space", {}).get("type", "graph")
         fill = bool(obj.get("fill", True))
 
@@ -214,4 +226,3 @@ class Puzzle:
     ) -> "Puzzle":
         g, tiles, terminals = build_square_space_from_tokens(token_rows)
         return Puzzle(graph=g, tiles=tiles, terminals=terminals, fill=fill, meta=meta or {})
-

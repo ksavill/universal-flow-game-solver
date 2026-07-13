@@ -1,20 +1,39 @@
 import { Box } from "@mui/material";
 import { SolveResponse } from "../api";
 import { TERMINAL_PALETTE, buildTerminalColorMaps } from "../colors";
+import {
+  SolutionPathEdges,
+  SolutionPaths,
+  buildBlockedAdjacencies,
+  buildSolutionEdgeColors,
+  canonicalEdgeKey
+} from "../solutionEdges";
 
 type GraphPreviewProps = {
   graph: SolveResponse["graph"];
   height?: number;
   nodeColor?: Record<string, string | null> | null;
+  pathEdges?: SolutionPathEdges | null;
+  paths?: SolutionPaths | null;
   showSolution?: boolean;
 };
 
-export function GraphPreview({ graph, height = 140, nodeColor, showSolution = false }: GraphPreviewProps) {
+export function GraphPreview({
+  graph,
+  height = 140,
+  nodeColor,
+  pathEdges,
+  paths,
+  showSolution = false
+}: GraphPreviewProps) {
   if (!graph.nodes.length) {
     return null;
   }
 
   const { colorToHex, terminalNodeColor } = buildTerminalColorMaps(graph, nodeColor, TERMINAL_PALETTE);
+  const solutionEdgeColors = buildSolutionEdgeColors(pathEdges, paths);
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const barriers = buildBlockedAdjacencies(graph);
 
   const xs = graph.nodes.map((n) => n.x);
   const ys = graph.nodes.map((n) => n.y);
@@ -53,12 +72,11 @@ export function GraphPreview({ graph, height = 140, nodeColor, showSolution = fa
             />
           );
         })}
-        {showSolution && nodeColor && (
+        {showSolution && (
           <>
             {graph.edges.map(([u, v]) => {
-              const cu = nodeColor[u];
-              const cv = nodeColor[v];
-              if (!cu || cu !== cv) {
+              const selectedColor = solutionEdgeColors.get(canonicalEdgeKey(u, v));
+              if (!selectedColor) {
                 return null;
               }
               const a = graph.nodes.find((n) => n.id === u);
@@ -66,7 +84,7 @@ export function GraphPreview({ graph, height = 140, nodeColor, showSolution = fa
               if (!a || !b) {
                 return null;
               }
-              const color = colorToHex[cu] ?? "#ff5252";
+              const color = colorToHex[selectedColor] ?? "#ff5252";
               return (
                 <line
                   key={`sol-${u}-${v}`}
@@ -81,6 +99,51 @@ export function GraphPreview({ graph, height = 140, nodeColor, showSolution = fa
             })}
           </>
         )}
+        {barriers.map((barrier) => {
+          const a = nodeById.get(barrier.u);
+          const b = nodeById.get(barrier.v);
+          if (!a || !b) {
+            return null;
+          }
+          const ax = mapX(a.x);
+          const ay = mapY(a.y);
+          const bx = mapX(b.x);
+          const by = mapY(b.y);
+          const dx = bx - ax;
+          const dy = by - ay;
+          const magnitude = Math.hypot(dx, dy);
+          if (magnitude < 0.001) {
+            return null;
+          }
+          const halfLength = 5;
+          const offsetX = (-dy / magnitude) * halfLength;
+          const offsetY = (dx / magnitude) * halfLength;
+          const cx = (ax + bx) / 2;
+          const cy = (ay + by) / 2;
+          return (
+            <g key={`barrier-${barrier.id}`} aria-label={`Barrier between ${barrier.u} and ${barrier.v}`}>
+              <title>Blocked path</title>
+              <line
+                x1={cx - offsetX}
+                y1={cy - offsetY}
+                x2={cx + offsetX}
+                y2={cy + offsetY}
+                stroke="rgba(15,15,26,0.98)"
+                strokeWidth={5}
+                strokeLinecap="round"
+              />
+              <line
+                x1={cx - offsetX}
+                y1={cy - offsetY}
+                x2={cx + offsetX}
+                y2={cy + offsetY}
+                stroke="#ff9dad"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+              />
+            </g>
+          );
+        })}
         {graph.nodes.map((n) => {
           const solutionColor = showSolution && nodeColor ? nodeColor[n.id] : null;
           const terminalColor = terminalNodeColor[n.id];

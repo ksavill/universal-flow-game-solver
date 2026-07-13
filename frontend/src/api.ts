@@ -23,11 +23,15 @@ export type ParseResponse = {
   counts: Record<string, number | boolean>;
   meta: Record<string, string>;
   terminals: Record<string, string[]>;
+  validation?: ValidationResponse;
 };
 
 export type SolveResponse = {
   node_color: Record<string, string | null>;
   paths: Record<string, string[]>;
+  path_edges: Record<string, Array<[string, string]>>;
+  stats: Record<string, number | string | boolean | null>;
+  unique: boolean | null;
   graph: {
     nodes: Array<{
       id: string;
@@ -38,9 +42,43 @@ export type SolveResponse = {
       data: Record<string, unknown>;
     }>;
     edges: Array<[string, string]>;
+    adjacencies?: Array<{
+      id: string;
+      a: { channel: string; port: string };
+      b: { channel: string; port: string };
+      kind: "local" | "seam" | "warp" | "custom";
+      state: "open" | "blocked";
+      group?: string | null;
+      data?: Record<string, unknown>;
+    }>;
     terminals: Record<string, [string, string]>;
     tiles: Record<string, string[]>;
     terminal_colors?: Record<string, string>;
+    schema_version?: number;
+    display?: Record<string, unknown>;
+    catalog?: Record<string, unknown>;
+  };
+};
+
+export type ValidationIssue = {
+  code: string;
+  message: string;
+  severity: "error" | "warning";
+  nodes: string[];
+  colors: string[];
+};
+
+export type ValidationResponse = {
+  valid: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  stats: Record<string, number | string | boolean | null>;
+  solvable?: boolean;
+  solve_error?: string;
+  solution?: {
+    path_lengths: Record<string, number>;
+    stats: Record<string, number | string | boolean | null>;
+    unique: boolean | null;
   };
 };
 
@@ -104,6 +142,8 @@ export type ImageGenerateResponse = {
   name: string;
   text: string;
   metadata: Record<string, string>;
+  import_id?: string;
+  archived_at?: number;
   detection: {
     grid?: { rows: number; cols: number; vertical_lines?: number; horizontal_lines?: number };
     terminals?: Array<{ row?: number; col?: number; node_id?: string; letter: string; color?: number[] }>;
@@ -116,6 +156,51 @@ export type ImageGenerateResponse = {
     target_type_used?: string;
     [key: string]: unknown;
   };
+};
+
+export type ImageImportEntry = {
+  id: string;
+  created_at: number;
+  updated_at?: number;
+  status: "processed" | "failed";
+  original_name: string;
+  content_type: string;
+  byte_size: number;
+  image_size: { width: number; height: number };
+  generated_name: string;
+  geometry?: string | null;
+  grid?: { rows?: number; cols?: number; [key: string]: unknown } | null;
+  terminal_count: number;
+  error?: string;
+  solve_status?: "solved" | "failed";
+  solve_error?: string | null;
+  solve_ms?: number | null;
+  solver?: string | null;
+  run_count?: number;
+};
+
+export type ImageImportRecord = ImageImportEntry & {
+  processing: Record<string, unknown>;
+  result?: ImageGenerateResponse;
+  solve?: {
+    status: "solved" | "failed";
+    updated_at: number;
+    result?: SolveResponse;
+    error?: string;
+  };
+  runs?: Array<{
+    completed_at?: number;
+    status: "processed" | "failed";
+    geometry?: string | null;
+    grid?: Record<string, unknown> | null;
+    terminal_count?: number;
+    processing?: Record<string, unknown>;
+    solve_status?: "solved" | "failed" | null;
+    solve_error?: string | null;
+    solve_ms?: number | null;
+    solver?: string | null;
+    error?: string | null;
+  }>;
 };
 
 export type CropTemplate = {
@@ -181,6 +266,17 @@ export async function listPuzzles(): Promise<PuzzleEntry[]> {
   return data.entries;
 }
 
+export type DocPageInfo = { id: string; title: string };
+
+export async function listDocPages(): Promise<DocPageInfo[]> {
+  const data = await apiRequest<{ pages: DocPageInfo[] }>("/docs-pages");
+  return data.pages;
+}
+
+export async function getDocPage(pageId: string): Promise<DocPageInfo & { markdown: string }> {
+  return apiRequest<DocPageInfo & { markdown: string }>(`/docs-pages/${encodeURIComponent(pageId)}`);
+}
+
 export async function getPuzzle(source: string, name: string): Promise<{ name: string; text: string }> {
   return apiRequest<{ name: string; text: string }>(`/puzzles/${source}/${encodePath(name)}`);
 }
@@ -213,6 +309,8 @@ export async function solvePuzzle(payload: {
   fill?: boolean;
   solver?: string;
   timeout_ms?: number;
+  check_unique?: boolean;
+  import_id?: string;
 }): Promise<SolveResponse> {
   return apiRequest<SolveResponse>("/solve", {
     method: "POST",
@@ -254,6 +352,78 @@ export async function deletePuzzle(source: string, name: string): Promise<{ dele
   return res.json() as Promise<{ deleted: boolean; path: string }>;
 }
 
+export async function listImageImports(limit = 50): Promise<ImageImportEntry[]> {
+  const data = await apiRequest<{ entries: ImageImportEntry[] }>(`/image-imports?limit=${limit}`);
+  return data.entries;
+}
+
+export async function archiveImageImportFailure(params: {
+  file: File;
+  error: string;
+  stage?: string;
+}): Promise<ImageImportEntry> {
+  const form = new FormData();
+  form.append("file", params.file);
+  form.append("error", params.error);
+  form.append("stage", params.stage ?? "processing");
+  return imageRequest<ImageImportEntry>("/image-imports/failed", form);
+}
+
+export async function getImageImport(importId: string): Promise<ImageImportRecord> {
+  return apiRequest<ImageImportRecord>(`/image-imports/${encodeURIComponent(importId)}`);
+}
+
+export function imageImportImageUrl(importId: string) {
+  return `${API_URL}/image-imports/${encodeURIComponent(importId)}/image`;
+}
+
+export async function deleteImageImport(importId: string): Promise<{ deleted: boolean; id: string }> {
+  const res = await fetch(`${API_URL}/image-imports/${encodeURIComponent(importId)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const message = (detail as { detail?: string }).detail ?? res.statusText;
+    throw new Error(message);
+  }
+  return res.json() as Promise<{ deleted: boolean; id: string }>;
+}
+
+export async function bulkDeleteImageImports(
+  importIds: string[]
+): Promise<{ deleted: string[]; missing: string[] }> {
+  return apiRequest<{ deleted: string[]; missing: string[] }>("/image-imports/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ ids: importIds })
+  });
+}
+
+export async function recordImageImportReprocessFailure(params: {
+  importId: string;
+  error: string;
+  stage?: string;
+}): Promise<ImageImportEntry> {
+  return apiRequest<ImageImportEntry>(`/image-imports/${encodeURIComponent(params.importId)}/failure`, {
+    method: "POST",
+    body: JSON.stringify({ error: params.error, stage: params.stage ?? "screenshot-library" })
+  });
+}
+
+export async function fetchImageImportFile(entry: ImageImportEntry): Promise<File> {
+  // A distinct URL + no-store keeps this download from being coalesced with a
+  // thumbnail <img> request for the same image; if that request is aborted by
+  // an unmount (e.g. leaving the library), a shared network job would fail too.
+  const res = await fetch(`${imageImportImageUrl(entry.id)}?download=1`, { cache: "no-store" });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const message = (detail as { detail?: string }).detail ?? res.statusText;
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  return new File([blob], entry.original_name, {
+    type: entry.content_type || blob.type || "application/octet-stream",
+    lastModified: Math.round((entry.updated_at ?? entry.created_at) * 1000)
+  });
+}
+
 async function imageRequest<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method: "POST",
@@ -286,6 +456,20 @@ export async function imageAutoCrop(params: {
   form.append("invert", String(params.invert));
   form.append("padding", String(params.padding));
   return imageRequest<ImageCropResponse>("/image/crop/auto", form);
+}
+
+export async function validatePuzzle(payload: {
+  name: string;
+  text: string;
+  fill?: boolean;
+  check_solvable?: boolean;
+  solver?: string;
+  timeout_ms?: number;
+}): Promise<ValidationResponse> {
+  return apiRequest<ValidationResponse>("/validate", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function imageDetectGrid(params: {
@@ -387,6 +571,7 @@ export async function imageDetectTerminals(params: {
 
 export async function imageGenerate(params: {
   file: File;
+  replaceImportId?: string;
   targetType: string;
   gridWidth?: number;
   gridHeight?: number;
@@ -416,7 +601,11 @@ export async function imageGenerate(params: {
 }): Promise<ImageGenerateResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.replaceImportId) {
+    form.append("replace_import_id", params.replaceImportId);
+  }
   form.append("target_type", params.targetType);
+  form.append("output_schema_version", "2");
   if (params.gridWidth !== undefined) {
     form.append("grid_width", String(params.gridWidth));
   }

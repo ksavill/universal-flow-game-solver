@@ -3,9 +3,15 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from PIL import Image, ImageStat
+
+from flow_solver.topologies import (
+    build_cube_topology as build_registered_cube_topology,
+    build_figure8_topology as build_registered_figure8_topology,
+    build_radial_star_topology as build_registered_radial_star_topology,
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +30,8 @@ class GridDetection:
     horizontal_lines: int
     width: int
     height: int
+    x_lines: Tuple[float, ...] = ()
+    y_lines: Tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -88,6 +96,33 @@ def _try_import_cv2():
         return cv2, np
     except Exception:
         return None, None
+
+
+def _accelerated_gray(
+    image: Image.Image,
+    *,
+    cv2: Any,
+    np: Any,
+    rgb: Optional[Any] = None,
+) -> Tuple[Any, str]:
+    cached = getattr(image, "_flow_gray_u8", None)
+    cached_backend = getattr(image, "_flow_gray_backend", None)
+    if cached is not None and getattr(cached, "shape", None) == (image.height, image.width):
+        return cached, str(cached_backend or "cpu-cache")
+    if rgb is None:
+        rgb = np.asarray(image.convert("RGB"))
+    try:
+        from .acceleration import accelerated_gray_u8
+
+        gray, backend = accelerated_gray_u8(rgb, cv2=cv2, np=np)
+    except Exception:
+        gray, backend = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY), "cpu"
+    try:
+        setattr(image, "_flow_gray_u8", gray)
+        setattr(image, "_flow_gray_backend", backend)
+    except Exception:
+        pass
+    return gray, backend
 
 
 def _order_points(pts):
@@ -229,8 +264,8 @@ def _auto_crop_by_edges_cv2(
 
     rgb = np.array(image)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 50, 160)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 30, 110)
 
     kernel_n = max(3, int(min(width, height) * 0.006))
     if kernel_n % 2 == 0:
@@ -249,10 +284,14 @@ def _auto_crop_by_edges_cv2(
 
     for contour in contours:
         area = float(cv2.contourArea(contour))
-        if area < img_area * 0.04:
-            continue
         x0, y0, ww, hh = cv2.boundingRect(contour)
         if ww <= 0 or hh <= 0:
+            continue
+        min_candidate_span = max(32.0, float(min(width, height)) * 0.18)
+        if (
+            area < img_area * 0.0004
+            and (float(ww) < min_candidate_span or float(hh) < min_candidate_span)
+        ):
             continue
         rect_area = float(ww * hh)
         box_ratio = rect_area / img_area
@@ -331,10 +370,14 @@ def _auto_crop_by_color_cv2(
     best_score = -1.0
     for contour in contours:
         area = float(cv2.contourArea(contour))
-        if area < img_area * 0.015:
-            continue
         x0, y0, ww, hh = cv2.boundingRect(contour)
         if ww <= 0 or hh <= 0:
+            continue
+        min_candidate_span = max(32.0, float(min(width, height)) * 0.18)
+        if (
+            area < img_area * 0.0003
+            and (float(ww) < min_candidate_span or float(hh) < min_candidate_span)
+        ):
             continue
         rect_area = float(ww * hh)
         box_ratio = rect_area / img_area
@@ -439,12 +482,137 @@ def _cluster_positions(values: List[float], tol: float) -> List[float]:
     return [sum(c) / len(c) for c in clusters]
 
 
-def _detect_grid_hough(
+def _infer_regular_lattice(values: List[float], *, extent: int) -> List[float]:
+    """Fill a small number of grid lines hidden by dots or thick barriers."""
+    positions = sorted(float(value) for value in values)
+    if len(positions) < 4 or extent <= 0:
+        return positions
+    min_gap = max(4.0, float(extent) / 48.0)
+    gaps = [right - left for left, right in zip(positions, positions[1:])]
+    useful_gaps = [gap for gap in gaps if gap >= min_gap]
+    if len(useful_gaps) < 3:
+        return positions
+
+    ordered_gaps = sorted(useful_gaps)
+    # Missing lines create 2x/3x gaps. The lower half therefore gives a more
+    # stable estimate of one cell than the overall mean.
+    base_sample = ordered_gaps[: max(2, (len(ordered_gaps) + 1) // 2)]
+    base_gap = base_sample[len(base_sample) // 2]
+    if base_gap <= 0.0:
+        return positions
+    steps = [max(1, int(round(gap / base_gap))) for gap in gaps]
+    total_steps = sum(steps)
+    inferred_count = total_steps + 1
+    if inferred_count < len(positions) or inferred_count > 33:
+        return positions
+    if inferred_count - len(positions) > max(4, inferred_count // 3):
+        return positions
+
+    refined_gap = (positions[-1] - positions[0]) / float(max(1, total_steps))
+    if refined_gap < min_gap:
+        return positions
+    errors = [
+        abs((gap / refined_gap) - float(step))
+        for gap, step in zip(gaps, steps)
+    ]
+    if errors and max(errors) > 0.22:
+        return positions
+    return [positions[0] + refined_gap * index for index in range(inferred_count)]
+
+
+def _merge_thick_line_edges(values: List[float], *, extent: int) -> List[float]:
+    """Merge the two Canny edges of thick grid strokes without merging cells."""
+
+    positions = sorted(float(value) for value in values)
+    if len(positions) < 3 or extent <= 0:
+        return positions
+    gaps = sorted(
+        right - left
+        for left, right in zip(positions, positions[1:])
+        if right - left > 0.5
+    )
+    if len(gaps) < 2:
+        return positions
+    best_index = -1
+    best_ratio = 0.0
+    for index, (small, large) in enumerate(zip(gaps, gaps[1:])):
+        if small > float(extent) * 0.035:
+            continue
+        ratio = large / max(0.5, small)
+        if ratio >= 2.2 and ratio > best_ratio:
+            best_index = index
+            best_ratio = ratio
+    if best_index < 0:
+        return positions
+    merge_tolerance = min(
+        float(extent) * 0.035,
+        (gaps[best_index] + gaps[best_index + 1]) * 0.5,
+    )
+    return _cluster_positions(positions, merge_tolerance)
+
+
+def _regular_line_spacing(values: List[float]) -> Optional[float]:
+    positions = sorted(float(value) for value in values)
+    if len(positions) < 4:
+        return None
+    gaps = [right - left for left, right in zip(positions, positions[1:]) if right > left]
+    if len(gaps) < 3:
+        return None
+    median_gap = sorted(gaps)[len(gaps) // 2]
+    if median_gap <= 1.0:
+        return None
+    consistent = sum(
+        1 for gap in gaps if abs(gap - median_gap) <= max(2.0, median_gap * 0.18)
+    )
+    return median_gap if consistent >= max(3, int(math.ceil(len(gaps) * 0.65))) else None
+
+
+def _select_lattice_by_spacing(values: List[float], *, spacing: float) -> List[float]:
+    """Select the strongest regular subset using cell pitch from the other axis."""
+
+    positions = sorted(float(value) for value in values)
+    if len(positions) < 3 or spacing <= 1.0:
+        return positions
+    tolerance = max(2.5, spacing * 0.13)
+    best: List[float] = []
+    best_error = float("inf")
+    for origin in positions:
+        by_step: Dict[int, Tuple[float, float]] = {}
+        for value in positions:
+            step = int(round((value - origin) / spacing))
+            predicted = origin + float(step) * spacing
+            error = abs(value - predicted)
+            if error > tolerance:
+                continue
+            current = by_step.get(step)
+            if current is None or error < current[1]:
+                by_step[step] = (value, error)
+        if len(by_step) < 3:
+            continue
+        steps = sorted(by_step)
+        # A board lattice is contiguous; decorative lines may match isolated
+        # multiples but must not create holes in the selected sequence.
+        runs: List[List[int]] = [[steps[0]]]
+        for step in steps[1:]:
+            if step == runs[-1][-1] + 1:
+                runs[-1].append(step)
+            else:
+                runs.append([step])
+        run = max(runs, key=len)
+        chosen = [by_step[step][0] for step in run]
+        total_error = sum(by_step[step][1] for step in run)
+        if len(chosen) > len(best) or (len(chosen) == len(best) and total_error < best_error):
+            best = chosen
+            best_error = total_error
+    return sorted(best) if len(best) >= 3 else positions
+
+
+def _detect_grid_hough_positions(
     image: Image.Image,
     *,
     line_threshold: float,
     max_dim: int = 800,
-) -> Optional[GridDetection]:
+) -> Optional[Tuple[List[float], List[float], int, int]]:
     cv2, np = _try_import_cv2()
     if cv2 is None or np is None:
         return None
@@ -459,13 +627,21 @@ def _detect_grid_hough(
         img = image.resize((int(width * scale), int(height * scale)), Image.BILINEAR)
         width, height = img.size
 
-    gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 50, 150)
+    gray, _gray_backend = _accelerated_gray(img, cv2=cv2, np=np)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blur, 20, 80)
 
-    min_len = max(30, int(min(width, height) * max(0.2, min(0.9, line_threshold))))
-    max_gap = max(6, int(min(width, height) * 0.02))
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=min_len, maxLineGap=max_gap)
+    # Warps deliberately interrupt outer grid lines at their ports. Requiring
+    # one line to span most of the board drops those borders and changes the
+    # inferred dimensions, especially on small or downscaled screenshots.
+    # A warp board's outside rows/columns are intentionally dashed and may
+    # contain only short pieces of the lattice.  A permissive first pass is
+    # safe here because the regular-lattice selection below rejects isolated
+    # decorative strokes (including bridge glyphs).
+    min_len_ratio = max(0.045, min(0.18, float(line_threshold) * 0.10))
+    min_len = max(10, int(min(width, height) * min_len_ratio))
+    max_gap = max(6, int(min(width, height) * 0.03))
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=50, minLineLength=min_len, maxLineGap=max_gap)
     if lines is None:
         return None
 
@@ -481,13 +657,74 @@ def _detect_grid_hough(
         elif abs(angle - 90) < angle_tol:
             verticals.append((x1 + x2) / 2.0)
 
-    tol = max(6, int(min(width, height) * 0.01))
+    tol = max(8, int(min(width, height) * 0.0125))
     v_clusters = _cluster_positions(verticals, tol)
     h_clusters = _cluster_positions(horizontals, tol)
+
+    v_clusters = _merge_thick_line_edges(v_clusters, extent=width)
+    h_clusters = _merge_thick_line_edges(h_clusters, extent=height)
+
+    vertical_spacing = _regular_line_spacing(v_clusters)
+    horizontal_spacing = _regular_line_spacing(h_clusters)
+    if vertical_spacing is not None:
+        selected_horizontal = _select_lattice_by_spacing(
+            h_clusters,
+            spacing=vertical_spacing,
+        )
+        if len(selected_horizontal) >= 3:
+            h_clusters = selected_horizontal
+    if horizontal_spacing is not None:
+        selected_vertical = _select_lattice_by_spacing(
+            v_clusters,
+            spacing=horizontal_spacing,
+        )
+        if len(selected_vertical) >= 3:
+            v_clusters = selected_vertical
 
     if len(v_clusters) < 2 or len(h_clusters) < 2:
         return None
 
+    v_clusters = _infer_regular_lattice(v_clusters, extent=width)
+    h_clusters = _infer_regular_lattice(h_clusters, extent=height)
+    v_gaps = [right - left for left, right in zip(v_clusters, v_clusters[1:])]
+    h_gaps = [bottom - top for top, bottom in zip(h_clusters, h_clusters[1:])]
+    if v_gaps and h_gaps:
+        v_pitch = sorted(v_gaps)[len(v_gaps) // 2]
+        h_pitch = sorted(h_gaps)[len(h_gaps) // 2]
+        pitch_ratio = v_pitch / max(1e-6, h_pitch)
+        # Square/bridge/warp cells remain approximately square under ordinary
+        # screenshot scaling. Pointy hex boards expose horizontal/vertical
+        # line fragments at the characteristic sqrt(3) pitch ratio; accepting
+        # those fragments as a 3x23 rectangle was the main hex misroute.
+        if pitch_ratio < 0.72 or pitch_ratio > 1.38:
+            return None
+    x_coverage = (v_clusters[-1] - v_clusters[0]) / float(max(1, width))
+    y_coverage = (h_clusters[-1] - h_clusters[0]) / float(max(1, height))
+    if min(x_coverage, y_coverage) / max(1e-6, max(x_coverage, y_coverage)) < 0.35:
+        return None
+    return v_clusters, h_clusters, width, height
+
+
+def _detect_grid_hough(
+    image: Image.Image,
+    *,
+    line_threshold: float,
+    max_dim: int = 800,
+) -> Optional[GridDetection]:
+    detected = _detect_grid_hough_positions(
+        image,
+        line_threshold=line_threshold,
+        max_dim=max_dim,
+    )
+    if detected is None:
+        return None
+    v_clusters, h_clusters, width, height = detected
+
+    source_width, source_height = image.size
+    x_scale = source_width / float(max(1, width))
+    y_scale = source_height / float(max(1, height))
+    x_lines = tuple(float(value) * x_scale for value in v_clusters)
+    y_lines = tuple(float(value) * y_scale for value in h_clusters)
     return GridDetection(
         rows=len(h_clusters) - 1,
         cols=len(v_clusters) - 1,
@@ -495,6 +732,8 @@ def _detect_grid_hough(
         horizontal_lines=len(h_clusters),
         width=width,
         height=height,
+        x_lines=x_lines,
+        y_lines=y_lines,
     )
 
 
@@ -540,6 +779,22 @@ def detect_grid(
     if vertical_lines < 2 or horizontal_lines < 2:
         return None
 
+    def run_centers(flags: List[bool]) -> List[float]:
+        centers: List[float] = []
+        start: Optional[int] = None
+        for index, flag in enumerate(flags + [False]):
+            if flag and start is None:
+                start = index
+            elif not flag and start is not None:
+                centers.append((start + index - 1) * 0.5)
+                start = None
+        return centers
+
+    source_width, source_height = image.size
+    x_scale = source_width / float(max(1, width))
+    y_scale = source_height / float(max(1, height))
+    x_lines = tuple(value * x_scale for value in run_centers(col_flags))
+    y_lines = tuple(value * y_scale for value in run_centers(row_flags))
     return GridDetection(
         rows=horizontal_lines - 1,
         cols=vertical_lines - 1,
@@ -547,6 +802,36 @@ def detect_grid(
         horizontal_lines=horizontal_lines,
         width=width,
         height=height,
+        x_lines=x_lines,
+        y_lines=y_lines,
+    )
+
+
+def _grid_lines_for_dimensions(
+    image: Image.Image,
+    *,
+    rows: int,
+    cols: int,
+    line_threshold: float = 0.35,
+) -> Tuple[List[float], List[float], str]:
+    """Return image-coordinate lattice lines, falling back to the full frame."""
+
+    width, height = image.size
+    detected = _detect_grid_hough_positions(image, line_threshold=line_threshold)
+    if detected is not None:
+        raw_x, raw_y, detected_width, detected_height = detected
+        if len(raw_x) == cols + 1 and len(raw_y) == rows + 1:
+            x_scale = width / float(max(1, detected_width))
+            y_scale = height / float(max(1, detected_height))
+            return (
+                [float(value) * x_scale for value in raw_x],
+                [float(value) * y_scale for value in raw_y],
+                "detected",
+            )
+    return (
+        [width * index / float(max(1, cols)) for index in range(cols + 1)],
+        [height * index / float(max(1, rows)) for index in range(rows + 1)],
+        "frame-fallback",
     )
 
 
@@ -555,21 +840,24 @@ def _angle_distance_deg(a: float, b: float) -> float:
 
 
 def _cluster_angles_deg(values: List[float], *, tol: float) -> List[float]:
+    angles = sorted(float(value) % 360.0 for value in values)
+    if not angles:
+        return []
+    clusters: List[List[float]] = [[angles[0]]]
+    for angle in angles[1:]:
+        if angle - clusters[-1][-1] <= tol:
+            clusters[-1].append(angle)
+        else:
+            clusters.append([angle])
+    if len(clusters) > 1 and (clusters[0][0] + 360.0) - clusters[-1][-1] <= tol:
+        clusters[0] = [value - 360.0 for value in clusters[-1]] + clusters[0]
+        clusters.pop()
+
     out: List[float] = []
-    for value in values:
-        angle = value % 360.0
-        assigned = False
-        for idx, current in enumerate(out):
-            if _angle_distance_deg(angle, current) <= tol:
-                cand = [current, angle, current + 360.0, angle + 360.0]
-                merged = sum(cand[:2]) / 2.0
-                if abs(merged - current) > 180.0:
-                    merged = (merged + 180.0) % 360.0
-                out[idx] = merged % 360.0
-                assigned = True
-                break
-        if not assigned:
-            out.append(angle)
+    for cluster in clusters:
+        sin_mean = sum(math.sin(math.radians(value)) for value in cluster)
+        cos_mean = sum(math.cos(math.radians(value)) for value in cluster)
+        out.append(math.degrees(math.atan2(sin_mean, cos_mean)) % 360.0)
     return sorted(out)
 
 
@@ -614,7 +902,7 @@ def detect_circle_grid(
         return None, {"warnings": ["Invalid image dimensions for circle-grid detection."]}
 
     rgb = np.array(image)
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    gray, gray_backend = _accelerated_gray(image, cv2=cv2, np=np, rgb=rgb)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 45, 140)
 
@@ -930,6 +1218,23 @@ def detect_terminals(
     if rows <= 0 or cols <= 0 or width == 0 or height == 0:
         return [], {"warnings": ["Invalid grid size for terminal detection."]}
 
+    x_lines, y_lines, geometry_source = _grid_lines_for_dimensions(
+        image,
+        rows=rows,
+        cols=cols,
+    )
+    board_left = max(0, int(round(x_lines[0])))
+    board_top = max(0, int(round(y_lines[0])))
+    board_right = min(width, int(round(x_lines[-1])))
+    board_bottom = min(height, int(round(y_lines[-1])))
+    if board_right > board_left and board_bottom > board_top:
+        image = image.crop((board_left, board_top, board_right, board_bottom))
+        width, height = image.size
+    else:
+        board_left = board_top = 0
+        board_right, board_bottom = width, height
+        geometry_source = "frame-fallback"
+
     cell_w = width / cols
     cell_h = height / rows
     margin_x = cell_w * margin_ratio
@@ -950,8 +1255,16 @@ def detect_terminals(
         (border_stat.mean[2] + border_stat2.mean[2] + border_stat3.mean[2] + border_stat4.mean[2]) / 4.0,
     )
     bg_brightness = _brightness(bg_color)
+    # Dark game themes often tint empty cells and barrier-adjacent cells blue.
+    # Their weak chroma used to pass the permissive default saturation cutoff
+    # and create large fake terminal clusters. Real dots on these themes are
+    # substantially more saturated, including their darker red/green colors.
+    effective_sat_threshold = max(sat_threshold, 45.0 if bg_brightness < 90.0 else sat_threshold)
     neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    neutral_brightness_max = max(brightness_max, 250.0)
+    # Neutral endpoints include pure white dots. Keep the user-facing ceiling
+    # for colorful pixels, but allow the full RGB range for high-contrast
+    # achromatic terminals on a dark board.
+    neutral_brightness_max = 255.0
     neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
 
     candidates: List[TerminalCandidate] = []
@@ -967,7 +1280,11 @@ def detect_terminals(
             region = image.crop((x0, y0, x1, y1))
             color, sat, bright = _sample_region_color(region)
             dist_bg = _color_distance(color, bg_color)
-            is_colorful = sat >= sat_threshold and brightness_min <= bright <= brightness_max and dist_bg >= bg_threshold
+            is_colorful = (
+                sat >= effective_sat_threshold
+                and brightness_min <= bright <= brightness_max
+                and dist_bg >= bg_threshold
+            )
             is_neutral = (
                 sat < sat_threshold
                 and bright >= neutral_brightness_min
@@ -1031,6 +1348,14 @@ def detect_terminals(
         "candidates": len(candidates),
         "warnings": warnings,
         "background_color": [round(c, 2) for c in bg_color],
+        "effective_sat_threshold": round(float(effective_sat_threshold), 2),
+        "sampling_geometry": {
+            "source": geometry_source,
+            "left": board_left,
+            "top": board_top,
+            "right": board_right,
+            "bottom": board_bottom,
+        },
     }
     return placements, info
 
@@ -1115,7 +1440,7 @@ def detect_circle_terminals(
     )
     bg_brightness = _brightness(bg_color)
     neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    neutral_brightness_max = max(brightness_max, 250.0)
+    neutral_brightness_max = 255.0
     neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
 
     candidates: List[TerminalCandidate] = []
@@ -1261,6 +1586,32 @@ def _project_nodes_to_pixels(
     if width <= 0 or height <= 0 or not nodes:
         return {}, {"warnings": ["Invalid dimensions or empty graph nodes."]}
 
+    # Region-derived graphs already carry centers in the source image's pixel
+    # coordinate system.  Re-normalizing those positions would shift samples
+    # away from the actual cells, especially for irregular silhouettes.
+    direct: Dict[str, Tuple[float, float]] = {}
+    for node_id, node in nodes.items():
+        data = node.get("data") if isinstance(node, dict) else None
+        center = data.get("pixel_center") if isinstance(data, dict) else None
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            direct = {}
+            break
+        try:
+            px = float(center[0])
+            py = float(center[1])
+        except (TypeError, ValueError):
+            direct = {}
+            break
+        if not (0.0 <= px < float(width) and 0.0 <= py < float(height)):
+            direct = {}
+            break
+        direct[str(node_id)] = (px, py)
+    if len(direct) == len(nodes) and len(direct) >= 2:
+        return direct, {
+            "mode": "pixel_center",
+            "projected_nodes": len(direct),
+        }
+
     node_positions: List[Tuple[str, float, float]] = []
     for node_id, node in nodes.items():
         pos = node.get("pos", [0.0, 0.0, 0.0]) if isinstance(node, dict) else [0.0, 0.0, 0.0]
@@ -1345,7 +1696,7 @@ def detect_terminals_on_nodes(
     )
     bg_brightness = _brightness(bg_color)
     neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    neutral_brightness_max = max(brightness_max, 250.0)
+    neutral_brightness_max = 255.0
     neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
 
     points = list(projected.values())
@@ -1536,7 +1887,7 @@ def classify_level_type(
             scores["graph"] += 0.40
         if any(tok.startswith("bridge") for tok in hint_tokens):
             modifier_scores["bridges"] += 0.70
-        if any(tok.startswith("warp") or tok == "portal" for tok in hint_tokens):
+        if any(tok.startswith("warp") or tok in {"portal", "boundless"} for tok in hint_tokens):
             modifier_scores["warps"] += 0.75
         if any(tok.startswith("wall") or tok in {"blocked", "blockers"} for tok in hint_tokens):
             modifier_scores["walls"] += 0.60
@@ -1549,6 +1900,21 @@ def classify_level_type(
             "vertical_lines": grid.vertical_lines,
             "horizontal_lines": grid.horizontal_lines,
         }
+        if len(grid.x_lines) >= 2 and len(grid.y_lines) >= 2:
+            image_width, image_height = image.size
+            x_coverage = (grid.x_lines[-1] - grid.x_lines[0]) / float(max(1, image_width))
+            y_coverage = (grid.y_lines[-1] - grid.y_lines[0]) / float(max(1, image_height))
+            signals["grid"]["coverage"] = {
+                "x": round(x_coverage, 4),
+                "y": round(y_coverage, 4),
+            }
+            # Decorative line fragments can form a tiny, internally regular
+            # lattice inside a much larger free-form board.  Treating that as
+            # the whole board produced 2x2/4x4 imports with missing terminals.
+            if min(x_coverage, y_coverage) < 0.45:
+                scores["square"] -= 0.24
+                scores["graph"] += 0.42
+                signals["recommended_graph_layout"] = "regions"
         scores["square"] += 0.40
         if abs(grid.vertical_lines - grid.horizontal_lines) <= 2:
             scores["square"] += 0.12
@@ -1557,12 +1923,29 @@ def classify_level_type(
             signals["grid_ratio"] = round(ratio, 3)
             if 0.8 <= ratio <= 1.25:
                 scores["square"] += 0.06
+        bridge_cells, bridge_info = detect_bridge_cells(image, rows=grid.rows, cols=grid.cols)
+        signals["bridge_detection"] = bridge_info
+        if bridge_cells:
+            modifier_scores["bridges"] += 0.78
+        warp_edges, warp_info = detect_warp_edges(image, rows=grid.rows, cols=grid.cols)
+        signals["warp_detection"] = warp_info
+        if warp_edges:
+            modifier_scores["warps"] += 0.82
+        wall_edges, wall_info = detect_wall_edges(image, rows=grid.rows, cols=grid.cols)
+        signals["wall_detection"] = wall_info
+        wall_fraction = len(wall_edges) / float(max(1, int(wall_info.get("samples", 0))))
+        # Modifiers are independent: walls can appear in classic, bridge, and
+        # warp puzzles.  The wall detector samples only internal adjacencies,
+        # so a confidently detected wall set must not be discarded merely
+        # because another mechanic was also found.
+        if len(wall_edges) >= 3 and wall_fraction >= 0.015:
+            modifier_scores["walls"] += 0.78
     else:
         warnings.append("Grid lines were not strongly detected.")
 
     cv2, np = _try_import_cv2()
     if cv2 is not None and np is not None:
-        gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+        gray, gray_backend = _accelerated_gray(image, cv2=cv2, np=np)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blur, 50, 150)
         h, w = gray.shape[:2]
@@ -1699,6 +2082,49 @@ def classify_level_type(
                     "touches_frame": bool(chosen_meta.get("touches_frame", 0.0)),
                 }
 
+                strong_template_hint = any(
+                    token.startswith(("cube", "star", "figure8"))
+                    or token in {"figure", "lemniscate", "infinity"}
+                    for token in hint_tokens
+                )
+                strong_irregular_outline = (
+                    radial_spread >= 0.20
+                    and len(approx) >= 7
+                    and extent <= 0.88
+                )
+                looks_like_freeform_cells = (
+                    (
+                        grid is None
+                        or (
+                            (
+                                (
+                                    modifier_scores["warps"] < 0.60
+                                    and modifier_scores["bridges"] < 0.60
+                                )
+                                or strong_irregular_outline
+                            )
+                            and radial_spread >= 0.15
+                            and extent <= 0.78
+                        )
+                        or strong_irregular_outline
+                    )
+                    and not strong_template_hint
+                    and 0.04 <= area / float(max(1, h * w)) <= 0.92
+                    and len(approx) >= 5
+                    and extent <= 0.88
+                    and not (
+                        circularity >= 0.72
+                        and radial_spread <= 0.14
+                        and len(approx) <= 10
+                    )
+                )
+                if looks_like_freeform_cells:
+                    # When a screenshot contains enclosed cells inside a
+                    # non-rectangular silhouette, deriving its region graph is
+                    # safer than force-fitting a cube/star/figure-8 template.
+                    scores["graph"] += 0.62
+                    signals["recommended_graph_layout"] = "regions"
+
                 if len(approx) >= 8 and solidity < 0.82 and radial_spread >= 0.18:
                     scores["star"] += 0.42
                 if 5 <= len(approx) <= 7 and 0.55 <= extent <= 0.9 and 0.72 <= solidity <= 0.95:
@@ -1790,6 +2216,27 @@ def classify_level_type(
                     scores["figure8"] += 0.48
                 else:
                     scores["figure8"] += 0.16
+
+        # A successful concentric-grid fit is substantially stronger evidence
+        # than raw line orientation. Radial spokes often look hexagonal to the
+        # Hough scorer, which previously routed true ring boards to the hex
+        # detector and failed before generation could begin.
+        direct_circle_grid, direct_circle_info = detect_circle_grid(
+            image,
+            min_sectors=3,
+            max_sectors=32,
+        )
+        if direct_circle_grid is not None:
+            contour_circularity = float(direct_circle_info.get("contour_circularity", 0.0))
+            signals["circle_grid"] = {
+                "rings": int(direct_circle_grid.rings),
+                "sectors": int(direct_circle_grid.sectors),
+                "contour_circularity": round(contour_circularity, 4),
+            }
+            if direct_circle_grid.rings >= 2 and contour_circularity >= 0.84:
+                scores["circle"] += 0.72
+                scores["hex"] -= 0.08
+                scores["square"] -= 0.05
     else:
         warnings.append("OpenCV is unavailable; classifier is using lightweight fallback signals.")
 
@@ -1798,6 +2245,12 @@ def classify_level_type(
     top_score = ordered[0][1]
     second_score = ordered[1][1] if len(ordered) > 1 else 0.0
     margin = max(0.0, top_score - second_score)
+
+    if geometry == "hex" and grid is None:
+        # The production Hexes boards are clipped/staggered rather than a
+        # width*height parallelogram. Preserve their exact cell set through
+        # region extraction, then regularize the six-neighbor adjacency.
+        signals["recommended_graph_layout"] = "regions"
 
     selected_modifiers = tuple(
         sorted(mod for mod, score in modifier_scores.items() if score >= 0.60)
@@ -1810,6 +2263,12 @@ def classify_level_type(
     if geometry != "square" and "bridges" in selected_modifiers:
         selected_modifiers = tuple(mod for mod in selected_modifiers if mod != "bridges")
         warnings.append("Bridge modifier dropped because detected geometry is not square.")
+    if geometry != "square" and "walls" in selected_modifiers:
+        selected_modifiers = tuple(mod for mod in selected_modifiers if mod != "walls")
+        warnings.append("Wall modifier dropped because detected geometry is not a square grid.")
+    if geometry == "circle" and "warps" in selected_modifiers:
+        selected_modifiers = tuple(mod for mod in selected_modifiers if mod != "warps")
+        warnings.append("Warp modifier dropped because a concentric circle grid was detected.")
 
     total_score = sum(max(0.001, score) for _kind, score in ordered)
     candidates: List[LevelTypeCandidate] = []
@@ -1899,6 +2358,128 @@ def _dedupe_edge_pairs(edges: Iterable[Tuple[str, str]]) -> List[Tuple[str, str]
     return out
 
 
+def detect_bridge_cells(
+    image: Image.Image,
+    *,
+    rows: int,
+    cols: int,
+    center_ratio: float = 0.58,
+    contrast_threshold: float = 38.0,
+) -> Tuple[List[Tuple[int, int]], Dict[str, Any]]:
+    """Detect both legacy cross and official double-arch bridge glyphs."""
+    cv2, np = _try_import_cv2()
+    if cv2 is None or np is None:
+        return [], {"warnings": ["OpenCV is unavailable for bridge detection."]}
+    width, height = image.size
+    if rows <= 0 or cols <= 0 or width <= 0 or height <= 0:
+        return [], {"warnings": ["Invalid dimensions for bridge detection."]}
+
+    rgb = np.asarray(image.convert("RGB"))
+    gray, gray_backend = _accelerated_gray(image, cv2=cv2, np=np, rgb=rgb)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    x_lines, y_lines, geometry_source = _grid_lines_for_dimensions(
+        image,
+        rows=rows,
+        cols=cols,
+    )
+    half_ratio = max(0.2, min(0.45, center_ratio * 0.5))
+    detections: List[Tuple[int, int]] = []
+    candidates: List[Dict[str, Any]] = []
+
+    for row in range(rows):
+        for col in range(cols):
+            cell_w = x_lines[col + 1] - x_lines[col]
+            cell_h = y_lines[row + 1] - y_lines[row]
+            cx = (x_lines[col] + x_lines[col + 1]) * 0.5
+            cy = (y_lines[row] + y_lines[row + 1]) * 0.5
+            x0 = max(0, int(cx - cell_w * half_ratio))
+            x1 = min(width, int(cx + cell_w * half_ratio))
+            y0 = max(0, int(cy - cell_h * half_ratio))
+            y1 = min(height, int(cy + cell_h * half_ratio))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            region_gray = gray[y0:y1, x0:x1]
+            region_hsv = hsv[y0:y1, x0:x1]
+            background = float(np.median(region_gray))
+            contrast = np.abs(region_gray.astype(np.float32) - background)
+            # Bridge glyphs are normally white/gray. Excluding strongly
+            # saturated pixels prevents colored terminal circles from looking
+            # like crosses through their horizontal/vertical diameters.
+            neutral = region_hsv[:, :, 1] <= 80
+            bright_cutoff = max(125.0, background + contrast_threshold)
+            mask = (contrast >= contrast_threshold) & neutral
+            bright_mask = (region_gray.astype(np.float32) >= bright_cutoff) & neutral
+            hh, ww = mask.shape
+            band_y = max(1, int(round(hh * 0.10)))
+            band_x = max(1, int(round(ww * 0.10)))
+            mid_y = hh // 2
+            mid_x = ww // 2
+            horizontal = mask[max(0, mid_y - band_y) : min(hh, mid_y + band_y + 1), :]
+            vertical = mask[:, max(0, mid_x - band_x) : min(ww, mid_x + band_x + 1)]
+            horizontal_coverage = float(np.count_nonzero(np.any(horizontal, axis=0))) / float(max(1, ww))
+            vertical_coverage = float(np.count_nonzero(np.any(vertical, axis=1))) / float(max(1, hh))
+            fill_fraction = float(np.count_nonzero(mask)) / float(max(1, mask.size))
+            is_cross = (
+                horizontal_coverage >= 0.58
+                and vertical_coverage >= 0.58
+                and 0.025 <= fill_fraction <= 0.34
+            )
+            # The production Flow Free: Bridges artwork is not a plus.  It is
+            # drawn as two horizontal rails with matching semicircular humps.
+            # Detect the two separated, wide neutral strokes; the center crop
+            # keeps ordinary grid boundaries out of this signature.
+            row_coverage = np.mean(bright_mask, axis=1)
+            active_rows = [bool(value >= 0.42) for value in row_coverage]
+            stroke_runs: List[Tuple[int, int]] = []
+            run_start: Optional[int] = None
+            for index, active in enumerate(active_rows + [False]):
+                if active and run_start is None:
+                    run_start = index
+                elif not active and run_start is not None:
+                    stroke_runs.append((run_start, index - 1))
+                    run_start = None
+            stroke_centers = [0.5 * (start + end) for start, end in stroke_runs]
+            has_upper = any(center <= hh * 0.46 for center in stroke_centers)
+            has_lower = any(center >= hh * 0.54 for center in stroke_centers)
+            separated = any(
+                lower - upper >= hh * 0.18
+                for upper in stroke_centers
+                for lower in stroke_centers
+                if lower > upper
+            )
+            bright_fill = float(np.count_nonzero(bright_mask)) / float(max(1, bright_mask.size))
+            is_double_arch = (
+                len(stroke_runs) >= 2
+                and has_upper
+                and has_lower
+                and separated
+                and 0.035 <= bright_fill <= 0.38
+            )
+            is_bridge = is_cross or is_double_arch
+            if is_bridge:
+                detections.append((row, col))
+                candidates.append(
+                    {
+                        "row": row,
+                        "col": col,
+                        "horizontal_coverage": round(horizontal_coverage, 3),
+                        "vertical_coverage": round(vertical_coverage, 3),
+                        "fill_fraction": round(fill_fraction, 3),
+                        "bright_fill_fraction": round(bright_fill, 3),
+                        "stroke_runs": len(stroke_runs),
+                        "glyph": "double-arch" if is_double_arch else "cross",
+                    }
+                )
+
+    warnings = [] if detections else ["No bridge-cell markers were confidently detected."]
+    return detections, {
+        "detected_bridges": len(detections),
+        "cells": candidates,
+        "grid_geometry_source": geometry_source,
+        "warnings": warnings,
+    }
+
+
 def detect_wall_edges(
     image: Image.Image,
     *,
@@ -1906,8 +2487,7 @@ def detect_wall_edges(
     cols: int,
     sample_span_ratio: float = 0.55,
     sample_thickness_ratio: float = 0.12,
-    min_darkness: float = 0.45,
-    darkness_margin: float = 0.18,
+    contrast_margin: float = 0.16,
     max_wall_fraction: float = 0.65,
 ) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
     """Heuristically detect blocked adjacencies (walls) on a square grid image.
@@ -1921,8 +2501,29 @@ def detect_wall_edges(
         return [], {"warnings": ["Invalid dimensions for wall detection."]}
 
     gray = image.convert("L")
-    cell_w = width / float(cols)
-    cell_h = height / float(rows)
+    detected_positions = _detect_grid_hough_positions(
+        image,
+        line_threshold=0.35,
+    )
+    if detected_positions is not None:
+        raw_x, raw_y, detected_width, detected_height = detected_positions
+    else:
+        raw_x, raw_y, detected_width, detected_height = [], [], width, height
+    if len(raw_x) == cols + 1:
+        x_scale = width / float(max(1, detected_width))
+        x_lines = [value * x_scale for value in raw_x]
+    else:
+        x_lines = [width * index / float(cols) for index in range(cols + 1)]
+    if len(raw_y) == rows + 1:
+        y_scale = height / float(max(1, detected_height))
+        y_lines = [value * y_scale for value in raw_y]
+    else:
+        y_lines = [height * index / float(rows) for index in range(rows + 1)]
+
+    cell_widths = [right - left for left, right in zip(x_lines, x_lines[1:])]
+    cell_heights = [bottom - top for top, bottom in zip(y_lines, y_lines[1:])]
+    cell_w = sorted(cell_widths)[len(cell_widths) // 2]
+    cell_h = sorted(cell_heights)[len(cell_heights) // 2]
     base_cell = min(cell_w, cell_h)
     span = max(3, int(base_cell * sample_span_ratio))
     thickness = max(1, int(base_cell * sample_thickness_ratio))
@@ -1939,16 +2540,16 @@ def detect_wall_edges(
             return None
         return cx0, cy0, cx1, cy1
 
-    def sample_darkness(region: Tuple[int, int, int, int]) -> float:
+    def sample_brightness(region: Tuple[int, int, int, int]) -> float:
         stat = ImageStat.Stat(gray.crop(region))
         bright = float(stat.mean[0]) if stat.mean else 255.0
-        return max(0.0, min(1.0, (255.0 - bright) / 255.0))
+        return max(0.0, min(1.0, bright / 255.0))
 
     # Vertical boundaries (between (x,y) and (x+1,y))
     for y in range(rows):
-        y_mid = int(round((y + 0.5) * cell_h))
+        y_mid = int(round((y_lines[y] + y_lines[y + 1]) * 0.5))
         for x in range(cols - 1):
-            x_mid = int(round((x + 1) * cell_w))
+            x_mid = int(round(x_lines[x + 1]))
             region = clamp_region(
                 x_mid - thickness // 2,
                 y_mid - span // 2,
@@ -1957,17 +2558,17 @@ def detect_wall_edges(
             )
             if region is None:
                 continue
-            darkness = sample_darkness(region)
+            brightness = sample_brightness(region)
             u = f"{x},{y}"
             v = f"{x + 1},{y}"
-            samples.append(darkness)
-            candidates.append((darkness, u, v))
+            samples.append(brightness)
+            candidates.append((brightness, u, v))
 
     # Horizontal boundaries (between (x,y) and (x,y+1))
     for y in range(rows - 1):
-        y_mid = int(round((y + 1) * cell_h))
+        y_mid = int(round(y_lines[y + 1]))
         for x in range(cols):
-            x_mid = int(round((x + 0.5) * cell_w))
+            x_mid = int(round((x_lines[x] + x_lines[x + 1]) * 0.5))
             region = clamp_region(
                 x_mid - span // 2,
                 y_mid - thickness // 2,
@@ -1976,19 +2577,25 @@ def detect_wall_edges(
             )
             if region is None:
                 continue
-            darkness = sample_darkness(region)
+            brightness = sample_brightness(region)
             u = f"{x},{y}"
             v = f"{x},{y + 1}"
-            samples.append(darkness)
-            candidates.append((darkness, u, v))
+            samples.append(brightness)
+            candidates.append((brightness, u, v))
 
     if not candidates:
         return [], {"warnings": ["No wall boundary samples were collected."]}
 
-    sorted_dark = sorted(samples)
-    median = sorted_dark[len(sorted_dark) // 2]
-    threshold = max(min_darkness, median + darkness_margin)
-    wall_edges = [(u, v) for darkness, u, v in candidates if darkness >= threshold]
+    sorted_brightness = sorted(samples)
+    median = sorted_brightness[len(sorted_brightness) // 2]
+    bright_threshold = min(1.0, median + contrast_margin)
+    dark_threshold = max(0.0, median - contrast_margin)
+    bright_walls = [(u, v) for brightness, u, v in candidates if brightness >= bright_threshold]
+    dark_walls = [(u, v) for brightness, u, v in candidates if brightness <= dark_threshold]
+    # Choose one polarity per screenshot. Combining both tails makes gradients
+    # and colored terminal bleed much more likely to create false walls.
+    wall_edges = bright_walls if len(bright_walls) >= len(dark_walls) else dark_walls
+    polarity = "bright" if wall_edges is bright_walls else "dark"
     wall_edges = _dedupe_edge_pairs(wall_edges)
 
     warnings: List[str] = []
@@ -2000,12 +2607,178 @@ def detect_wall_edges(
 
     info: Dict[str, Any] = {
         "samples": len(candidates),
+        "count": len(wall_edges),
         "detected_walls": len(wall_edges),
-        "median_darkness": round(float(median), 4),
-        "threshold_darkness": round(float(threshold), 4),
+        "polarity": polarity,
+        "median_brightness": round(float(median), 4),
+        "bright_threshold": round(float(bright_threshold), 4),
+        "dark_threshold": round(float(dark_threshold), 4),
+        "grid_bounds": {
+            "left": round(float(x_lines[0]), 2),
+            "top": round(float(y_lines[0]), 2),
+            "right": round(float(x_lines[-1]), 2),
+            "bottom": round(float(y_lines[-1]), 2),
+        },
         "warnings": warnings,
     }
     return wall_edges, info
+
+
+def detect_warp_edges(
+    image: Image.Image,
+    *,
+    rows: int,
+    cols: int,
+) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
+    """Detect paired Flow Warps ports as aligned gaps in opposite borders.
+
+    Official Warps boards mark a usable wrap with a break in both opposing
+    border segments, commonly accompanied by a short dotted guide extending
+    out of the board.  Requiring an aligned pair avoids treating arbitrary
+    missing/antialiased border pixels as a nonlocal connection.
+    """
+
+    cv2, np = _try_import_cv2()
+    width, height = image.size
+    if cv2 is None or np is None:
+        return [], {"warnings": ["OpenCV is unavailable for warp-port detection."]}
+    if rows <= 0 or cols <= 0 or width <= 0 or height <= 0:
+        return [], {"warnings": ["Invalid dimensions for warp-port detection."]}
+
+    x_lines, y_lines, geometry_source = _grid_lines_for_dimensions(
+        image,
+        rows=rows,
+        cols=cols,
+        line_threshold=0.35,
+    )
+    if geometry_source != "detected":
+        return [], {"warnings": ["Grid bounds were not detected for warp-port inference."]}
+    cell_widths = [right - left for left, right in zip(x_lines, x_lines[1:])]
+    cell_heights = [bottom - top for top, bottom in zip(y_lines, y_lines[1:])]
+    cell_w = sorted(cell_widths)[len(cell_widths) // 2]
+    cell_h = sorted(cell_heights)[len(cell_heights) // 2]
+    base_cell = max(2.0, min(cell_w, cell_h))
+
+    rgb = np.asarray(image.convert("RGB"))
+    gray, gray_backend = _accelerated_gray(image, cv2=cv2, np=np, rgb=rgb)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    band = max(2, int(round(base_cell * 0.14)))
+    segment_margin = 0.18
+
+    image_median = float(np.median(gray))
+    bright_cutoff = max(70.0, min(170.0, image_median + 55.0))
+    border_paint = (gray >= bright_cutoff) & (hsv[:, :, 1] <= 200)
+
+    def vertical_coverage(x: float, y0: float, y1: float) -> float:
+        inset = max(1, int(round((y1 - y0) * segment_margin)))
+        left = max(0, int(round(x)) - band)
+        right = min(width, int(round(x)) + band + 1)
+        top = max(0, int(round(y0)) + inset)
+        bottom = min(height, int(round(y1)) - inset)
+        if right <= left or bottom <= top:
+            return 0.0
+        region = border_paint[top:bottom, left:right]
+        return float(np.count_nonzero(region)) / float(max(1, region.size))
+
+    def horizontal_coverage(y: float, x0: float, x1: float) -> float:
+        inset = max(1, int(round((x1 - x0) * segment_margin)))
+        left = max(0, int(round(x0)) + inset)
+        right = min(width, int(round(x1)) - inset)
+        top = max(0, int(round(y)) - band)
+        bottom = min(height, int(round(y)) + band + 1)
+        if right <= left or bottom <= top:
+            return 0.0
+        region = border_paint[top:bottom, left:right]
+        return float(np.count_nonzero(region)) / float(max(1, region.size))
+
+    left_strengths = [vertical_coverage(x_lines[0], y_lines[row], y_lines[row + 1]) for row in range(rows)]
+    right_strengths = [vertical_coverage(x_lines[-1], y_lines[row], y_lines[row + 1]) for row in range(rows)]
+    top_strengths = [horizontal_coverage(y_lines[0], x_lines[col], x_lines[col + 1]) for col in range(cols)]
+    bottom_strengths = [horizontal_coverage(y_lines[-1], x_lines[col], x_lines[col + 1]) for col in range(cols)]
+
+    # Warps artwork reserves roughly one cell outside the detected board for
+    # its shadow cells.  Requiring that room prevents a tightly cropped normal
+    # grid with a faint border from being interpreted as fully toroidal.
+    horizontal_margin = min(x_lines[0], width - x_lines[-1]) / max(1.0, cell_w)
+    vertical_margin = min(y_lines[0], height - y_lines[-1]) / max(1.0, cell_h)
+
+    # A fully Boundless board can have no intact outer-border segment at all.
+    # Its stepped internal perimeter still contains the characteristic thick
+    # stroke, so measure the strongest segment anywhere on the lattice.
+    all_segment_strengths: List[float] = []
+    for x in x_lines:
+        all_segment_strengths.extend(
+            vertical_coverage(x, y_lines[row], y_lines[row + 1]) for row in range(rows)
+        )
+    for y in y_lines:
+        all_segment_strengths.extend(
+            horizontal_coverage(y, x_lines[col], x_lines[col + 1]) for col in range(cols)
+        )
+    perimeter_signature = max(all_segment_strengths, default=0.0)
+    has_warp_artwork = perimeter_signature >= 0.20
+    gap_threshold = 0.14
+
+    vertical_border_reference = max(left_strengths + right_strengths, default=0.0)
+    horizontal_border_reference = max(top_strengths + bottom_strengths, default=0.0)
+    horizontal_has_context = horizontal_margin >= 0.28 or vertical_border_reference >= 0.20
+    vertical_has_context = vertical_margin >= 0.28 or horizontal_border_reference >= 0.20
+    horizontal_rows = (
+        [
+            index
+            for index, (left, right) in enumerate(zip(left_strengths, right_strengths))
+            if left <= gap_threshold and right <= gap_threshold
+        ]
+        if has_warp_artwork and horizontal_has_context
+        else []
+    )
+    vertical_cols = (
+        [
+            index
+            for index, (top, bottom) in enumerate(zip(top_strengths, bottom_strengths))
+            if top <= gap_threshold and bottom <= gap_threshold
+        ]
+        if has_warp_artwork and vertical_has_context
+        else []
+    )
+    warp_edges: List[Tuple[str, str]] = []
+    if cols > 2:
+        warp_edges.extend((f"0,{row}", f"{cols - 1},{row}") for row in horizontal_rows)
+    if rows > 2:
+        warp_edges.extend((f"{col},0", f"{col},{rows - 1}") for col in vertical_cols)
+    warp_edges = _dedupe_edge_pairs(warp_edges)
+
+    warnings: List[str] = []
+    if not warp_edges:
+        warnings.append("No paired opposite-border warp ports were confidently detected.")
+    return warp_edges, {
+        "count": len(warp_edges),
+        "mode": "paired-opposite-border-gaps",
+        "horizontal_rows": horizontal_rows,
+        "vertical_columns": vertical_cols,
+        "border_reference": {
+            "vertical": round(float(vertical_border_reference), 4),
+            "horizontal": round(float(horizontal_border_reference), 4),
+        },
+        "bright_cutoff": round(float(bright_cutoff), 2),
+        "perimeter_signature": round(float(perimeter_signature), 4),
+        "outside_margin_cells": {
+            "horizontal": round(float(horizontal_margin), 4),
+            "vertical": round(float(vertical_margin), 4),
+        },
+        "coverage": {
+            "left": [round(float(value), 4) for value in left_strengths],
+            "right": [round(float(value), 4) for value in right_strengths],
+            "top": [round(float(value), 4) for value in top_strengths],
+            "bottom": [round(float(value), 4) for value in bottom_strengths],
+        },
+        "grid_bounds": {
+            "left": round(x_lines[0], 2),
+            "top": round(y_lines[0], 2),
+            "right": round(x_lines[-1], 2),
+            "bottom": round(y_lines[-1], 2),
+        },
+        "warnings": warnings,
+    }
 
 
 def _edge_subdivide(
@@ -2040,83 +2813,193 @@ def _edge_subdivide(
     return nodes_obj, edges
 
 
-def _build_cube_topology(detail: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
-    base_nodes: Dict[str, Tuple[float, float, float]] = {
-        "f0": (-1.1, 1.0, 0.0),
-        "f1": (1.0, 1.0, 0.0),
-        "f2": (1.0, -1.1, 0.0),
-        "f3": (-1.1, -1.1, 0.0),
-        "b0": (-0.25, 1.8, 0.0),
-        "b1": (1.85, 1.8, 0.0),
-        "b2": (1.85, -0.25, 0.0),
-        "b3": (-0.25, -0.25, 0.0),
-    }
-    base_edges: List[Tuple[str, str]] = [
-        ("f0", "f1"),
-        ("f1", "f2"),
-        ("f2", "f3"),
-        ("f3", "f0"),
-        ("b0", "b1"),
-        ("b1", "b2"),
-        ("b2", "b3"),
-        ("b3", "b0"),
-        ("f0", "b0"),
-        ("f1", "b1"),
-        ("f2", "b2"),
-        ("f3", "b3"),
-    ]
-    return _edge_subdivide(base_nodes, base_edges, detail=max(1, detail), prefix="cube")
+_SQRT3_OVER_2 = math.sqrt(3.0) / 2.0
 
 
-def _build_star_topology(detail: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
-    outer_r = 2.2
-    inner_r = 0.95
-    base_nodes: Dict[str, Tuple[float, float, float]] = {"c": (0.0, 0.0, 0.0)}
-    for i in range(5):
-        outer_theta = -math.pi / 2.0 + (2.0 * math.pi * i / 5.0)
-        inner_theta = outer_theta + math.pi / 5.0
-        base_nodes[f"o{i}"] = (outer_r * math.cos(outer_theta), outer_r * math.sin(outer_theta), 0.0)
-        base_nodes[f"i{i}"] = (inner_r * math.cos(inner_theta), inner_r * math.sin(inner_theta), 0.0)
-
-    base_edges: List[Tuple[str, str]] = []
-    for i in range(5):
-        base_edges.append((f"o{i}", f"i{i}"))
-        base_edges.append((f"i{i}", f"o{(i + 1) % 5}"))
-        base_edges.append((f"o{i}", f"o{(i + 2) % 5}"))
-        base_edges.append(("c", f"i{i}"))
-
-    return _edge_subdivide(base_nodes, base_edges, detail=max(1, detail), prefix="star")
+def _axial_to_xy(q: float, r: float) -> Tuple[float, float]:
+    return (q + 0.5 * r, -_SQRT3_OVER_2 * r)
 
 
-def _build_figure8_topology(detail: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
-    n = max(6, int(detail))
-    r = 1.15
-    c_id = "c"
-    base_nodes: Dict[str, Tuple[float, float, float]] = {c_id: (0.0, 0.0, 0.0)}
+def _point_in_polygon(x: float, y: float, polygon: List[Tuple[float, float]]) -> bool:
+    inside = False
+    if len(polygon) < 3:
+        return False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if (yi > y) != (yj > y):
+            denom = (yj - yi)
+            if abs(denom) < 1e-12:
+                j = i
+                continue
+            x_cross = (xj - xi) * (y - yi) / denom + xi
+            if x < x_cross:
+                inside = not inside
+        j = i
+    return inside
 
-    left_nodes: List[str] = []
-    for k in range(1, n):
-        angle = 2.0 * math.pi * float(k) / float(n)
-        nid = f"l{k}"
-        base_nodes[nid] = (-1.5 + r * math.cos(angle), r * math.sin(angle), 0.0)
-        left_nodes.append(nid)
 
-    right_nodes: List[str] = []
-    for k in range(0, n - 1):
-        angle = 2.0 * math.pi * float(k) / float(n)
-        nid = f"r{k}"
-        base_nodes[nid] = (1.5 + r * math.cos(angle), r * math.sin(angle), 0.0)
-        right_nodes.append(nid)
+def _build_lattice_from_mask(
+    *,
+    prefix: str,
+    q_extent: int,
+    r_extent: int,
+    mask: Any,
+) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
+    q_lim = max(2, int(q_extent))
+    r_lim = max(2, int(r_extent))
+    ids: Dict[Tuple[int, int], str] = {}
+    positions: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    nodes_obj: Dict[str, Dict[str, Any]] = {}
 
-    base_edges: List[Tuple[str, str]] = []
-    seq_left = [c_id] + left_nodes
-    seq_right = [c_id] + right_nodes
-    for idx in range(len(seq_left)):
-        base_edges.append((seq_left[idx], seq_left[(idx + 1) % len(seq_left)]))
-    for idx in range(len(seq_right)):
-        base_edges.append((seq_right[idx], seq_right[(idx + 1) % len(seq_right)]))
+    for q in range(-q_lim, q_lim + 1):
+        for r in range(-r_lim, r_lim + 1):
+            x, y = _axial_to_xy(float(q), float(r))
+            if not bool(mask(x, y)):
+                continue
+            node_id = f"{prefix}:{q},{r}"
+            ids[(q, r)] = node_id
+            positions[(q, r)] = (x, y)
+            nodes_obj[node_id] = {"pos": [float(x), float(y), 0.0]}
 
-    return _edge_subdivide(base_nodes, base_edges, detail=1, prefix="fig8")
+    edges: List[List[str]] = []
+    dirs = ((1, 0), (0, 1), (1, -1))
+    for (q, r), node_id in ids.items():
+        x0, y0 = positions[(q, r)]
+        for dq, dr in dirs:
+            nb = (q + dq, r + dr)
+            nb_id = ids.get(nb)
+            if nb_id is None:
+                continue
+            x1, y1 = positions[nb]
+            mx = 0.5 * (x0 + x1)
+            my = 0.5 * (y0 + y1)
+            if bool(mask(mx, my)):
+                edges.append([node_id, nb_id])
+
+    return nodes_obj, edges
+
+
+def _cube_face_center(
+    tl: Tuple[float, float],
+    tr: Tuple[float, float],
+    bl: Tuple[float, float],
+    *,
+    row: int,
+    col: int,
+    size: int,
+) -> Tuple[float, float]:
+    s = max(1, int(size))
+    u = (float(col) + 0.5) / float(s)
+    v = (float(row) + 0.5) / float(s)
+    x = tl[0] + (tr[0] - tl[0]) * u + (bl[0] - tl[0]) * v
+    y = tl[1] + (tr[1] - tl[1]) * u + (bl[1] - tl[1]) * v
+    return x, y
+
+
+def _build_cube_topology(width: int, height: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
+    # Model cube boards as 3 visible square faces (top/left/right), each n x n cells.
+    n = max(1, int(width), int(height))
+    top_tl = (0.0, 2.0)
+    top_tr = (2.0, 1.0)
+    top_bl = (-2.0, 1.0)
+    left_tl = (-2.0, 1.0)
+    left_tr = (0.0, 0.0)
+    left_bl = (-2.0, -1.0)
+    right_tl = (0.0, 0.0)
+    right_tr = (2.0, 1.0)
+    right_bl = (0.0, -2.0)
+
+    nodes_obj: Dict[str, Dict[str, Any]] = {}
+    ids: Dict[Tuple[str, int, int], str] = {}
+
+    def add_face(face: str, tl: Tuple[float, float], tr: Tuple[float, float], bl: Tuple[float, float]) -> None:
+        for row in range(n):
+            for col in range(n):
+                node_id = f"{face}:{col},{row}"
+                x, y = _cube_face_center(tl, tr, bl, row=row, col=col, size=n)
+                nodes_obj[node_id] = {"pos": [float(x), float(y), 0.0]}
+                ids[(face, col, row)] = node_id
+
+    add_face("cube:t", top_tl, top_tr, top_bl)
+    add_face("cube:l", left_tl, left_tr, left_bl)
+    add_face("cube:r", right_tl, right_tr, right_bl)
+
+    edge_set: Set[Tuple[str, str]] = set()
+
+    def add_edge(a: str, b: str) -> None:
+        if a == b:
+            return
+        edge = (a, b) if a < b else (b, a)
+        edge_set.add(edge)
+
+    for face in ("cube:t", "cube:l", "cube:r"):
+        for row in range(n):
+            for col in range(n):
+                u = ids[(face, col, row)]
+                if col + 1 < n:
+                    add_edge(u, ids[(face, col + 1, row)])
+                if row + 1 < n:
+                    add_edge(u, ids[(face, col, row + 1)])
+
+    # Shared edges between visible cube faces.
+    for k in range(n):
+        add_edge(ids[("cube:t", k, n - 1)], ids[("cube:l", k, 0)])
+        add_edge(ids[("cube:t", n - 1, k)], ids[("cube:r", n - 1 - k, 0)])
+        add_edge(ids[("cube:l", n - 1, k)], ids[("cube:r", 0, k)])
+
+    edges = [[a, b] for a, b in sorted(edge_set)]
+    return nodes_obj, edges
+
+
+def _build_star_topology(width: int, height: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
+    w = max(1, int(width))
+    h = max(1, int(height))
+    outer_r = 1.35 + 1.1 * float(w) + 0.45 * float(h)
+    inner_r = max(0.9, 0.52 * outer_r + 0.18 * float(h) - 0.25)
+    if inner_r >= outer_r:
+        inner_r = outer_r * 0.55
+
+    polygon: List[Tuple[float, float]] = []
+    for i in range(12):
+        angle = (math.pi / 2.0) - (math.pi / 6.0) * float(i)
+        radius = outer_r if (i % 2 == 0) else inner_r
+        polygon.append((radius * math.cos(angle), radius * math.sin(angle)))
+
+    def mask(x: float, y: float) -> bool:
+        return _point_in_polygon(x, y, polygon)
+
+    extent = int(math.ceil(outer_r * 2.0)) + 3
+    return _build_lattice_from_mask(prefix="star", q_extent=extent, r_extent=extent, mask=mask)
+
+
+def _build_figure8_topology(width: int, height: int) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]]]:
+    w = max(1, int(width))
+    h = max(1, int(height))
+    outer_r = 0.85 + 0.5 * float(h) + 0.35 * float(w)
+    inner_r = max(0.45, outer_r - (0.75 + 0.55 * float(w)))
+    sep = max(0.95, inner_r + 0.22 * float(h) + 0.35)
+    bridge_half_w = max(0.5, 0.35 * float(w) + 0.15 * float(h))
+    bridge_half_h = max(0.6, 0.35 * float(h) + 0.2)
+
+    def dist(x: float, y: float, cx: float, cy: float) -> float:
+        return math.hypot(x - cx, y - cy)
+
+    def mask(x: float, y: float) -> bool:
+        top_outer = dist(x, y, 0.0, sep) <= outer_r
+        bot_outer = dist(x, y, 0.0, -sep) <= outer_r
+        bridge = abs(x) <= bridge_half_w and abs(y) <= bridge_half_h
+        if not (top_outer or bot_outer or bridge):
+            return False
+        in_hole = (dist(x, y, 0.0, sep) < inner_r) or (dist(x, y, 0.0, -sep) < inner_r)
+        if bridge:
+            return True
+        return not in_hole
+
+    extent_q = int(math.ceil(outer_r + sep + 2.5)) + 3
+    extent_r = int(math.ceil((outer_r + sep) / _SQRT3_OVER_2)) + 3
+    return _build_lattice_from_mask(prefix="fig8", q_extent=extent_q, r_extent=extent_r, mask=mask)
 
 
 def _default_terminals_from_nodes(nodes_obj: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -2136,6 +3019,426 @@ def _default_terminals_from_nodes(nodes_obj: Dict[str, Dict[str, Any]]) -> Dict[
     return {"A": [left, right]} if left != right else {}
 
 
+def detect_region_topology(
+    image: Image.Image,
+    *,
+    min_area_ratio: float = 0.0008,
+    max_area_ratio: float = 0.35,
+    adjacency_gap: Optional[int] = None,
+    max_regions: int = 500,
+    prefer_hex: bool = False,
+) -> Tuple[Dict[str, Dict[str, Any]], List[List[str]], Dict[str, Any]]:
+    """Extract an arbitrary Shapes board as a region-adjacency graph.
+
+    Bright/colored board lines are treated as barriers. Enclosed dark regions
+    become physical cells, and sufficiently long shared barriers become graph
+    adjacencies. This is a topology fallback for silhouettes/tracks that do not
+    match a parametric template; it intentionally derives cells rather than
+    sampling a six-neighbor lattice inside the outline.
+    """
+
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+    except Exception as exc:  # pragma: no cover - dependencies are required by the app
+        return {}, [], {"warnings": [f"Region topology detection requires OpenCV/numpy: {exc}"]}
+
+    rgb = np.asarray(image.convert("RGB"))
+    height, width = rgb.shape[:2]
+    if width < 16 or height < 16:
+        return {}, [], {"warnings": ["Image is too small for region topology detection."]}
+
+    gray, gray_backend = _accelerated_gray(image, cv2=cv2, np=np, rgb=rgb)
+    value = rgb.max(axis=2).astype(np.uint8)
+    saturation = (rgb.max(axis=2) - rgb.min(axis=2)).astype(np.uint8)
+
+    # Otsu catches white/bright boundaries; the chroma branch preserves dim
+    # colored grid lines against black/glowing game backgrounds.
+    _threshold, bright_mask = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    colored_mask = np.where((saturation >= 28) & (value >= 42), 255, 0).astype(np.uint8)
+    barrier = cv2.bitwise_or(bright_mask, colored_mask)
+
+    # Endpoint dots are compact filled blobs inside cells, not barriers. At
+    # low resolutions they can consume most of a cell and fragment the region
+    # graph, so remove only isolated round/compact components before closing
+    # the actual line network. This is scale-relative and also covers white or
+    # gray endpoints that enter through the brightness mask.
+    component_count, component_labels, component_stats, _component_centers = cv2.connectedComponentsWithStats(
+        barrier,
+        connectivity=8,
+    )
+    removed_terminal_blobs = 0
+    min_span = float(min(width, height))
+    for label in range(1, component_count):
+        x = int(component_stats[label, cv2.CC_STAT_LEFT])
+        y = int(component_stats[label, cv2.CC_STAT_TOP])
+        component_width = int(component_stats[label, cv2.CC_STAT_WIDTH])
+        component_height = int(component_stats[label, cv2.CC_STAT_HEIGHT])
+        area = float(component_stats[label, cv2.CC_STAT_AREA])
+        if component_width <= 0 or component_height <= 0:
+            continue
+        touches_frame = (
+            x <= 0
+            or y <= 0
+            or x + component_width >= width
+            or y + component_height >= height
+        )
+        short_side = float(min(component_width, component_height))
+        long_side = float(max(component_width, component_height))
+        fill_fraction = area / float(component_width * component_height)
+        if (
+            not touches_frame
+            and short_side >= max(4.0, min_span * 0.015)
+            and long_side <= max(14.0, min_span * 0.16)
+            and long_side / max(1.0, short_side) <= 1.65
+            and fill_fraction >= 0.42
+        ):
+            barrier[component_labels == label] = 0
+            removed_terminal_blobs += 1
+
+    close_size = max(3, int(round(min(width, height) / 320.0)) | 1)
+    barrier = cv2.morphologyEx(
+        barrier,
+        cv2.MORPH_CLOSE,
+        np.ones((close_size, close_size), dtype=np.uint8),
+        iterations=1,
+    )
+    # A one-pixel expansion closes antialiased gaps without erasing thin cells.
+    barrier = cv2.dilate(barrier, np.ones((3, 3), dtype=np.uint8), iterations=1)
+    passable = cv2.bitwise_not(barrier)
+    label_count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        passable,
+        connectivity=4,
+    )
+
+    border_labels = set(int(value_) for value_ in labels[0, :])
+    border_labels.update(int(value_) for value_ in labels[-1, :])
+    border_labels.update(int(value_) for value_ in labels[:, 0])
+    border_labels.update(int(value_) for value_ in labels[:, -1])
+    image_area = float(width * height)
+    min_area = max(12.0, image_area * max(0.0, min_area_ratio))
+    max_area = image_area * max(0.01, min(0.95, max_area_ratio))
+
+    kept_labels = [
+        label
+        for label in range(1, label_count)
+        if label not in border_labels
+        and min_area <= float(stats[label, cv2.CC_STAT_AREA]) <= max_area
+    ]
+    warnings: List[str] = []
+    if not kept_labels:
+        return {}, [], {
+            "warnings": ["No enclosed cell regions were detected."],
+            "barrier_fraction": round(float(np.count_nonzero(barrier)) / image_area, 4),
+        }
+    if len(kept_labels) > max_regions:
+        return {}, [], {
+            "warnings": [
+                f"Detected {len(kept_labels)} regions, exceeding the safety limit of {max_regions}."
+            ]
+        }
+
+    label_to_id = {
+        label: f"region:{index:03d}" for index, label in enumerate(kept_labels)
+    }
+    nodes_obj: Dict[str, Dict[str, Any]] = {}
+    masks: Dict[int, Any] = {}
+    for label in kept_labels:
+        node_id = label_to_id[label]
+        mask = np.where(labels == label, 255, 0).astype(np.uint8)
+        masks[label] = mask
+        contours, _hierarchy = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        polygon: List[List[float]] = []
+        if contours:
+            contour = max(contours, key=cv2.contourArea)
+            epsilon = max(1.0, 0.01 * cv2.arcLength(contour, True))
+            approximation = cv2.approxPolyDP(contour, epsilon, True)
+            polygon = [
+                [round(float(point[0][0]), 2), round(float(point[0][1]), 2)]
+                for point in approximation
+            ]
+        # Filled endpoint circles can remove an asymmetric bite from the
+        # passable component and noticeably pull its area centroid away from
+        # the real cell center.  The component bounding-box center remains
+        # stable for regular hex cells and improves both terminal projection
+        # and geometric adjacency reconstruction.
+        cx = float(stats[label, cv2.CC_STAT_LEFT]) + (float(stats[label, cv2.CC_STAT_WIDTH]) - 1.0) * 0.5
+        cy = float(stats[label, cv2.CC_STAT_TOP]) + (float(stats[label, cv2.CC_STAT_HEIGHT]) - 1.0) * 0.5
+        nodes_obj[node_id] = {
+            "pos": [float(cx), float(-cy), 0.0],
+            "data": {
+                "pixel_center": [round(float(cx), 2), round(float(cy), 2)],
+                "pixel_area": int(stats[label, cv2.CC_STAT_AREA]),
+                "polygon": polygon,
+                "region_label": int(label),
+            },
+        }
+
+    preferred_hex_edges: Optional[Set[Tuple[str, str]]] = None
+    if prefer_hex and len(nodes_obj) >= 4:
+        centers = {
+            node_id: (
+                float(node["data"]["pixel_center"][0]),
+                float(node["data"]["pixel_center"][1]),
+            )
+            for node_id, node in nodes_obj.items()
+        }
+        nearest_distances = [
+            min(
+                math.hypot(point[0] - other[0], point[1] - other[1])
+                for other_id, other in centers.items()
+                if other_id != node_id
+            )
+            for node_id, point in centers.items()
+        ]
+        pitch = float(np.median(np.asarray(nearest_distances, dtype=np.float32)))
+        if pitch > 1.0:
+            candidate_hex_edges: Set[Tuple[str, str]] = set()
+            center_items = sorted(centers.items())
+            for index, (left_id, left_center) in enumerate(center_items):
+                for right_id, right_center in center_items[index + 1 :]:
+                    if math.hypot(
+                        left_center[0] - right_center[0],
+                        left_center[1] - right_center[1],
+                    ) <= pitch * 1.22:
+                        candidate_hex_edges.add((left_id, right_id))
+            candidate_degrees = {node_id: 0 for node_id in nodes_obj}
+            for left_id, right_id in candidate_hex_edges:
+                candidate_degrees[left_id] += 1
+                candidate_degrees[right_id] += 1
+            if candidate_hex_edges and max(candidate_degrees.values(), default=0) <= 6:
+                preferred_hex_edges = candidate_hex_edges
+
+    if adjacency_gap is None:
+        # The regions are separated by the *processed* barrier, whose width is
+        # the source stroke plus the close/dilate margin above.  A scale-only
+        # gap misses ordinary 2--5 px grid strokes (especially in small
+        # screenshots), while an oversized fixed gap turns diagonal corner
+        # contacts into false edges.  The 80th percentile of the barrier's
+        # distance transform estimates a typical half-stroke while ignoring
+        # most intersections and terminal dots.  Expanding a region by roughly
+        # twice that radius reaches the region on the other side of the stroke.
+        barrier_distance = cv2.distanceTransform(barrier, cv2.DIST_L2, 5)
+        barrier_radii = barrier_distance[barrier_distance > 0]
+        typical_radius = (
+            float(np.percentile(barrier_radii, 80.0))
+            if barrier_radii.size
+            else 1.0
+        )
+        # Connected-component masks begin one pixel beyond each side of the
+        # barrier, so the reach also needs the two boundary pixels in addition
+        # to the estimated full stroke width.
+        max_gap = min(64, max(4, int(math.ceil(typical_radius * 2.0)) + 2))
+    else:
+        typical_radius = 0.0
+        max_gap = max(1, int(adjacency_gap))
+    kept_set = set(kept_labels)
+    def edges_for_gap(candidate_gap: int) -> Set[Tuple[str, str]]:
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (candidate_gap * 2 + 1, candidate_gap * 2 + 1),
+        )
+        candidate_edges: Set[Tuple[str, str]] = set()
+        for label in kept_labels:
+            expanded = cv2.dilate(masks[label], kernel, iterations=1)
+            contact_labels = labels[expanded > 0]
+            counts = np.bincount(contact_labels.ravel(), minlength=label_count)
+            source_area = float(stats[label, cv2.CC_STAT_AREA])
+            for other in kept_set:
+                if other <= label:
+                    continue
+                # Corner contacts generate only a few overlap pixels; a shared
+                # cell boundary scales with the smaller region's linear size.
+                minimum_contact = max(
+                    3,
+                    int(0.35 * math.sqrt(min(source_area, float(stats[other, cv2.CC_STAT_AREA])))),
+                )
+                if int(counts[other]) >= minimum_contact:
+                    candidate_edges.add((label_to_id[label], label_to_id[other]))
+        return candidate_edges
+
+    def graph_components(candidate_edges: Set[Tuple[str, str]]) -> List[Set[str]]:
+        neighbors: Dict[str, Set[str]] = {node_id: set() for node_id in nodes_obj}
+        for left, right in candidate_edges:
+            neighbors[left].add(right)
+            neighbors[right].add(left)
+        remaining = set(nodes_obj)
+        components: List[Set[str]] = []
+        while remaining:
+            start = remaining.pop()
+            component = {start}
+            pending = [start]
+            while pending:
+                current = pending.pop()
+                for neighbor in neighbors[current]:
+                    if neighbor in remaining:
+                        remaining.remove(neighbor)
+                        component.add(neighbor)
+                        pending.append(neighbor)
+            components.append(component)
+        return sorted(components, key=len, reverse=True)
+
+    search_gaps = [max_gap] if adjacency_gap is not None else list(range(2, max_gap + 1))
+    edge_set: Set[Tuple[str, str]] = set(preferred_hex_edges or set())
+    gap = search_gaps[-1]
+    search_attempts: List[Dict[str, Any]] = []
+    selected_nodes = set(nodes_obj)
+    previous_viable: Optional[Tuple[int, Set[Tuple[str, str]], Set[str]]] = None
+    if preferred_hex_edges is not None:
+        components = graph_components(preferred_hex_edges)
+        selected_nodes = components[0] if components else set(nodes_obj)
+        search_attempts.append(
+            {
+                "gap": 0,
+                "edges": len(preferred_hex_edges),
+                "dominant_regions": len(selected_nodes),
+                "components": len(components),
+                "max_degree": max(
+                    (
+                        sum(1 for edge in preferred_hex_edges if node_id in edge)
+                        for node_id in nodes_obj
+                    ),
+                    default=0,
+                ),
+                "viable": len(selected_nodes) == len(nodes_obj),
+                "mode": "regular-hex-centers",
+            }
+        )
+        gap = 0
+    else:
+        for candidate_gap in search_gaps:
+            candidate_edges = edges_for_gap(candidate_gap)
+            components = graph_components(candidate_edges)
+            dominant = components[0] if components else set()
+            dominant_edges = {
+                edge for edge in candidate_edges if edge[0] in dominant and edge[1] in dominant
+            }
+            candidate_degrees = {node_id: 0 for node_id in nodes_obj}
+            for left, right in dominant_edges:
+                candidate_degrees[left] += 1
+                candidate_degrees[right] += 1
+            max_candidate_degree = max(
+                (candidate_degrees[node_id] for node_id in dominant),
+                default=0,
+            )
+            dominant_ratio = len(dominant) / float(max(1, len(nodes_obj)))
+            viable = dominant_ratio >= 0.85 and max_candidate_degree <= 6
+            search_attempts.append(
+                {
+                    "gap": candidate_gap,
+                    "edges": len(candidate_edges),
+                    "dominant_regions": len(dominant),
+                    "components": len(components),
+                    "max_degree": max_candidate_degree,
+                    "viable": viable,
+                }
+            )
+            edge_set = candidate_edges
+            gap = candidate_gap
+            if viable:
+                if previous_viable is not None and dominant_edges == previous_viable[1]:
+                    # Select the first gap of a stable topology plateau. A one-pixel
+                    # early gap can leave antialiased shared sides disconnected;
+                    # later growth eventually creates diagonal corner contacts.
+                    gap, edge_set, selected_nodes = previous_viable
+                    break
+                previous_viable = (candidate_gap, dominant_edges, dominant)
+            else:
+                previous_viable = None
+        else:
+            if previous_viable is not None:
+                gap, edge_set, selected_nodes = previous_viable
+
+    dropped_regions = sorted(set(nodes_obj) - selected_nodes)
+    if dropped_regions:
+        for node_id in dropped_regions:
+            nodes_obj.pop(node_id, None)
+        edge_set = {
+            edge for edge in edge_set if edge[0] in selected_nodes and edge[1] in selected_nodes
+        }
+
+    geometric_hex_repair = False
+    if prefer_hex and len(nodes_obj) >= 4:
+        centers = {
+            node_id: (
+                float(node["data"]["pixel_center"][0]),
+                float(node["data"]["pixel_center"][1]),
+            )
+            for node_id, node in nodes_obj.items()
+        }
+        nearest_distances = [
+            min(
+                math.hypot(point[0] - other[0], point[1] - other[1])
+                for other_id, other in centers.items()
+                if other_id != node_id
+            )
+            for node_id, point in centers.items()
+        ]
+        pitch = float(np.median(np.asarray(nearest_distances, dtype=np.float32)))
+        if pitch > 1.0:
+            geometric_edges: Set[Tuple[str, str]] = set()
+            center_items = sorted(centers.items())
+            for index, (left_id, left_center) in enumerate(center_items):
+                for right_id, right_center in center_items[index + 1 :]:
+                    distance = math.hypot(
+                        left_center[0] - right_center[0],
+                        left_center[1] - right_center[1],
+                    )
+                    if distance <= pitch * 1.22:
+                        geometric_edges.add((left_id, right_id))
+            geometric_degrees = {node_id: 0 for node_id in nodes_obj}
+            for left_id, right_id in geometric_edges:
+                geometric_degrees[left_id] += 1
+                geometric_degrees[right_id] += 1
+            components = graph_components(geometric_edges)
+            if (
+                geometric_edges
+                and max(geometric_degrees.values(), default=0) <= 6
+                and components
+                and len(components[0]) == len(nodes_obj)
+            ):
+                geometric_hex_repair = geometric_edges != edge_set
+                edge_set = geometric_edges
+
+    edges = [[u, v] for u, v in sorted(edge_set)]
+    if not edges:
+        warnings.append("Cell regions were found, but no shared-boundary adjacencies were detected.")
+
+    degrees = {node_id: 0 for node_id in nodes_obj}
+    for u, v in edges:
+        degrees[u] += 1
+        degrees[v] += 1
+    suspicious = [node_id for node_id, degree in degrees.items() if degree > 4]
+    if suspicious:
+        warnings.append(
+            f"{len(suspicious)} detected regions have degree greater than four; review corner contacts."
+        )
+
+    info = {
+        "regions": len(nodes_obj),
+        "edges": len(edges),
+        "barrier_fraction": round(float(np.count_nonzero(barrier)) / image_area, 4),
+        "adjacency_gap": gap,
+        "estimated_barrier_radius": round(typical_radius, 3),
+        "removed_terminal_blobs": removed_terminal_blobs,
+        "adjacency_search": search_attempts,
+        "dropped_enclosed_regions": dropped_regions,
+        "max_degree": max(degrees.values(), default=0),
+        "geometric_hex_repair": geometric_hex_repair,
+        "warnings": warnings,
+    }
+    return nodes_obj, edges, info
+
+
 def build_graph_json(
     *,
     layout: str,
@@ -2147,6 +3450,7 @@ def build_graph_json(
     edge_removals: Optional[List[Tuple[str, str]]] = None,
     warp_edges: Optional[List[Tuple[str, str]]] = None,
     wall_edges: Optional[List[Tuple[str, str]]] = None,
+    star_faces: int = 5,
 ) -> Dict[str, Any]:
     space: Dict[str, Any] = {"type": "graph"}
     terminals: Dict[str, List[str]] = {}
@@ -2175,22 +3479,50 @@ def build_graph_json(
         if len(node_ids) >= 2:
             terminals = {"A": [node_ids[0], node_ids[-1]]}
     elif layout == "cube":
-        detail = max(1, int(width) if width > 0 else int(nodes) if nodes > 0 else 2)
-        nodes_obj, edges = _build_cube_topology(detail)
+        detail_w = max(1, int(width) if width > 0 else int(nodes) if nodes > 0 else 2)
+        detail_h = max(1, int(height) if height > 0 else detail_w)
+        topology = build_registered_cube_topology(size=max(detail_w, detail_h))
+        nodes_obj = {
+            node.id: {
+                "pos": [float(node.pos[0]), float(node.pos[1]), float(node.pos[2])],
+                **({"data": dict(node.data)} if node.data else {}),
+            }
+            for node in topology.nodes
+        }
+        edges = [[u, v] for u, v in topology.edges]
         space["nodes"] = nodes_obj
         space["edges"] = edges
         space["topology"] = "cube"
         terminals = _default_terminals_from_nodes(nodes_obj)
     elif layout == "star":
-        detail = max(1, int(width) if width > 0 else int(nodes) if nodes > 0 else 2)
-        nodes_obj, edges = _build_star_topology(detail)
+        detail_w = max(1, int(width) if width > 0 else int(nodes) if nodes > 0 else 2)
+        detail_h = max(1, int(height) if height > 0 else detail_w)
+        topology = build_registered_radial_star_topology(
+            size=max(detail_w, detail_h),
+            faces=int(star_faces),
+        )
+        nodes_obj = {
+            node.id: {
+                "pos": [float(node.pos[0]), float(node.pos[1]), float(node.pos[2])],
+                **({"data": dict(node.data)} if node.data else {}),
+            }
+            for node in topology.nodes
+        }
+        edges = [[u, v] for u, v in topology.edges]
         space["nodes"] = nodes_obj
         space["edges"] = edges
         space["topology"] = "star"
         terminals = _default_terminals_from_nodes(nodes_obj)
     elif layout == "figure8":
-        detail = max(6, int(width) if width > 0 else int(nodes) if nodes > 0 else 8)
-        nodes_obj, edges = _build_figure8_topology(detail)
+        topology = build_registered_figure8_topology()
+        nodes_obj = {
+            node.id: {
+                "pos": [float(node.pos[0]), float(node.pos[1]), float(node.pos[2])],
+                **({"data": dict(node.data)} if node.data else {}),
+            }
+            for node in topology.nodes
+        }
+        edges = [[u, v] for u, v in topology.edges]
         space["nodes"] = nodes_obj
         space["edges"] = edges
         space["topology"] = "figure8"

@@ -1,0 +1,3763 @@
+{
+  "format": "flow-solver-puzzle",
+  "schema_version": 2,
+  "topology": {
+    "cells": {
+      "region:000": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:001": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:002": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:003": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:004": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:006": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:007": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:008": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:009": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:010": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:011": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:012": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:013": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:014": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:015": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:016": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:017": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:018": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:019": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:020": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:021": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:023": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:024": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:025": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:026": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:027": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:028": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:029": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:030": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:031": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "region:032": {
+        "kind": "ordinary",
+        "data": {}
+      }
+    },
+    "channels": {
+      "region:000": {
+        "cell": "region:000",
+        "kind": "cell",
+        "ports": {
+          "edge-0:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-1:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            584.5,
+            120.0
+          ],
+          "pixel_area": 31774,
+          "polygon": [
+            [
+              467.0,
+              49.0
+            ],
+            [
+              523.0,
+              211.0
+            ],
+            [
+              575.0,
+              202.0
+            ],
+            [
+              646.0,
+              211.0
+            ],
+            [
+              701.0,
+              48.0
+            ],
+            [
+              576.0,
+              29.0
+            ]
+          ],
+          "region_label": 2
+        }
+      },
+      "region:001": {
+        "cell": "region:001",
+        "kind": "cell",
+        "ports": {
+          "edge-0:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-2:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            396.0,
+            170.5
+          ],
+          "pixel_area": 31597,
+          "polygon": [
+            [
+              460.0,
+              52.0
+            ],
+            [
+              355.0,
+              109.0
+            ],
+            [
+              276.0,
+              197.0
+            ],
+            [
+              419.0,
+              289.0
+            ],
+            [
+              462.0,
+              244.0
+            ],
+            [
+              516.0,
+              214.0
+            ]
+          ],
+          "region_label": 3
+        }
+      },
+      "region:002": {
+        "cell": "region:002",
+        "kind": "cell",
+        "ports": {
+          "edge-1:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-3:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            773.5,
+            170.5
+          ],
+          "pixel_area": 31634,
+          "polygon": [
+            [
+              709.0,
+              52.0
+            ],
+            [
+              654.0,
+              215.0
+            ],
+            [
+              708.0,
+              245.0
+            ],
+            [
+              750.0,
+              289.0
+            ],
+            [
+              893.0,
+              197.0
+            ],
+            [
+              814.0,
+              109.0
+            ]
+          ],
+          "region_label": 4
+        }
+      },
+      "region:003": {
+        "cell": "region:003",
+        "kind": "cell",
+        "ports": {
+          "edge-2:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-4:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            316.0,
+            320.5
+          ],
+          "pixel_area": 31762,
+          "polygon": [
+            [
+              270.0,
+              206.0
+            ],
+            [
+              225.0,
+              315.0
+            ],
+            [
+              218.0,
+              435.0
+            ],
+            [
+              390.0,
+              416.0
+            ],
+            [
+              393.0,
+              355.0
+            ],
+            [
+              416.0,
+              296.0
+            ]
+          ],
+          "region_label": 5
+        }
+      },
+      "region:004": {
+        "cell": "region:004",
+        "kind": "cell",
+        "ports": {
+          "edge-3:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-5:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            853.0,
+            320.5
+          ],
+          "pixel_area": 31789,
+          "polygon": [
+            [
+              899.0,
+              206.0
+            ],
+            [
+              753.0,
+              296.0
+            ],
+            [
+              776.0,
+              355.0
+            ],
+            [
+              779.0,
+              416.0
+            ],
+            [
+              951.0,
+              435.0
+            ],
+            [
+              944.0,
+              315.0
+            ]
+          ],
+          "region_label": 6
+        }
+      },
+      "region:006": {
+        "cell": "region:006",
+        "kind": "cell",
+        "ports": {
+          "edge-4:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-6:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            330.5,
+            538.5
+          ],
+          "pixel_area": 31708,
+          "polygon": [
+            [
+              390.0,
+              423.0
+            ],
+            [
+              219.0,
+              442.0
+            ],
+            [
+              252.0,
+              557.0
+            ],
+            [
+              321.0,
+              654.0
+            ],
+            [
+              442.0,
+              535.0
+            ],
+            [
+              406.0,
+              479.0
+            ]
+          ],
+          "region_label": 8
+        }
+      },
+      "region:007": {
+        "cell": "region:007",
+        "kind": "cell",
+        "ports": {
+          "edge-5:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-7:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            838.5,
+            538.5
+          ],
+          "pixel_area": 31737,
+          "polygon": [
+            [
+              778.0,
+              423.0
+            ],
+            [
+              762.0,
+              481.0
+            ],
+            [
+              727.0,
+              535.0
+            ],
+            [
+              849.0,
+              654.0
+            ],
+            [
+              917.0,
+              557.0
+            ],
+            [
+              950.0,
+              442.0
+            ]
+          ],
+          "region_label": 9
+        }
+      },
+      "region:008": {
+        "cell": "region:008",
+        "kind": "cell",
+        "ports": {
+          "edge-6:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-8:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            451.5,
+            663.5
+          ],
+          "pixel_area": 31414,
+          "polygon": [
+            [
+              447.0,
+              540.0
+            ],
+            [
+              328.0,
+              662.0
+            ],
+            [
+              456.0,
+              787.0
+            ],
+            [
+              575.0,
+              665.0
+            ]
+          ],
+          "region_label": 10
+        }
+      },
+      "region:009": {
+        "cell": "region:009",
+        "kind": "cell",
+        "ports": {
+          "edge-7:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-9:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            717.5,
+            663.5
+          ],
+          "pixel_area": 31438,
+          "polygon": [
+            [
+              722.0,
+              540.0
+            ],
+            [
+              594.0,
+              665.0
+            ],
+            [
+              713.0,
+              787.0
+            ],
+            [
+              841.0,
+              662.0
+            ]
+          ],
+          "region_label": 11
+        }
+      },
+      "region:010": {
+        "cell": "region:010",
+        "kind": "cell",
+        "ports": {
+          "edge-10:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-11:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-8:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-9:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            584.5,
+            796.5
+          ],
+          "pixel_area": 33016,
+          "polygon": [
+            [
+              583.0,
+              670.0
+            ],
+            [
+              458.0,
+              798.0
+            ],
+            [
+              586.0,
+              923.0
+            ],
+            [
+              711.0,
+              795.0
+            ]
+          ],
+          "region_label": 12
+        }
+      },
+      "region:011": {
+        "cell": "region:011",
+        "kind": "cell",
+        "ports": {
+          "edge-10:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-12:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-13:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            453.0,
+            931.0
+          ],
+          "pixel_area": 32245,
+          "polygon": [
+            [
+              456.0,
+              806.0
+            ],
+            [
+              328.0,
+              931.0
+            ],
+            [
+              450.0,
+              1056.0
+            ],
+            [
+              578.0,
+              931.0
+            ]
+          ],
+          "region_label": 13
+        }
+      },
+      "region:012": {
+        "cell": "region:012",
+        "kind": "cell",
+        "ports": {
+          "edge-11:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-14:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-15:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            716.0,
+            931.0
+          ],
+          "pixel_area": 32245,
+          "polygon": [
+            [
+              713.0,
+              806.0
+            ],
+            [
+              591.0,
+              931.0
+            ],
+            [
+              719.0,
+              1056.0
+            ],
+            [
+              841.0,
+              931.0
+            ]
+          ],
+          "region_label": 14
+        }
+      },
+      "region:013": {
+        "cell": "region:013",
+        "kind": "cell",
+        "ports": {
+          "edge-12:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-14:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-16:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-17:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            584.5,
+            1062.5
+          ],
+          "pixel_area": 33016,
+          "polygon": [
+            [
+              583.0,
+              936.0
+            ],
+            [
+              458.0,
+              1064.0
+            ],
+            [
+              586.0,
+              1189.0
+            ],
+            [
+              711.0,
+              1061.0
+            ]
+          ],
+          "region_label": 15
+        }
+      },
+      "region:014": {
+        "cell": "region:014",
+        "kind": "cell",
+        "ports": {
+          "edge-13:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-18:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-19:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            320.0,
+            1064.0
+          ],
+          "pixel_area": 32122,
+          "polygon": [
+            [
+              322.0,
+              939.0
+            ],
+            [
+              195.0,
+              1064.0
+            ],
+            [
+              317.0,
+              1189.0
+            ],
+            [
+              445.0,
+              1064.0
+            ]
+          ],
+          "region_label": 16
+        }
+      },
+      "region:015": {
+        "cell": "region:015",
+        "kind": "cell",
+        "ports": {
+          "edge-15:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-20:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-21:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            849.0,
+            1064.0
+          ],
+          "pixel_area": 32122,
+          "polygon": [
+            [
+              847.0,
+              939.0
+            ],
+            [
+              724.0,
+              1064.0
+            ],
+            [
+              852.0,
+              1189.0
+            ],
+            [
+              974.0,
+              1064.0
+            ]
+          ],
+          "region_label": 17
+        }
+      },
+      "region:016": {
+        "cell": "region:016",
+        "kind": "cell",
+        "ports": {
+          "edge-16:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-18:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-22:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            450.0,
+            1194.0
+          ],
+          "pixel_area": 32122,
+          "polygon": [
+            [
+              452.0,
+              1069.0
+            ],
+            [
+              325.0,
+              1194.0
+            ],
+            [
+              447.0,
+              1319.0
+            ],
+            [
+              575.0,
+              1194.0
+            ]
+          ],
+          "region_label": 18
+        }
+      },
+      "region:017": {
+        "cell": "region:017",
+        "kind": "cell",
+        "ports": {
+          "edge-17:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-20:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-23:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            719.0,
+            1194.0
+          ],
+          "pixel_area": 32122,
+          "polygon": [
+            [
+              717.0,
+              1069.0
+            ],
+            [
+              594.0,
+              1194.0
+            ],
+            [
+              722.0,
+              1319.0
+            ],
+            [
+              844.0,
+              1194.0
+            ]
+          ],
+          "region_label": 19
+        }
+      },
+      "region:018": {
+        "cell": "region:018",
+        "kind": "cell",
+        "ports": {
+          "edge-19:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-24:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-25:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            172.0,
+            1243.5
+          ],
+          "pixel_area": 54580,
+          "polygon": [
+            [
+              189.0,
+              1072.0
+            ],
+            [
+              83.0,
+              1219.0
+            ],
+            [
+              32.0,
+              1396.0
+            ],
+            [
+              208.0,
+              1415.0
+            ],
+            [
+              242.0,
+              1296.0
+            ],
+            [
+              312.0,
+              1195.0
+            ]
+          ],
+          "region_label": 20
+        }
+      },
+      "region:019": {
+        "cell": "region:019",
+        "kind": "cell",
+        "ports": {
+          "edge-21:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-26:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-27:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            997.0,
+            1244.0
+          ],
+          "pixel_area": 54587,
+          "polygon": [
+            [
+              980.0,
+              1072.0
+            ],
+            [
+              857.0,
+              1195.0
+            ],
+            [
+              927.0,
+              1296.0
+            ],
+            [
+              961.0,
+              1416.0
+            ],
+            [
+              1137.0,
+              1396.0
+            ],
+            [
+              1086.0,
+              1219.0
+            ]
+          ],
+          "region_label": 21
+        }
+      },
+      "region:020": {
+        "cell": "region:020",
+        "kind": "cell",
+        "ports": {
+          "edge-22:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-24:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-28:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            328.5,
+            1319.5
+          ],
+          "pixel_area": 32661,
+          "polygon": [
+            [
+              317.0,
+              1203.0
+            ],
+            [
+              248.0,
+              1301.0
+            ],
+            [
+              215.0,
+              1417.0
+            ],
+            [
+              391.0,
+              1436.0
+            ],
+            [
+              407.0,
+              1378.0
+            ],
+            [
+              442.0,
+              1325.0
+            ]
+          ],
+          "region_label": 22
+        }
+      },
+      "region:021": {
+        "cell": "region:021",
+        "kind": "cell",
+        "ports": {
+          "edge-23:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-26:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-29:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            840.5,
+            1319.5
+          ],
+          "pixel_area": 32668,
+          "polygon": [
+            [
+              852.0,
+              1203.0
+            ],
+            [
+              727.0,
+              1325.0
+            ],
+            [
+              762.0,
+              1378.0
+            ],
+            [
+              778.0,
+              1436.0
+            ],
+            [
+              954.0,
+              1417.0
+            ],
+            [
+              922.0,
+              1303.0
+            ]
+          ],
+          "region_label": 23
+        }
+      },
+      "region:023": {
+        "cell": "region:023",
+        "kind": "cell",
+        "ports": {
+          "edge-25:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-30:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-31:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            144.0,
+            1578.0
+          ],
+          "pixel_area": 54731,
+          "polygon": [
+            [
+              31.0,
+              1403.0
+            ],
+            [
+              41.0,
+              1585.0
+            ],
+            [
+              114.0,
+              1753.0
+            ],
+            [
+              260.0,
+              1661.0
+            ],
+            [
+              214.0,
+              1547.0
+            ],
+            [
+              207.0,
+              1423.0
+            ]
+          ],
+          "region_label": 25
+        }
+      },
+      "region:024": {
+        "cell": "region:024",
+        "kind": "cell",
+        "ports": {
+          "edge-27:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-32:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-33:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            1025.0,
+            1578.0
+          ],
+          "pixel_area": 54704,
+          "polygon": [
+            [
+              1138.0,
+              1403.0
+            ],
+            [
+              962.0,
+              1423.0
+            ],
+            [
+              955.0,
+              1548.0
+            ],
+            [
+              909.0,
+              1661.0
+            ],
+            [
+              1055.0,
+              1753.0
+            ],
+            [
+              1128.0,
+              1585.0
+            ]
+          ],
+          "region_label": 26
+        }
+      },
+      "region:025": {
+        "cell": "region:025",
+        "kind": "cell",
+        "ports": {
+          "edge-28:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-30:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-34:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            314.0,
+            1540.0
+          ],
+          "pixel_area": 32804,
+          "polygon": [
+            [
+              214.0,
+              1424.0
+            ],
+            [
+              221.0,
+              1546.0
+            ],
+            [
+              267.0,
+              1656.0
+            ],
+            [
+              416.0,
+              1563.0
+            ],
+            [
+              393.0,
+              1504.0
+            ],
+            [
+              390.0,
+              1443.0
+            ]
+          ],
+          "region_label": 27
+        }
+      },
+      "region:026": {
+        "cell": "region:026",
+        "kind": "cell",
+        "ports": {
+          "edge-29:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-32:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-35:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            855.0,
+            1540.0
+          ],
+          "pixel_area": 32810,
+          "polygon": [
+            [
+              955.0,
+              1424.0
+            ],
+            [
+              779.0,
+              1443.0
+            ],
+            [
+              776.0,
+              1504.0
+            ],
+            [
+              753.0,
+              1564.0
+            ],
+            [
+              902.0,
+              1656.0
+            ],
+            [
+              948.0,
+              1546.0
+            ]
+          ],
+          "region_label": 28
+        }
+      },
+      "region:027": {
+        "cell": "region:027",
+        "kind": "cell",
+        "ports": {
+          "edge-34:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-36:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-37:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            394.0,
+            1690.5
+          ],
+          "pixel_area": 32677,
+          "polygon": [
+            [
+              419.0,
+              1570.0
+            ],
+            [
+              272.0,
+              1664.0
+            ],
+            [
+              353.0,
+              1754.0
+            ],
+            [
+              458.0,
+              1811.0
+            ],
+            [
+              516.0,
+              1645.0
+            ],
+            [
+              463.0,
+              1616.0
+            ]
+          ],
+          "region_label": 29
+        }
+      },
+      "region:028": {
+        "cell": "region:028",
+        "kind": "cell",
+        "ports": {
+          "edge-35:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-38:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-39:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            775.0,
+            1690.5
+          ],
+          "pixel_area": 32671,
+          "polygon": [
+            [
+              750.0,
+              1570.0
+            ],
+            [
+              706.0,
+              1616.0
+            ],
+            [
+              653.0,
+              1645.0
+            ],
+            [
+              710.0,
+              1811.0
+            ],
+            [
+              816.0,
+              1754.0
+            ],
+            [
+              897.0,
+              1664.0
+            ]
+          ],
+          "region_label": 30
+        }
+      },
+      "region:029": {
+        "cell": "region:029",
+        "kind": "cell",
+        "ports": {
+          "edge-36:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-38:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-40:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            585.0,
+            1741.5
+          ],
+          "pixel_area": 32845,
+          "polygon": [
+            [
+              523.0,
+              1648.0
+            ],
+            [
+              466.0,
+              1815.0
+            ],
+            [
+              582.0,
+              1835.0
+            ],
+            [
+              704.0,
+              1815.0
+            ],
+            [
+              646.0,
+              1648.0
+            ],
+            [
+              597.0,
+              1657.0
+            ]
+          ],
+          "region_label": 31
+        }
+      },
+      "region:030": {
+        "cell": "region:030",
+        "kind": "cell",
+        "ports": {
+          "edge-31:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-37:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-41:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            285.5,
+            1826.5
+          ],
+          "pixel_area": 54631,
+          "polygon": [
+            [
+              116.0,
+              1760.0
+            ],
+            [
+              237.0,
+              1897.0
+            ],
+            [
+              398.0,
+              1985.0
+            ],
+            [
+              454.0,
+              1818.0
+            ],
+            [
+              350.0,
+              1761.0
+            ],
+            [
+              266.0,
+              1668.0
+            ]
+          ],
+          "region_label": 32
+        }
+      },
+      "region:031": {
+        "cell": "region:031",
+        "kind": "cell",
+        "ports": {
+          "edge-33:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-39:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-42:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            883.5,
+            1826.5
+          ],
+          "pixel_area": 54610,
+          "polygon": [
+            [
+              1053.0,
+              1760.0
+            ],
+            [
+              903.0,
+              1668.0
+            ],
+            [
+              819.0,
+              1761.0
+            ],
+            [
+              714.0,
+              1819.0
+            ],
+            [
+              771.0,
+              1985.0
+            ],
+            [
+              931.0,
+              1898.0
+            ]
+          ],
+          "region_label": 33
+        }
+      },
+      "region:032": {
+        "cell": "region:032",
+        "kind": "cell",
+        "ports": {
+          "edge-40:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-41:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-42:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {
+          "pixel_center": [
+            584.5,
+            1920.5
+          ],
+          "pixel_area": 54721,
+          "polygon": [
+            [
+              405.0,
+              1986.0
+            ],
+            [
+              582.0,
+              2019.0
+            ],
+            [
+              764.0,
+              1989.0
+            ],
+            [
+              707.0,
+              1822.0
+            ],
+            [
+              585.0,
+              1842.0
+            ],
+            [
+              462.0,
+              1822.0
+            ]
+          ],
+          "region_label": 34
+        }
+      }
+    },
+    "adjacencies": [
+      {
+        "id": "edge-0000",
+        "a": {
+          "channel": "region:000",
+          "port": "edge-0:a"
+        },
+        "b": {
+          "channel": "region:001",
+          "port": "edge-0:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0001",
+        "a": {
+          "channel": "region:000",
+          "port": "edge-1:a"
+        },
+        "b": {
+          "channel": "region:002",
+          "port": "edge-1:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0002",
+        "a": {
+          "channel": "region:001",
+          "port": "edge-2:a"
+        },
+        "b": {
+          "channel": "region:003",
+          "port": "edge-2:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0003",
+        "a": {
+          "channel": "region:002",
+          "port": "edge-3:a"
+        },
+        "b": {
+          "channel": "region:004",
+          "port": "edge-3:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0004",
+        "a": {
+          "channel": "region:003",
+          "port": "edge-4:a"
+        },
+        "b": {
+          "channel": "region:006",
+          "port": "edge-4:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0005",
+        "a": {
+          "channel": "region:004",
+          "port": "edge-5:a"
+        },
+        "b": {
+          "channel": "region:007",
+          "port": "edge-5:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0006",
+        "a": {
+          "channel": "region:006",
+          "port": "edge-6:a"
+        },
+        "b": {
+          "channel": "region:008",
+          "port": "edge-6:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0007",
+        "a": {
+          "channel": "region:007",
+          "port": "edge-7:a"
+        },
+        "b": {
+          "channel": "region:009",
+          "port": "edge-7:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0008",
+        "a": {
+          "channel": "region:008",
+          "port": "edge-8:a"
+        },
+        "b": {
+          "channel": "region:010",
+          "port": "edge-8:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0009",
+        "a": {
+          "channel": "region:009",
+          "port": "edge-9:a"
+        },
+        "b": {
+          "channel": "region:010",
+          "port": "edge-9:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0010",
+        "a": {
+          "channel": "region:010",
+          "port": "edge-10:a"
+        },
+        "b": {
+          "channel": "region:011",
+          "port": "edge-10:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0011",
+        "a": {
+          "channel": "region:010",
+          "port": "edge-11:a"
+        },
+        "b": {
+          "channel": "region:012",
+          "port": "edge-11:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0012",
+        "a": {
+          "channel": "region:011",
+          "port": "edge-12:a"
+        },
+        "b": {
+          "channel": "region:013",
+          "port": "edge-12:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0013",
+        "a": {
+          "channel": "region:011",
+          "port": "edge-13:a"
+        },
+        "b": {
+          "channel": "region:014",
+          "port": "edge-13:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0014",
+        "a": {
+          "channel": "region:012",
+          "port": "edge-14:a"
+        },
+        "b": {
+          "channel": "region:013",
+          "port": "edge-14:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0015",
+        "a": {
+          "channel": "region:012",
+          "port": "edge-15:a"
+        },
+        "b": {
+          "channel": "region:015",
+          "port": "edge-15:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0016",
+        "a": {
+          "channel": "region:013",
+          "port": "edge-16:a"
+        },
+        "b": {
+          "channel": "region:016",
+          "port": "edge-16:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0017",
+        "a": {
+          "channel": "region:013",
+          "port": "edge-17:a"
+        },
+        "b": {
+          "channel": "region:017",
+          "port": "edge-17:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0018",
+        "a": {
+          "channel": "region:014",
+          "port": "edge-18:a"
+        },
+        "b": {
+          "channel": "region:016",
+          "port": "edge-18:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0019",
+        "a": {
+          "channel": "region:014",
+          "port": "edge-19:a"
+        },
+        "b": {
+          "channel": "region:018",
+          "port": "edge-19:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0020",
+        "a": {
+          "channel": "region:015",
+          "port": "edge-20:a"
+        },
+        "b": {
+          "channel": "region:017",
+          "port": "edge-20:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0021",
+        "a": {
+          "channel": "region:015",
+          "port": "edge-21:a"
+        },
+        "b": {
+          "channel": "region:019",
+          "port": "edge-21:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0022",
+        "a": {
+          "channel": "region:016",
+          "port": "edge-22:a"
+        },
+        "b": {
+          "channel": "region:020",
+          "port": "edge-22:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0023",
+        "a": {
+          "channel": "region:017",
+          "port": "edge-23:a"
+        },
+        "b": {
+          "channel": "region:021",
+          "port": "edge-23:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0024",
+        "a": {
+          "channel": "region:018",
+          "port": "edge-24:a"
+        },
+        "b": {
+          "channel": "region:020",
+          "port": "edge-24:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0025",
+        "a": {
+          "channel": "region:018",
+          "port": "edge-25:a"
+        },
+        "b": {
+          "channel": "region:023",
+          "port": "edge-25:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0026",
+        "a": {
+          "channel": "region:019",
+          "port": "edge-26:a"
+        },
+        "b": {
+          "channel": "region:021",
+          "port": "edge-26:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0027",
+        "a": {
+          "channel": "region:019",
+          "port": "edge-27:a"
+        },
+        "b": {
+          "channel": "region:024",
+          "port": "edge-27:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0028",
+        "a": {
+          "channel": "region:020",
+          "port": "edge-28:a"
+        },
+        "b": {
+          "channel": "region:025",
+          "port": "edge-28:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0029",
+        "a": {
+          "channel": "region:021",
+          "port": "edge-29:a"
+        },
+        "b": {
+          "channel": "region:026",
+          "port": "edge-29:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0030",
+        "a": {
+          "channel": "region:023",
+          "port": "edge-30:a"
+        },
+        "b": {
+          "channel": "region:025",
+          "port": "edge-30:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0031",
+        "a": {
+          "channel": "region:023",
+          "port": "edge-31:a"
+        },
+        "b": {
+          "channel": "region:030",
+          "port": "edge-31:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0032",
+        "a": {
+          "channel": "region:024",
+          "port": "edge-32:a"
+        },
+        "b": {
+          "channel": "region:026",
+          "port": "edge-32:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0033",
+        "a": {
+          "channel": "region:024",
+          "port": "edge-33:a"
+        },
+        "b": {
+          "channel": "region:031",
+          "port": "edge-33:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0034",
+        "a": {
+          "channel": "region:025",
+          "port": "edge-34:a"
+        },
+        "b": {
+          "channel": "region:027",
+          "port": "edge-34:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0035",
+        "a": {
+          "channel": "region:026",
+          "port": "edge-35:a"
+        },
+        "b": {
+          "channel": "region:028",
+          "port": "edge-35:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0036",
+        "a": {
+          "channel": "region:027",
+          "port": "edge-36:a"
+        },
+        "b": {
+          "channel": "region:029",
+          "port": "edge-36:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0037",
+        "a": {
+          "channel": "region:027",
+          "port": "edge-37:a"
+        },
+        "b": {
+          "channel": "region:030",
+          "port": "edge-37:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0038",
+        "a": {
+          "channel": "region:028",
+          "port": "edge-38:a"
+        },
+        "b": {
+          "channel": "region:029",
+          "port": "edge-38:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0039",
+        "a": {
+          "channel": "region:028",
+          "port": "edge-39:a"
+        },
+        "b": {
+          "channel": "region:031",
+          "port": "edge-39:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0040",
+        "a": {
+          "channel": "region:029",
+          "port": "edge-40:a"
+        },
+        "b": {
+          "channel": "region:032",
+          "port": "edge-40:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0041",
+        "a": {
+          "channel": "region:030",
+          "port": "edge-41:a"
+        },
+        "b": {
+          "channel": "region:032",
+          "port": "edge-41:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0042",
+        "a": {
+          "channel": "region:031",
+          "port": "edge-42:a"
+        },
+        "b": {
+          "channel": "region:032",
+          "port": "edge-42:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      }
+    ],
+    "data": {},
+    "template": {
+      "id": "regions",
+      "parameters": {
+        "cells": 31
+      }
+    }
+  },
+  "terminals": {
+    "A": {
+      "endpoints": [
+        "region:008",
+        "region:009"
+      ],
+      "color": "#ff0000",
+      "data": {}
+    },
+    "B": {
+      "endpoints": [
+        "region:010",
+        "region:023"
+      ],
+      "color": "#ecdf00",
+      "data": {}
+    },
+    "C": {
+      "endpoints": [
+        "region:032",
+        "region:017"
+      ],
+      "color": "#0a29ff",
+      "data": {}
+    },
+    "D": {
+      "endpoints": [
+        "region:030",
+        "region:031"
+      ],
+      "color": "#008d00",
+      "data": {}
+    }
+  },
+  "rules": {
+    "coverage": {
+      "mode": "all-cells",
+      "overrides": {}
+    },
+    "paths": {
+      "endpoint_degree": 1,
+      "internal_degree": 2,
+      "connected": true
+    },
+    "multi_channel_cell_color_policy": "distinct"
+  },
+  "display": {
+    "dimension": 2,
+    "cells": {
+      "region:000": {
+        "data": {},
+        "position": [
+          584.5,
+          -120.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            467.0,
+            -49.0,
+            0.0
+          ],
+          [
+            523.0,
+            -211.0,
+            0.0
+          ],
+          [
+            575.0,
+            -202.0,
+            0.0
+          ],
+          [
+            646.0,
+            -211.0,
+            0.0
+          ],
+          [
+            701.0,
+            -48.0,
+            0.0
+          ],
+          [
+            576.0,
+            -29.0,
+            0.0
+          ]
+        ]
+      },
+      "region:001": {
+        "data": {},
+        "position": [
+          396.0,
+          -170.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            460.0,
+            -52.0,
+            0.0
+          ],
+          [
+            355.0,
+            -109.0,
+            0.0
+          ],
+          [
+            276.0,
+            -197.0,
+            0.0
+          ],
+          [
+            419.0,
+            -289.0,
+            0.0
+          ],
+          [
+            462.0,
+            -244.0,
+            0.0
+          ],
+          [
+            516.0,
+            -214.0,
+            0.0
+          ]
+        ]
+      },
+      "region:002": {
+        "data": {},
+        "position": [
+          773.5,
+          -170.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            709.0,
+            -52.0,
+            0.0
+          ],
+          [
+            654.0,
+            -215.0,
+            0.0
+          ],
+          [
+            708.0,
+            -245.0,
+            0.0
+          ],
+          [
+            750.0,
+            -289.0,
+            0.0
+          ],
+          [
+            893.0,
+            -197.0,
+            0.0
+          ],
+          [
+            814.0,
+            -109.0,
+            0.0
+          ]
+        ]
+      },
+      "region:003": {
+        "data": {},
+        "position": [
+          316.0,
+          -320.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            270.0,
+            -206.0,
+            0.0
+          ],
+          [
+            225.0,
+            -315.0,
+            0.0
+          ],
+          [
+            218.0,
+            -435.0,
+            0.0
+          ],
+          [
+            390.0,
+            -416.0,
+            0.0
+          ],
+          [
+            393.0,
+            -355.0,
+            0.0
+          ],
+          [
+            416.0,
+            -296.0,
+            0.0
+          ]
+        ]
+      },
+      "region:004": {
+        "data": {},
+        "position": [
+          853.0,
+          -320.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            899.0,
+            -206.0,
+            0.0
+          ],
+          [
+            753.0,
+            -296.0,
+            0.0
+          ],
+          [
+            776.0,
+            -355.0,
+            0.0
+          ],
+          [
+            779.0,
+            -416.0,
+            0.0
+          ],
+          [
+            951.0,
+            -435.0,
+            0.0
+          ],
+          [
+            944.0,
+            -315.0,
+            0.0
+          ]
+        ]
+      },
+      "region:006": {
+        "data": {},
+        "position": [
+          330.5,
+          -538.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            390.0,
+            -423.0,
+            0.0
+          ],
+          [
+            219.0,
+            -442.0,
+            0.0
+          ],
+          [
+            252.0,
+            -557.0,
+            0.0
+          ],
+          [
+            321.0,
+            -654.0,
+            0.0
+          ],
+          [
+            442.0,
+            -535.0,
+            0.0
+          ],
+          [
+            406.0,
+            -479.0,
+            0.0
+          ]
+        ]
+      },
+      "region:007": {
+        "data": {},
+        "position": [
+          838.5,
+          -538.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            778.0,
+            -423.0,
+            0.0
+          ],
+          [
+            762.0,
+            -481.0,
+            0.0
+          ],
+          [
+            727.0,
+            -535.0,
+            0.0
+          ],
+          [
+            849.0,
+            -654.0,
+            0.0
+          ],
+          [
+            917.0,
+            -557.0,
+            0.0
+          ],
+          [
+            950.0,
+            -442.0,
+            0.0
+          ]
+        ]
+      },
+      "region:008": {
+        "data": {},
+        "position": [
+          451.5,
+          -663.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            447.0,
+            -540.0,
+            0.0
+          ],
+          [
+            328.0,
+            -662.0,
+            0.0
+          ],
+          [
+            456.0,
+            -787.0,
+            0.0
+          ],
+          [
+            575.0,
+            -665.0,
+            0.0
+          ]
+        ]
+      },
+      "region:009": {
+        "data": {},
+        "position": [
+          717.5,
+          -663.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            722.0,
+            -540.0,
+            0.0
+          ],
+          [
+            594.0,
+            -665.0,
+            0.0
+          ],
+          [
+            713.0,
+            -787.0,
+            0.0
+          ],
+          [
+            841.0,
+            -662.0,
+            0.0
+          ]
+        ]
+      },
+      "region:010": {
+        "data": {},
+        "position": [
+          584.5,
+          -796.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            583.0,
+            -670.0,
+            0.0
+          ],
+          [
+            458.0,
+            -798.0,
+            0.0
+          ],
+          [
+            586.0,
+            -923.0,
+            0.0
+          ],
+          [
+            711.0,
+            -795.0,
+            0.0
+          ]
+        ]
+      },
+      "region:011": {
+        "data": {},
+        "position": [
+          453.0,
+          -931.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            456.0,
+            -806.0,
+            0.0
+          ],
+          [
+            328.0,
+            -931.0,
+            0.0
+          ],
+          [
+            450.0,
+            -1056.0,
+            0.0
+          ],
+          [
+            578.0,
+            -931.0,
+            0.0
+          ]
+        ]
+      },
+      "region:012": {
+        "data": {},
+        "position": [
+          716.0,
+          -931.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            713.0,
+            -806.0,
+            0.0
+          ],
+          [
+            591.0,
+            -931.0,
+            0.0
+          ],
+          [
+            719.0,
+            -1056.0,
+            0.0
+          ],
+          [
+            841.0,
+            -931.0,
+            0.0
+          ]
+        ]
+      },
+      "region:013": {
+        "data": {},
+        "position": [
+          584.5,
+          -1062.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            583.0,
+            -936.0,
+            0.0
+          ],
+          [
+            458.0,
+            -1064.0,
+            0.0
+          ],
+          [
+            586.0,
+            -1189.0,
+            0.0
+          ],
+          [
+            711.0,
+            -1061.0,
+            0.0
+          ]
+        ]
+      },
+      "region:014": {
+        "data": {},
+        "position": [
+          320.0,
+          -1064.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            322.0,
+            -939.0,
+            0.0
+          ],
+          [
+            195.0,
+            -1064.0,
+            0.0
+          ],
+          [
+            317.0,
+            -1189.0,
+            0.0
+          ],
+          [
+            445.0,
+            -1064.0,
+            0.0
+          ]
+        ]
+      },
+      "region:015": {
+        "data": {},
+        "position": [
+          849.0,
+          -1064.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            847.0,
+            -939.0,
+            0.0
+          ],
+          [
+            724.0,
+            -1064.0,
+            0.0
+          ],
+          [
+            852.0,
+            -1189.0,
+            0.0
+          ],
+          [
+            974.0,
+            -1064.0,
+            0.0
+          ]
+        ]
+      },
+      "region:016": {
+        "data": {},
+        "position": [
+          450.0,
+          -1194.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            452.0,
+            -1069.0,
+            0.0
+          ],
+          [
+            325.0,
+            -1194.0,
+            0.0
+          ],
+          [
+            447.0,
+            -1319.0,
+            0.0
+          ],
+          [
+            575.0,
+            -1194.0,
+            0.0
+          ]
+        ]
+      },
+      "region:017": {
+        "data": {},
+        "position": [
+          719.0,
+          -1194.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            717.0,
+            -1069.0,
+            0.0
+          ],
+          [
+            594.0,
+            -1194.0,
+            0.0
+          ],
+          [
+            722.0,
+            -1319.0,
+            0.0
+          ],
+          [
+            844.0,
+            -1194.0,
+            0.0
+          ]
+        ]
+      },
+      "region:018": {
+        "data": {},
+        "position": [
+          172.0,
+          -1243.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            189.0,
+            -1072.0,
+            0.0
+          ],
+          [
+            83.0,
+            -1219.0,
+            0.0
+          ],
+          [
+            32.0,
+            -1396.0,
+            0.0
+          ],
+          [
+            208.0,
+            -1415.0,
+            0.0
+          ],
+          [
+            242.0,
+            -1296.0,
+            0.0
+          ],
+          [
+            312.0,
+            -1195.0,
+            0.0
+          ]
+        ]
+      },
+      "region:019": {
+        "data": {},
+        "position": [
+          997.0,
+          -1244.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            980.0,
+            -1072.0,
+            0.0
+          ],
+          [
+            857.0,
+            -1195.0,
+            0.0
+          ],
+          [
+            927.0,
+            -1296.0,
+            0.0
+          ],
+          [
+            961.0,
+            -1416.0,
+            0.0
+          ],
+          [
+            1137.0,
+            -1396.0,
+            0.0
+          ],
+          [
+            1086.0,
+            -1219.0,
+            0.0
+          ]
+        ]
+      },
+      "region:020": {
+        "data": {},
+        "position": [
+          328.5,
+          -1319.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            317.0,
+            -1203.0,
+            0.0
+          ],
+          [
+            248.0,
+            -1301.0,
+            0.0
+          ],
+          [
+            215.0,
+            -1417.0,
+            0.0
+          ],
+          [
+            391.0,
+            -1436.0,
+            0.0
+          ],
+          [
+            407.0,
+            -1378.0,
+            0.0
+          ],
+          [
+            442.0,
+            -1325.0,
+            0.0
+          ]
+        ]
+      },
+      "region:021": {
+        "data": {},
+        "position": [
+          840.5,
+          -1319.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            852.0,
+            -1203.0,
+            0.0
+          ],
+          [
+            727.0,
+            -1325.0,
+            0.0
+          ],
+          [
+            762.0,
+            -1378.0,
+            0.0
+          ],
+          [
+            778.0,
+            -1436.0,
+            0.0
+          ],
+          [
+            954.0,
+            -1417.0,
+            0.0
+          ],
+          [
+            922.0,
+            -1303.0,
+            0.0
+          ]
+        ]
+      },
+      "region:023": {
+        "data": {},
+        "position": [
+          144.0,
+          -1578.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            31.0,
+            -1403.0,
+            0.0
+          ],
+          [
+            41.0,
+            -1585.0,
+            0.0
+          ],
+          [
+            114.0,
+            -1753.0,
+            0.0
+          ],
+          [
+            260.0,
+            -1661.0,
+            0.0
+          ],
+          [
+            214.0,
+            -1547.0,
+            0.0
+          ],
+          [
+            207.0,
+            -1423.0,
+            0.0
+          ]
+        ]
+      },
+      "region:024": {
+        "data": {},
+        "position": [
+          1025.0,
+          -1578.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            1138.0,
+            -1403.0,
+            0.0
+          ],
+          [
+            962.0,
+            -1423.0,
+            0.0
+          ],
+          [
+            955.0,
+            -1548.0,
+            0.0
+          ],
+          [
+            909.0,
+            -1661.0,
+            0.0
+          ],
+          [
+            1055.0,
+            -1753.0,
+            0.0
+          ],
+          [
+            1128.0,
+            -1585.0,
+            0.0
+          ]
+        ]
+      },
+      "region:025": {
+        "data": {},
+        "position": [
+          314.0,
+          -1540.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            214.0,
+            -1424.0,
+            0.0
+          ],
+          [
+            221.0,
+            -1546.0,
+            0.0
+          ],
+          [
+            267.0,
+            -1656.0,
+            0.0
+          ],
+          [
+            416.0,
+            -1563.0,
+            0.0
+          ],
+          [
+            393.0,
+            -1504.0,
+            0.0
+          ],
+          [
+            390.0,
+            -1443.0,
+            0.0
+          ]
+        ]
+      },
+      "region:026": {
+        "data": {},
+        "position": [
+          855.0,
+          -1540.0,
+          0.0
+        ],
+        "polygon": [
+          [
+            955.0,
+            -1424.0,
+            0.0
+          ],
+          [
+            779.0,
+            -1443.0,
+            0.0
+          ],
+          [
+            776.0,
+            -1504.0,
+            0.0
+          ],
+          [
+            753.0,
+            -1564.0,
+            0.0
+          ],
+          [
+            902.0,
+            -1656.0,
+            0.0
+          ],
+          [
+            948.0,
+            -1546.0,
+            0.0
+          ]
+        ]
+      },
+      "region:027": {
+        "data": {},
+        "position": [
+          394.0,
+          -1690.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            419.0,
+            -1570.0,
+            0.0
+          ],
+          [
+            272.0,
+            -1664.0,
+            0.0
+          ],
+          [
+            353.0,
+            -1754.0,
+            0.0
+          ],
+          [
+            458.0,
+            -1811.0,
+            0.0
+          ],
+          [
+            516.0,
+            -1645.0,
+            0.0
+          ],
+          [
+            463.0,
+            -1616.0,
+            0.0
+          ]
+        ]
+      },
+      "region:028": {
+        "data": {},
+        "position": [
+          775.0,
+          -1690.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            750.0,
+            -1570.0,
+            0.0
+          ],
+          [
+            706.0,
+            -1616.0,
+            0.0
+          ],
+          [
+            653.0,
+            -1645.0,
+            0.0
+          ],
+          [
+            710.0,
+            -1811.0,
+            0.0
+          ],
+          [
+            816.0,
+            -1754.0,
+            0.0
+          ],
+          [
+            897.0,
+            -1664.0,
+            0.0
+          ]
+        ]
+      },
+      "region:029": {
+        "data": {},
+        "position": [
+          585.0,
+          -1741.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            523.0,
+            -1648.0,
+            0.0
+          ],
+          [
+            466.0,
+            -1815.0,
+            0.0
+          ],
+          [
+            582.0,
+            -1835.0,
+            0.0
+          ],
+          [
+            704.0,
+            -1815.0,
+            0.0
+          ],
+          [
+            646.0,
+            -1648.0,
+            0.0
+          ],
+          [
+            597.0,
+            -1657.0,
+            0.0
+          ]
+        ]
+      },
+      "region:030": {
+        "data": {},
+        "position": [
+          285.5,
+          -1826.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            116.0,
+            -1760.0,
+            0.0
+          ],
+          [
+            237.0,
+            -1897.0,
+            0.0
+          ],
+          [
+            398.0,
+            -1985.0,
+            0.0
+          ],
+          [
+            454.0,
+            -1818.0,
+            0.0
+          ],
+          [
+            350.0,
+            -1761.0,
+            0.0
+          ],
+          [
+            266.0,
+            -1668.0,
+            0.0
+          ]
+        ]
+      },
+      "region:031": {
+        "data": {},
+        "position": [
+          883.5,
+          -1826.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            1053.0,
+            -1760.0,
+            0.0
+          ],
+          [
+            903.0,
+            -1668.0,
+            0.0
+          ],
+          [
+            819.0,
+            -1761.0,
+            0.0
+          ],
+          [
+            714.0,
+            -1819.0,
+            0.0
+          ],
+          [
+            771.0,
+            -1985.0,
+            0.0
+          ],
+          [
+            931.0,
+            -1898.0,
+            0.0
+          ]
+        ]
+      },
+      "region:032": {
+        "data": {},
+        "position": [
+          584.5,
+          -1920.5,
+          0.0
+        ],
+        "polygon": [
+          [
+            405.0,
+            -1986.0,
+            0.0
+          ],
+          [
+            582.0,
+            -2019.0,
+            0.0
+          ],
+          [
+            764.0,
+            -1989.0,
+            0.0
+          ],
+          [
+            707.0,
+            -1822.0,
+            0.0
+          ],
+          [
+            585.0,
+            -1842.0,
+            0.0
+          ],
+          [
+            462.0,
+            -1822.0,
+            0.0
+          ]
+        ]
+      }
+    },
+    "channels": {
+      "region:000": {
+        "data": {},
+        "position": [
+          584.5,
+          -120.0,
+          0.0
+        ]
+      },
+      "region:001": {
+        "data": {},
+        "position": [
+          396.0,
+          -170.5,
+          0.0
+        ]
+      },
+      "region:002": {
+        "data": {},
+        "position": [
+          773.5,
+          -170.5,
+          0.0
+        ]
+      },
+      "region:003": {
+        "data": {},
+        "position": [
+          316.0,
+          -320.5,
+          0.0
+        ]
+      },
+      "region:004": {
+        "data": {},
+        "position": [
+          853.0,
+          -320.5,
+          0.0
+        ]
+      },
+      "region:006": {
+        "data": {},
+        "position": [
+          330.5,
+          -538.5,
+          0.0
+        ]
+      },
+      "region:007": {
+        "data": {},
+        "position": [
+          838.5,
+          -538.5,
+          0.0
+        ]
+      },
+      "region:008": {
+        "data": {},
+        "position": [
+          451.5,
+          -663.5,
+          0.0
+        ]
+      },
+      "region:009": {
+        "data": {},
+        "position": [
+          717.5,
+          -663.5,
+          0.0
+        ]
+      },
+      "region:010": {
+        "data": {},
+        "position": [
+          584.5,
+          -796.5,
+          0.0
+        ]
+      },
+      "region:011": {
+        "data": {},
+        "position": [
+          453.0,
+          -931.0,
+          0.0
+        ]
+      },
+      "region:012": {
+        "data": {},
+        "position": [
+          716.0,
+          -931.0,
+          0.0
+        ]
+      },
+      "region:013": {
+        "data": {},
+        "position": [
+          584.5,
+          -1062.5,
+          0.0
+        ]
+      },
+      "region:014": {
+        "data": {},
+        "position": [
+          320.0,
+          -1064.0,
+          0.0
+        ]
+      },
+      "region:015": {
+        "data": {},
+        "position": [
+          849.0,
+          -1064.0,
+          0.0
+        ]
+      },
+      "region:016": {
+        "data": {},
+        "position": [
+          450.0,
+          -1194.0,
+          0.0
+        ]
+      },
+      "region:017": {
+        "data": {},
+        "position": [
+          719.0,
+          -1194.0,
+          0.0
+        ]
+      },
+      "region:018": {
+        "data": {},
+        "position": [
+          172.0,
+          -1243.5,
+          0.0
+        ]
+      },
+      "region:019": {
+        "data": {},
+        "position": [
+          997.0,
+          -1244.0,
+          0.0
+        ]
+      },
+      "region:020": {
+        "data": {},
+        "position": [
+          328.5,
+          -1319.5,
+          0.0
+        ]
+      },
+      "region:021": {
+        "data": {},
+        "position": [
+          840.5,
+          -1319.5,
+          0.0
+        ]
+      },
+      "region:023": {
+        "data": {},
+        "position": [
+          144.0,
+          -1578.0,
+          0.0
+        ]
+      },
+      "region:024": {
+        "data": {},
+        "position": [
+          1025.0,
+          -1578.0,
+          0.0
+        ]
+      },
+      "region:025": {
+        "data": {},
+        "position": [
+          314.0,
+          -1540.0,
+          0.0
+        ]
+      },
+      "region:026": {
+        "data": {},
+        "position": [
+          855.0,
+          -1540.0,
+          0.0
+        ]
+      },
+      "region:027": {
+        "data": {},
+        "position": [
+          394.0,
+          -1690.5,
+          0.0
+        ]
+      },
+      "region:028": {
+        "data": {},
+        "position": [
+          775.0,
+          -1690.5,
+          0.0
+        ]
+      },
+      "region:029": {
+        "data": {},
+        "position": [
+          585.0,
+          -1741.5,
+          0.0
+        ]
+      },
+      "region:030": {
+        "data": {},
+        "position": [
+          285.5,
+          -1826.5,
+          0.0
+        ]
+      },
+      "region:031": {
+        "data": {},
+        "position": [
+          883.5,
+          -1826.5,
+          0.0
+        ]
+      },
+      "region:032": {
+        "data": {},
+        "position": [
+          584.5,
+          -1920.5,
+          0.0
+        ]
+      }
+    },
+    "ports": {},
+    "adjacencies": {},
+    "layers": [],
+    "data": {}
+  },
+  "catalog": {
+    "mechanics": [
+      "irregular-regions"
+    ],
+    "data": {},
+    "variant": "shapes"
+  },
+  "meta": {
+    "source": "image-import",
+    "source_image": "IMG_3245.PNG",
+    "image_size": "1242x2688",
+    "crop": "36,332,1170,2048",
+    "crop_size": "1170x2048",
+    "generated": "image_import",
+    "level_type_geometry": "circle",
+    "level_type_modifiers": "",
+    "level_type_source": "classifier",
+    "recommended_output": "flow",
+    "terminal_colors": {
+      "A": "#ff0000",
+      "B": "#ecdf00",
+      "C": "#0a29ff",
+      "D": "#008d00"
+    }
+  },
+  "extensions": {}
+}

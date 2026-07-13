@@ -14,6 +14,8 @@ def _cell_id(x: int, y: int) -> str:
 
 def build_square_space_from_tokens(
     token_rows: Sequence[Sequence[str]],
+    *,
+    require_terminals: bool = True,
 ) -> Tuple[Graph, Dict[str, List[NodeId]], Dict[Color, Tuple[NodeId, NodeId]]]:
     """Build a square-grid space from a 2D token grid.
 
@@ -106,7 +108,7 @@ def build_square_space_from_tokens(
             raise ValueError(f"Terminal {color!r} must appear exactly twice (found {len(locs)})")
         terminals[color] = (locs[0], locs[1])
 
-    if not terminals:
+    if not terminals and require_terminals:
         raise ValueError("No terminals found (need at least one A-Z pair)")
 
     return g, tiles, terminals

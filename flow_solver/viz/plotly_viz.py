@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from ..graph import NodeId
 from ..puzzle import Color, Puzzle
@@ -25,7 +25,8 @@ def build_plotly_figure(
     puzzle: Puzzle,
     *,
     node_color: Optional[Dict[NodeId, Optional[Color]]] = None,
-    title: str = "Flow Solver",
+    path_edges: Optional[Mapping[Color, Sequence[Tuple[NodeId, NodeId]]]] = None,
+    title: str = "Universal Flow Game Solver",
     use_3d: bool = False,
 ):
     import plotly.graph_objects as go
@@ -42,14 +43,13 @@ def build_plotly_figure(
         ey += [pu[1], pv[1], None]
         ez += [pu[2], pv[2], None]
 
-    # Solution edges (colored, thicker) if we have node colors
-    sol_edges = []
-    if node_color is not None:
-        for u, v in puzzle.graph.edges():
-            cu = node_color.get(u)
-            cv = node_color.get(v)
-            if cu is not None and cu == cv:
-                sol_edges.append((u, v, cu))
+    # Explicit selected edges are required: equal endpoint colors do not imply
+    # that a touching/chord adjacency belongs to the path.
+    sol_edges = [
+        (u, v, color)
+        for color, edges in (path_edges or {}).items()
+        for u, v in edges
+    ]
 
     # Nodes
     nx, ny, nz, ntext, ncolor, nsize = [], [], [], [], [], []
@@ -175,14 +175,20 @@ def write_plotly_html(
     *,
     out_path: str | Path,
     node_color: Optional[Dict[NodeId, Optional[Color]]] = None,
-    title: str = "Flow Solver",
+    path_edges: Optional[Mapping[Color, Sequence[Tuple[NodeId, NodeId]]]] = None,
+    title: str = "Universal Flow Game Solver",
     use_3d: bool = False,
 ) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig = build_plotly_figure(puzzle, node_color=node_color, title=title, use_3d=use_3d)
+    fig = build_plotly_figure(
+        puzzle,
+        node_color=node_color,
+        path_edges=path_edges,
+        title=title,
+        use_3d=use_3d,
+    )
     fig.write_html(str(out_path), include_plotlyjs="cdn", full_html=True)
     return out_path
-
 

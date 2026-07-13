@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY flow_solver ./flow_solver
 COPY backend ./backend
+COPY docs ./docs
 COPY app.py README.md ./
 
 EXPOSE 8000

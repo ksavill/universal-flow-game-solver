@@ -1,0 +1,6004 @@
+{
+  "format": "flow-solver-puzzle",
+  "schema_version": 2,
+  "topology": {
+    "cells": {
+      "0,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "0,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "1,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "2,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "3,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "4,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "5,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "6,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "7,8": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,0": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,1": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,2": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,3": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,4": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,5": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,6": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,7": {
+        "kind": "ordinary",
+        "data": {}
+      },
+      "8,8": {
+        "kind": "ordinary",
+        "data": {}
+      }
+    },
+    "channels": {
+      "0,0": {
+        "cell": "0,0",
+        "kind": "cell",
+        "ports": {
+          "edge-0:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-1:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,1": {
+        "cell": "0,1",
+        "kind": "cell",
+        "ports": {
+          "edge-0:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-2:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-3:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-4:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,2": {
+        "cell": "0,2",
+        "kind": "cell",
+        "ports": {
+          "edge-2:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-5:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-6:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-7:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,3": {
+        "cell": "0,3",
+        "kind": "cell",
+        "ports": {
+          "edge-10:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-5:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-8:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-9:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,4": {
+        "cell": "0,4",
+        "kind": "cell",
+        "ports": {
+          "edge-11:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-12:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-8:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,5": {
+        "cell": "0,5",
+        "kind": "cell",
+        "ports": {
+          "edge-11:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-13:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-14:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-15:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,6": {
+        "cell": "0,6",
+        "kind": "cell",
+        "ports": {
+          "edge-13:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-16:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-17:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-18:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,7": {
+        "cell": "0,7",
+        "kind": "cell",
+        "ports": {
+          "edge-16:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-19:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-20:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-21:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "0,8": {
+        "cell": "0,8",
+        "kind": "cell",
+        "ports": {
+          "edge-19:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-22:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,0": {
+        "cell": "1,0",
+        "kind": "cell",
+        "ports": {
+          "edge-1:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-23:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-24:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-25:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,1": {
+        "cell": "1,1",
+        "kind": "cell",
+        "ports": {
+          "edge-23:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-26:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-27:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-3:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,2": {
+        "cell": "1,2",
+        "kind": "cell",
+        "ports": {
+          "edge-26:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-28:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-29:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-6:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,3": {
+        "cell": "1,3",
+        "kind": "cell",
+        "ports": {
+          "edge-28:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-30:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-31:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-9:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,4": {
+        "cell": "1,4",
+        "kind": "cell",
+        "ports": {
+          "edge-12:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-30:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-32:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-33:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,5": {
+        "cell": "1,5",
+        "kind": "cell",
+        "ports": {
+          "edge-14:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-32:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-34:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-35:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,6": {
+        "cell": "1,6",
+        "kind": "cell",
+        "ports": {
+          "edge-17:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-34:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-36:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-37:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,7": {
+        "cell": "1,7",
+        "kind": "cell",
+        "ports": {
+          "edge-20:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-36:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-38:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-39:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "1,8": {
+        "cell": "1,8",
+        "kind": "cell",
+        "ports": {
+          "edge-22:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-24:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-38:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-40:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,0": {
+        "cell": "2,0",
+        "kind": "cell",
+        "ports": {
+          "edge-25:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-41:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-42:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-43:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,1": {
+        "cell": "2,1",
+        "kind": "cell",
+        "ports": {
+          "edge-27:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-41:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-44:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-45:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,2": {
+        "cell": "2,2",
+        "kind": "cell",
+        "ports": {
+          "edge-29:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-44:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-46:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-47:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,3": {
+        "cell": "2,3",
+        "kind": "cell",
+        "ports": {
+          "edge-31:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-46:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-48:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-49:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,4": {
+        "cell": "2,4",
+        "kind": "cell",
+        "ports": {
+          "edge-33:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-48:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-50:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-51:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,5": {
+        "cell": "2,5",
+        "kind": "cell",
+        "ports": {
+          "edge-35:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-50:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-52:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-53:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,6": {
+        "cell": "2,6",
+        "kind": "cell",
+        "ports": {
+          "edge-37:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-52:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-54:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-55:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,7": {
+        "cell": "2,7",
+        "kind": "cell",
+        "ports": {
+          "edge-39:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-54:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-56:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-57:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "2,8": {
+        "cell": "2,8",
+        "kind": "cell",
+        "ports": {
+          "edge-40:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-42:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-56:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-58:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,0": {
+        "cell": "3,0",
+        "kind": "cell",
+        "ports": {
+          "edge-43:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-59:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-60:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-61:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,1": {
+        "cell": "3,1",
+        "kind": "cell",
+        "ports": {
+          "edge-45:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-59:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-62:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-63:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,2": {
+        "cell": "3,2",
+        "kind": "cell",
+        "ports": {
+          "edge-47:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-62:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-64:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-65:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,3": {
+        "cell": "3,3",
+        "kind": "cell",
+        "ports": {
+          "edge-49:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-64:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-66:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-67:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,4": {
+        "cell": "3,4",
+        "kind": "cell",
+        "ports": {
+          "edge-51:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-66:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-68:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-69:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,5": {
+        "cell": "3,5",
+        "kind": "cell",
+        "ports": {
+          "edge-53:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-68:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-70:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-71:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,6": {
+        "cell": "3,6",
+        "kind": "cell",
+        "ports": {
+          "edge-55:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-70:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-72:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-73:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,7": {
+        "cell": "3,7",
+        "kind": "cell",
+        "ports": {
+          "edge-57:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-72:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-74:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-75:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "3,8": {
+        "cell": "3,8",
+        "kind": "cell",
+        "ports": {
+          "edge-58:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-60:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-74:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-76:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,0": {
+        "cell": "4,0",
+        "kind": "cell",
+        "ports": {
+          "edge-61:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-77:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-78:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,1": {
+        "cell": "4,1",
+        "kind": "cell",
+        "ports": {
+          "edge-63:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-77:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-79:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-80:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,2": {
+        "cell": "4,2",
+        "kind": "cell",
+        "ports": {
+          "edge-65:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-79:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-81:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-82:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,3": {
+        "cell": "4,3",
+        "kind": "cell",
+        "ports": {
+          "edge-67:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-81:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-83:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-84:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,4": {
+        "cell": "4,4",
+        "kind": "cell",
+        "ports": {
+          "edge-69:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-83:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-85:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-86:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,5": {
+        "cell": "4,5",
+        "kind": "cell",
+        "ports": {
+          "edge-71:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-85:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-87:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-88:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,6": {
+        "cell": "4,6",
+        "kind": "cell",
+        "ports": {
+          "edge-73:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-87:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-89:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-90:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,7": {
+        "cell": "4,7",
+        "kind": "cell",
+        "ports": {
+          "edge-75:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-89:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-91:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-92:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "4,8": {
+        "cell": "4,8",
+        "kind": "cell",
+        "ports": {
+          "edge-76:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-91:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-93:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,0": {
+        "cell": "5,0",
+        "kind": "cell",
+        "ports": {
+          "edge-78:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-94:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-95:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-96:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,1": {
+        "cell": "5,1",
+        "kind": "cell",
+        "ports": {
+          "edge-80:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-94:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-97:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-98:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,2": {
+        "cell": "5,2",
+        "kind": "cell",
+        "ports": {
+          "edge-100:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-82:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-97:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-99:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,3": {
+        "cell": "5,3",
+        "kind": "cell",
+        "ports": {
+          "edge-101:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-102:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-84:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-99:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,4": {
+        "cell": "5,4",
+        "kind": "cell",
+        "ports": {
+          "edge-101:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-103:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-104:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-86:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,5": {
+        "cell": "5,5",
+        "kind": "cell",
+        "ports": {
+          "edge-103:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-105:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-106:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-88:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,6": {
+        "cell": "5,6",
+        "kind": "cell",
+        "ports": {
+          "edge-105:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-107:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-108:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-90:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,7": {
+        "cell": "5,7",
+        "kind": "cell",
+        "ports": {
+          "edge-107:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-109:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-110:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-92:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "5,8": {
+        "cell": "5,8",
+        "kind": "cell",
+        "ports": {
+          "edge-109:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-111:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-93:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-95:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,0": {
+        "cell": "6,0",
+        "kind": "cell",
+        "ports": {
+          "edge-112:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-113:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-114:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-96:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,1": {
+        "cell": "6,1",
+        "kind": "cell",
+        "ports": {
+          "edge-112:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-115:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-116:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-98:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,2": {
+        "cell": "6,2",
+        "kind": "cell",
+        "ports": {
+          "edge-100:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-115:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-117:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-118:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,3": {
+        "cell": "6,3",
+        "kind": "cell",
+        "ports": {
+          "edge-102:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-117:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-119:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-120:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,4": {
+        "cell": "6,4",
+        "kind": "cell",
+        "ports": {
+          "edge-104:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-119:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-121:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-122:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,5": {
+        "cell": "6,5",
+        "kind": "cell",
+        "ports": {
+          "edge-106:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-121:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-123:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-124:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,6": {
+        "cell": "6,6",
+        "kind": "cell",
+        "ports": {
+          "edge-108:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-123:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-125:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-126:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,7": {
+        "cell": "6,7",
+        "kind": "cell",
+        "ports": {
+          "edge-110:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-125:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-127:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-128:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "6,8": {
+        "cell": "6,8",
+        "kind": "cell",
+        "ports": {
+          "edge-111:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-113:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-127:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-129:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,0": {
+        "cell": "7,0",
+        "kind": "cell",
+        "ports": {
+          "edge-114:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-130:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-131:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-132:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,1": {
+        "cell": "7,1",
+        "kind": "cell",
+        "ports": {
+          "edge-116:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-130:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-133:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-134:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,2": {
+        "cell": "7,2",
+        "kind": "cell",
+        "ports": {
+          "edge-118:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-133:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-135:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-136:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,3": {
+        "cell": "7,3",
+        "kind": "cell",
+        "ports": {
+          "edge-120:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-135:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-137:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-138:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,4": {
+        "cell": "7,4",
+        "kind": "cell",
+        "ports": {
+          "edge-122:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-137:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-139:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-140:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,5": {
+        "cell": "7,5",
+        "kind": "cell",
+        "ports": {
+          "edge-124:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-139:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-141:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-142:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,6": {
+        "cell": "7,6",
+        "kind": "cell",
+        "ports": {
+          "edge-126:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-141:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-143:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-144:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,7": {
+        "cell": "7,7",
+        "kind": "cell",
+        "ports": {
+          "edge-128:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-143:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-145:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-146:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "7,8": {
+        "cell": "7,8",
+        "kind": "cell",
+        "ports": {
+          "edge-129:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-131:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-145:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-147:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,0": {
+        "cell": "8,0",
+        "kind": "cell",
+        "ports": {
+          "edge-132:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-148:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,1": {
+        "cell": "8,1",
+        "kind": "cell",
+        "ports": {
+          "edge-134:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-148:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-149:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-4:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,2": {
+        "cell": "8,2",
+        "kind": "cell",
+        "ports": {
+          "edge-136:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-149:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-150:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-7:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,3": {
+        "cell": "8,3",
+        "kind": "cell",
+        "ports": {
+          "edge-10:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-138:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-150:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-151:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,4": {
+        "cell": "8,4",
+        "kind": "cell",
+        "ports": {
+          "edge-140:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-151:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-152:a": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,5": {
+        "cell": "8,5",
+        "kind": "cell",
+        "ports": {
+          "edge-142:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-152:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-153:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-15:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,6": {
+        "cell": "8,6",
+        "kind": "cell",
+        "ports": {
+          "edge-144:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-153:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-154:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-18:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,7": {
+        "cell": "8,7",
+        "kind": "cell",
+        "ports": {
+          "edge-146:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-154:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-155:a": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-21:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      },
+      "8,8": {
+        "cell": "8,8",
+        "kind": "cell",
+        "ports": {
+          "edge-147:b": {
+            "kind": "port",
+            "data": {}
+          },
+          "edge-155:b": {
+            "kind": "port",
+            "data": {}
+          }
+        },
+        "data": {}
+      }
+    },
+    "adjacencies": [
+      {
+        "id": "edge-0000",
+        "a": {
+          "channel": "0,0",
+          "port": "edge-0:a"
+        },
+        "b": {
+          "channel": "0,1",
+          "port": "edge-0:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0001",
+        "a": {
+          "channel": "0,0",
+          "port": "edge-1:a"
+        },
+        "b": {
+          "channel": "1,0",
+          "port": "edge-1:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0002",
+        "a": {
+          "channel": "0,1",
+          "port": "edge-2:a"
+        },
+        "b": {
+          "channel": "0,2",
+          "port": "edge-2:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0003",
+        "a": {
+          "channel": "0,1",
+          "port": "edge-3:a"
+        },
+        "b": {
+          "channel": "1,1",
+          "port": "edge-3:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0004",
+        "a": {
+          "channel": "0,1",
+          "port": "edge-4:a"
+        },
+        "b": {
+          "channel": "8,1",
+          "port": "edge-4:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0005",
+        "a": {
+          "channel": "0,2",
+          "port": "edge-5:a"
+        },
+        "b": {
+          "channel": "0,3",
+          "port": "edge-5:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0006",
+        "a": {
+          "channel": "0,2",
+          "port": "edge-6:a"
+        },
+        "b": {
+          "channel": "1,2",
+          "port": "edge-6:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0007",
+        "a": {
+          "channel": "0,2",
+          "port": "edge-7:a"
+        },
+        "b": {
+          "channel": "8,2",
+          "port": "edge-7:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0008",
+        "a": {
+          "channel": "0,3",
+          "port": "edge-8:a"
+        },
+        "b": {
+          "channel": "0,4",
+          "port": "edge-8:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0009",
+        "a": {
+          "channel": "0,3",
+          "port": "edge-9:a"
+        },
+        "b": {
+          "channel": "1,3",
+          "port": "edge-9:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0010",
+        "a": {
+          "channel": "0,3",
+          "port": "edge-10:a"
+        },
+        "b": {
+          "channel": "8,3",
+          "port": "edge-10:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0011",
+        "a": {
+          "channel": "0,4",
+          "port": "edge-11:a"
+        },
+        "b": {
+          "channel": "0,5",
+          "port": "edge-11:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0012",
+        "a": {
+          "channel": "0,4",
+          "port": "edge-12:a"
+        },
+        "b": {
+          "channel": "1,4",
+          "port": "edge-12:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0013",
+        "a": {
+          "channel": "0,5",
+          "port": "edge-13:a"
+        },
+        "b": {
+          "channel": "0,6",
+          "port": "edge-13:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0014",
+        "a": {
+          "channel": "0,5",
+          "port": "edge-14:a"
+        },
+        "b": {
+          "channel": "1,5",
+          "port": "edge-14:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0015",
+        "a": {
+          "channel": "0,5",
+          "port": "edge-15:a"
+        },
+        "b": {
+          "channel": "8,5",
+          "port": "edge-15:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0016",
+        "a": {
+          "channel": "0,6",
+          "port": "edge-16:a"
+        },
+        "b": {
+          "channel": "0,7",
+          "port": "edge-16:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0017",
+        "a": {
+          "channel": "0,6",
+          "port": "edge-17:a"
+        },
+        "b": {
+          "channel": "1,6",
+          "port": "edge-17:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0018",
+        "a": {
+          "channel": "0,6",
+          "port": "edge-18:a"
+        },
+        "b": {
+          "channel": "8,6",
+          "port": "edge-18:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0019",
+        "a": {
+          "channel": "0,7",
+          "port": "edge-19:a"
+        },
+        "b": {
+          "channel": "0,8",
+          "port": "edge-19:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0020",
+        "a": {
+          "channel": "0,7",
+          "port": "edge-20:a"
+        },
+        "b": {
+          "channel": "1,7",
+          "port": "edge-20:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0021",
+        "a": {
+          "channel": "0,7",
+          "port": "edge-21:a"
+        },
+        "b": {
+          "channel": "8,7",
+          "port": "edge-21:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0022",
+        "a": {
+          "channel": "0,8",
+          "port": "edge-22:a"
+        },
+        "b": {
+          "channel": "1,8",
+          "port": "edge-22:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0023",
+        "a": {
+          "channel": "1,0",
+          "port": "edge-23:a"
+        },
+        "b": {
+          "channel": "1,1",
+          "port": "edge-23:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0024",
+        "a": {
+          "channel": "1,0",
+          "port": "edge-24:a"
+        },
+        "b": {
+          "channel": "1,8",
+          "port": "edge-24:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0025",
+        "a": {
+          "channel": "1,0",
+          "port": "edge-25:a"
+        },
+        "b": {
+          "channel": "2,0",
+          "port": "edge-25:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0026",
+        "a": {
+          "channel": "1,1",
+          "port": "edge-26:a"
+        },
+        "b": {
+          "channel": "1,2",
+          "port": "edge-26:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0027",
+        "a": {
+          "channel": "1,1",
+          "port": "edge-27:a"
+        },
+        "b": {
+          "channel": "2,1",
+          "port": "edge-27:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0028",
+        "a": {
+          "channel": "1,2",
+          "port": "edge-28:a"
+        },
+        "b": {
+          "channel": "1,3",
+          "port": "edge-28:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0029",
+        "a": {
+          "channel": "1,2",
+          "port": "edge-29:a"
+        },
+        "b": {
+          "channel": "2,2",
+          "port": "edge-29:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0030",
+        "a": {
+          "channel": "1,3",
+          "port": "edge-30:a"
+        },
+        "b": {
+          "channel": "1,4",
+          "port": "edge-30:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0031",
+        "a": {
+          "channel": "1,3",
+          "port": "edge-31:a"
+        },
+        "b": {
+          "channel": "2,3",
+          "port": "edge-31:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0032",
+        "a": {
+          "channel": "1,4",
+          "port": "edge-32:a"
+        },
+        "b": {
+          "channel": "1,5",
+          "port": "edge-32:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0033",
+        "a": {
+          "channel": "1,4",
+          "port": "edge-33:a"
+        },
+        "b": {
+          "channel": "2,4",
+          "port": "edge-33:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0034",
+        "a": {
+          "channel": "1,5",
+          "port": "edge-34:a"
+        },
+        "b": {
+          "channel": "1,6",
+          "port": "edge-34:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0035",
+        "a": {
+          "channel": "1,5",
+          "port": "edge-35:a"
+        },
+        "b": {
+          "channel": "2,5",
+          "port": "edge-35:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0036",
+        "a": {
+          "channel": "1,6",
+          "port": "edge-36:a"
+        },
+        "b": {
+          "channel": "1,7",
+          "port": "edge-36:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0037",
+        "a": {
+          "channel": "1,6",
+          "port": "edge-37:a"
+        },
+        "b": {
+          "channel": "2,6",
+          "port": "edge-37:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0038",
+        "a": {
+          "channel": "1,7",
+          "port": "edge-38:a"
+        },
+        "b": {
+          "channel": "1,8",
+          "port": "edge-38:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0039",
+        "a": {
+          "channel": "1,7",
+          "port": "edge-39:a"
+        },
+        "b": {
+          "channel": "2,7",
+          "port": "edge-39:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0040",
+        "a": {
+          "channel": "1,8",
+          "port": "edge-40:a"
+        },
+        "b": {
+          "channel": "2,8",
+          "port": "edge-40:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0041",
+        "a": {
+          "channel": "2,0",
+          "port": "edge-41:a"
+        },
+        "b": {
+          "channel": "2,1",
+          "port": "edge-41:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0042",
+        "a": {
+          "channel": "2,0",
+          "port": "edge-42:a"
+        },
+        "b": {
+          "channel": "2,8",
+          "port": "edge-42:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0043",
+        "a": {
+          "channel": "2,0",
+          "port": "edge-43:a"
+        },
+        "b": {
+          "channel": "3,0",
+          "port": "edge-43:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0044",
+        "a": {
+          "channel": "2,1",
+          "port": "edge-44:a"
+        },
+        "b": {
+          "channel": "2,2",
+          "port": "edge-44:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0045",
+        "a": {
+          "channel": "2,1",
+          "port": "edge-45:a"
+        },
+        "b": {
+          "channel": "3,1",
+          "port": "edge-45:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0046",
+        "a": {
+          "channel": "2,2",
+          "port": "edge-46:a"
+        },
+        "b": {
+          "channel": "2,3",
+          "port": "edge-46:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0047",
+        "a": {
+          "channel": "2,2",
+          "port": "edge-47:a"
+        },
+        "b": {
+          "channel": "3,2",
+          "port": "edge-47:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0048",
+        "a": {
+          "channel": "2,3",
+          "port": "edge-48:a"
+        },
+        "b": {
+          "channel": "2,4",
+          "port": "edge-48:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0049",
+        "a": {
+          "channel": "2,3",
+          "port": "edge-49:a"
+        },
+        "b": {
+          "channel": "3,3",
+          "port": "edge-49:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0050",
+        "a": {
+          "channel": "2,4",
+          "port": "edge-50:a"
+        },
+        "b": {
+          "channel": "2,5",
+          "port": "edge-50:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0051",
+        "a": {
+          "channel": "2,4",
+          "port": "edge-51:a"
+        },
+        "b": {
+          "channel": "3,4",
+          "port": "edge-51:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0052",
+        "a": {
+          "channel": "2,5",
+          "port": "edge-52:a"
+        },
+        "b": {
+          "channel": "2,6",
+          "port": "edge-52:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0053",
+        "a": {
+          "channel": "2,5",
+          "port": "edge-53:a"
+        },
+        "b": {
+          "channel": "3,5",
+          "port": "edge-53:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0054",
+        "a": {
+          "channel": "2,6",
+          "port": "edge-54:a"
+        },
+        "b": {
+          "channel": "2,7",
+          "port": "edge-54:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0055",
+        "a": {
+          "channel": "2,6",
+          "port": "edge-55:a"
+        },
+        "b": {
+          "channel": "3,6",
+          "port": "edge-55:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0056",
+        "a": {
+          "channel": "2,7",
+          "port": "edge-56:a"
+        },
+        "b": {
+          "channel": "2,8",
+          "port": "edge-56:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0057",
+        "a": {
+          "channel": "2,7",
+          "port": "edge-57:a"
+        },
+        "b": {
+          "channel": "3,7",
+          "port": "edge-57:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0058",
+        "a": {
+          "channel": "2,8",
+          "port": "edge-58:a"
+        },
+        "b": {
+          "channel": "3,8",
+          "port": "edge-58:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0059",
+        "a": {
+          "channel": "3,0",
+          "port": "edge-59:a"
+        },
+        "b": {
+          "channel": "3,1",
+          "port": "edge-59:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0060",
+        "a": {
+          "channel": "3,0",
+          "port": "edge-60:a"
+        },
+        "b": {
+          "channel": "3,8",
+          "port": "edge-60:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0061",
+        "a": {
+          "channel": "3,0",
+          "port": "edge-61:a"
+        },
+        "b": {
+          "channel": "4,0",
+          "port": "edge-61:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0062",
+        "a": {
+          "channel": "3,1",
+          "port": "edge-62:a"
+        },
+        "b": {
+          "channel": "3,2",
+          "port": "edge-62:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0063",
+        "a": {
+          "channel": "3,1",
+          "port": "edge-63:a"
+        },
+        "b": {
+          "channel": "4,1",
+          "port": "edge-63:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0064",
+        "a": {
+          "channel": "3,2",
+          "port": "edge-64:a"
+        },
+        "b": {
+          "channel": "3,3",
+          "port": "edge-64:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0065",
+        "a": {
+          "channel": "3,2",
+          "port": "edge-65:a"
+        },
+        "b": {
+          "channel": "4,2",
+          "port": "edge-65:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0066",
+        "a": {
+          "channel": "3,3",
+          "port": "edge-66:a"
+        },
+        "b": {
+          "channel": "3,4",
+          "port": "edge-66:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0067",
+        "a": {
+          "channel": "3,3",
+          "port": "edge-67:a"
+        },
+        "b": {
+          "channel": "4,3",
+          "port": "edge-67:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0068",
+        "a": {
+          "channel": "3,4",
+          "port": "edge-68:a"
+        },
+        "b": {
+          "channel": "3,5",
+          "port": "edge-68:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0069",
+        "a": {
+          "channel": "3,4",
+          "port": "edge-69:a"
+        },
+        "b": {
+          "channel": "4,4",
+          "port": "edge-69:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0070",
+        "a": {
+          "channel": "3,5",
+          "port": "edge-70:a"
+        },
+        "b": {
+          "channel": "3,6",
+          "port": "edge-70:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0071",
+        "a": {
+          "channel": "3,5",
+          "port": "edge-71:a"
+        },
+        "b": {
+          "channel": "4,5",
+          "port": "edge-71:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0072",
+        "a": {
+          "channel": "3,6",
+          "port": "edge-72:a"
+        },
+        "b": {
+          "channel": "3,7",
+          "port": "edge-72:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0073",
+        "a": {
+          "channel": "3,6",
+          "port": "edge-73:a"
+        },
+        "b": {
+          "channel": "4,6",
+          "port": "edge-73:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0074",
+        "a": {
+          "channel": "3,7",
+          "port": "edge-74:a"
+        },
+        "b": {
+          "channel": "3,8",
+          "port": "edge-74:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0075",
+        "a": {
+          "channel": "3,7",
+          "port": "edge-75:a"
+        },
+        "b": {
+          "channel": "4,7",
+          "port": "edge-75:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0076",
+        "a": {
+          "channel": "3,8",
+          "port": "edge-76:a"
+        },
+        "b": {
+          "channel": "4,8",
+          "port": "edge-76:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0077",
+        "a": {
+          "channel": "4,0",
+          "port": "edge-77:a"
+        },
+        "b": {
+          "channel": "4,1",
+          "port": "edge-77:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0078",
+        "a": {
+          "channel": "4,0",
+          "port": "edge-78:a"
+        },
+        "b": {
+          "channel": "5,0",
+          "port": "edge-78:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0079",
+        "a": {
+          "channel": "4,1",
+          "port": "edge-79:a"
+        },
+        "b": {
+          "channel": "4,2",
+          "port": "edge-79:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0080",
+        "a": {
+          "channel": "4,1",
+          "port": "edge-80:a"
+        },
+        "b": {
+          "channel": "5,1",
+          "port": "edge-80:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0081",
+        "a": {
+          "channel": "4,2",
+          "port": "edge-81:a"
+        },
+        "b": {
+          "channel": "4,3",
+          "port": "edge-81:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0082",
+        "a": {
+          "channel": "4,2",
+          "port": "edge-82:a"
+        },
+        "b": {
+          "channel": "5,2",
+          "port": "edge-82:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0083",
+        "a": {
+          "channel": "4,3",
+          "port": "edge-83:a"
+        },
+        "b": {
+          "channel": "4,4",
+          "port": "edge-83:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0084",
+        "a": {
+          "channel": "4,3",
+          "port": "edge-84:a"
+        },
+        "b": {
+          "channel": "5,3",
+          "port": "edge-84:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0085",
+        "a": {
+          "channel": "4,4",
+          "port": "edge-85:a"
+        },
+        "b": {
+          "channel": "4,5",
+          "port": "edge-85:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0086",
+        "a": {
+          "channel": "4,4",
+          "port": "edge-86:a"
+        },
+        "b": {
+          "channel": "5,4",
+          "port": "edge-86:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0087",
+        "a": {
+          "channel": "4,5",
+          "port": "edge-87:a"
+        },
+        "b": {
+          "channel": "4,6",
+          "port": "edge-87:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0088",
+        "a": {
+          "channel": "4,5",
+          "port": "edge-88:a"
+        },
+        "b": {
+          "channel": "5,5",
+          "port": "edge-88:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0089",
+        "a": {
+          "channel": "4,6",
+          "port": "edge-89:a"
+        },
+        "b": {
+          "channel": "4,7",
+          "port": "edge-89:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0090",
+        "a": {
+          "channel": "4,6",
+          "port": "edge-90:a"
+        },
+        "b": {
+          "channel": "5,6",
+          "port": "edge-90:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0091",
+        "a": {
+          "channel": "4,7",
+          "port": "edge-91:a"
+        },
+        "b": {
+          "channel": "4,8",
+          "port": "edge-91:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0092",
+        "a": {
+          "channel": "4,7",
+          "port": "edge-92:a"
+        },
+        "b": {
+          "channel": "5,7",
+          "port": "edge-92:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0093",
+        "a": {
+          "channel": "4,8",
+          "port": "edge-93:a"
+        },
+        "b": {
+          "channel": "5,8",
+          "port": "edge-93:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0094",
+        "a": {
+          "channel": "5,0",
+          "port": "edge-94:a"
+        },
+        "b": {
+          "channel": "5,1",
+          "port": "edge-94:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0095",
+        "a": {
+          "channel": "5,0",
+          "port": "edge-95:a"
+        },
+        "b": {
+          "channel": "5,8",
+          "port": "edge-95:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0096",
+        "a": {
+          "channel": "5,0",
+          "port": "edge-96:a"
+        },
+        "b": {
+          "channel": "6,0",
+          "port": "edge-96:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0097",
+        "a": {
+          "channel": "5,1",
+          "port": "edge-97:a"
+        },
+        "b": {
+          "channel": "5,2",
+          "port": "edge-97:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0098",
+        "a": {
+          "channel": "5,1",
+          "port": "edge-98:a"
+        },
+        "b": {
+          "channel": "6,1",
+          "port": "edge-98:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0099",
+        "a": {
+          "channel": "5,2",
+          "port": "edge-99:a"
+        },
+        "b": {
+          "channel": "5,3",
+          "port": "edge-99:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0100",
+        "a": {
+          "channel": "5,2",
+          "port": "edge-100:a"
+        },
+        "b": {
+          "channel": "6,2",
+          "port": "edge-100:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0101",
+        "a": {
+          "channel": "5,3",
+          "port": "edge-101:a"
+        },
+        "b": {
+          "channel": "5,4",
+          "port": "edge-101:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0102",
+        "a": {
+          "channel": "5,3",
+          "port": "edge-102:a"
+        },
+        "b": {
+          "channel": "6,3",
+          "port": "edge-102:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0103",
+        "a": {
+          "channel": "5,4",
+          "port": "edge-103:a"
+        },
+        "b": {
+          "channel": "5,5",
+          "port": "edge-103:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0104",
+        "a": {
+          "channel": "5,4",
+          "port": "edge-104:a"
+        },
+        "b": {
+          "channel": "6,4",
+          "port": "edge-104:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0105",
+        "a": {
+          "channel": "5,5",
+          "port": "edge-105:a"
+        },
+        "b": {
+          "channel": "5,6",
+          "port": "edge-105:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0106",
+        "a": {
+          "channel": "5,5",
+          "port": "edge-106:a"
+        },
+        "b": {
+          "channel": "6,5",
+          "port": "edge-106:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0107",
+        "a": {
+          "channel": "5,6",
+          "port": "edge-107:a"
+        },
+        "b": {
+          "channel": "5,7",
+          "port": "edge-107:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0108",
+        "a": {
+          "channel": "5,6",
+          "port": "edge-108:a"
+        },
+        "b": {
+          "channel": "6,6",
+          "port": "edge-108:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0109",
+        "a": {
+          "channel": "5,7",
+          "port": "edge-109:a"
+        },
+        "b": {
+          "channel": "5,8",
+          "port": "edge-109:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0110",
+        "a": {
+          "channel": "5,7",
+          "port": "edge-110:a"
+        },
+        "b": {
+          "channel": "6,7",
+          "port": "edge-110:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0111",
+        "a": {
+          "channel": "5,8",
+          "port": "edge-111:a"
+        },
+        "b": {
+          "channel": "6,8",
+          "port": "edge-111:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0112",
+        "a": {
+          "channel": "6,0",
+          "port": "edge-112:a"
+        },
+        "b": {
+          "channel": "6,1",
+          "port": "edge-112:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0113",
+        "a": {
+          "channel": "6,0",
+          "port": "edge-113:a"
+        },
+        "b": {
+          "channel": "6,8",
+          "port": "edge-113:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0114",
+        "a": {
+          "channel": "6,0",
+          "port": "edge-114:a"
+        },
+        "b": {
+          "channel": "7,0",
+          "port": "edge-114:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0115",
+        "a": {
+          "channel": "6,1",
+          "port": "edge-115:a"
+        },
+        "b": {
+          "channel": "6,2",
+          "port": "edge-115:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0116",
+        "a": {
+          "channel": "6,1",
+          "port": "edge-116:a"
+        },
+        "b": {
+          "channel": "7,1",
+          "port": "edge-116:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0117",
+        "a": {
+          "channel": "6,2",
+          "port": "edge-117:a"
+        },
+        "b": {
+          "channel": "6,3",
+          "port": "edge-117:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0118",
+        "a": {
+          "channel": "6,2",
+          "port": "edge-118:a"
+        },
+        "b": {
+          "channel": "7,2",
+          "port": "edge-118:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0119",
+        "a": {
+          "channel": "6,3",
+          "port": "edge-119:a"
+        },
+        "b": {
+          "channel": "6,4",
+          "port": "edge-119:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0120",
+        "a": {
+          "channel": "6,3",
+          "port": "edge-120:a"
+        },
+        "b": {
+          "channel": "7,3",
+          "port": "edge-120:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0121",
+        "a": {
+          "channel": "6,4",
+          "port": "edge-121:a"
+        },
+        "b": {
+          "channel": "6,5",
+          "port": "edge-121:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0122",
+        "a": {
+          "channel": "6,4",
+          "port": "edge-122:a"
+        },
+        "b": {
+          "channel": "7,4",
+          "port": "edge-122:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0123",
+        "a": {
+          "channel": "6,5",
+          "port": "edge-123:a"
+        },
+        "b": {
+          "channel": "6,6",
+          "port": "edge-123:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0124",
+        "a": {
+          "channel": "6,5",
+          "port": "edge-124:a"
+        },
+        "b": {
+          "channel": "7,5",
+          "port": "edge-124:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0125",
+        "a": {
+          "channel": "6,6",
+          "port": "edge-125:a"
+        },
+        "b": {
+          "channel": "6,7",
+          "port": "edge-125:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0126",
+        "a": {
+          "channel": "6,6",
+          "port": "edge-126:a"
+        },
+        "b": {
+          "channel": "7,6",
+          "port": "edge-126:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0127",
+        "a": {
+          "channel": "6,7",
+          "port": "edge-127:a"
+        },
+        "b": {
+          "channel": "6,8",
+          "port": "edge-127:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0128",
+        "a": {
+          "channel": "6,7",
+          "port": "edge-128:a"
+        },
+        "b": {
+          "channel": "7,7",
+          "port": "edge-128:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0129",
+        "a": {
+          "channel": "6,8",
+          "port": "edge-129:a"
+        },
+        "b": {
+          "channel": "7,8",
+          "port": "edge-129:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0130",
+        "a": {
+          "channel": "7,0",
+          "port": "edge-130:a"
+        },
+        "b": {
+          "channel": "7,1",
+          "port": "edge-130:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0131",
+        "a": {
+          "channel": "7,0",
+          "port": "edge-131:a"
+        },
+        "b": {
+          "channel": "7,8",
+          "port": "edge-131:b"
+        },
+        "kind": "warp",
+        "state": "open",
+        "group": "warp-1",
+        "data": {}
+      },
+      {
+        "id": "edge-0132",
+        "a": {
+          "channel": "7,0",
+          "port": "edge-132:a"
+        },
+        "b": {
+          "channel": "8,0",
+          "port": "edge-132:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0133",
+        "a": {
+          "channel": "7,1",
+          "port": "edge-133:a"
+        },
+        "b": {
+          "channel": "7,2",
+          "port": "edge-133:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0134",
+        "a": {
+          "channel": "7,1",
+          "port": "edge-134:a"
+        },
+        "b": {
+          "channel": "8,1",
+          "port": "edge-134:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0135",
+        "a": {
+          "channel": "7,2",
+          "port": "edge-135:a"
+        },
+        "b": {
+          "channel": "7,3",
+          "port": "edge-135:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0136",
+        "a": {
+          "channel": "7,2",
+          "port": "edge-136:a"
+        },
+        "b": {
+          "channel": "8,2",
+          "port": "edge-136:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0137",
+        "a": {
+          "channel": "7,3",
+          "port": "edge-137:a"
+        },
+        "b": {
+          "channel": "7,4",
+          "port": "edge-137:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0138",
+        "a": {
+          "channel": "7,3",
+          "port": "edge-138:a"
+        },
+        "b": {
+          "channel": "8,3",
+          "port": "edge-138:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0139",
+        "a": {
+          "channel": "7,4",
+          "port": "edge-139:a"
+        },
+        "b": {
+          "channel": "7,5",
+          "port": "edge-139:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0140",
+        "a": {
+          "channel": "7,4",
+          "port": "edge-140:a"
+        },
+        "b": {
+          "channel": "8,4",
+          "port": "edge-140:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0141",
+        "a": {
+          "channel": "7,5",
+          "port": "edge-141:a"
+        },
+        "b": {
+          "channel": "7,6",
+          "port": "edge-141:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0142",
+        "a": {
+          "channel": "7,5",
+          "port": "edge-142:a"
+        },
+        "b": {
+          "channel": "8,5",
+          "port": "edge-142:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0143",
+        "a": {
+          "channel": "7,6",
+          "port": "edge-143:a"
+        },
+        "b": {
+          "channel": "7,7",
+          "port": "edge-143:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0144",
+        "a": {
+          "channel": "7,6",
+          "port": "edge-144:a"
+        },
+        "b": {
+          "channel": "8,6",
+          "port": "edge-144:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0145",
+        "a": {
+          "channel": "7,7",
+          "port": "edge-145:a"
+        },
+        "b": {
+          "channel": "7,8",
+          "port": "edge-145:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0146",
+        "a": {
+          "channel": "7,7",
+          "port": "edge-146:a"
+        },
+        "b": {
+          "channel": "8,7",
+          "port": "edge-146:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0147",
+        "a": {
+          "channel": "7,8",
+          "port": "edge-147:a"
+        },
+        "b": {
+          "channel": "8,8",
+          "port": "edge-147:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0148",
+        "a": {
+          "channel": "8,0",
+          "port": "edge-148:a"
+        },
+        "b": {
+          "channel": "8,1",
+          "port": "edge-148:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0149",
+        "a": {
+          "channel": "8,1",
+          "port": "edge-149:a"
+        },
+        "b": {
+          "channel": "8,2",
+          "port": "edge-149:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0150",
+        "a": {
+          "channel": "8,2",
+          "port": "edge-150:a"
+        },
+        "b": {
+          "channel": "8,3",
+          "port": "edge-150:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0151",
+        "a": {
+          "channel": "8,3",
+          "port": "edge-151:a"
+        },
+        "b": {
+          "channel": "8,4",
+          "port": "edge-151:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0152",
+        "a": {
+          "channel": "8,4",
+          "port": "edge-152:a"
+        },
+        "b": {
+          "channel": "8,5",
+          "port": "edge-152:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0153",
+        "a": {
+          "channel": "8,5",
+          "port": "edge-153:a"
+        },
+        "b": {
+          "channel": "8,6",
+          "port": "edge-153:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0154",
+        "a": {
+          "channel": "8,6",
+          "port": "edge-154:a"
+        },
+        "b": {
+          "channel": "8,7",
+          "port": "edge-154:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      },
+      {
+        "id": "edge-0155",
+        "a": {
+          "channel": "8,7",
+          "port": "edge-155:a"
+        },
+        "b": {
+          "channel": "8,8",
+          "port": "edge-155:b"
+        },
+        "kind": "local",
+        "state": "open",
+        "group": null,
+        "data": {}
+      }
+    ],
+    "data": {},
+    "template": {
+      "id": "grid",
+      "parameters": {
+        "width": 9,
+        "height": 9,
+        "cells": 81
+      }
+    }
+  },
+  "terminals": {
+    "A": {
+      "endpoints": [
+        "4,0",
+        "1,7"
+      ],
+      "color": "#ff0ac8",
+      "data": {}
+    },
+    "B": {
+      "endpoints": [
+        "5,0",
+        "2,4"
+      ],
+      "color": "#008c00",
+      "data": {}
+    },
+    "C": {
+      "endpoints": [
+        "8,0",
+        "4,7"
+      ],
+      "color": "#fb8800",
+      "data": {}
+    },
+    "D": {
+      "endpoints": [
+        "0,1",
+        "4,2"
+      ],
+      "color": "#0c29fe",
+      "data": {}
+    },
+    "E": {
+      "endpoints": [
+        "2,1",
+        "5,5"
+      ],
+      "color": "#00ffff",
+      "data": {}
+    },
+    "F": {
+      "endpoints": [
+        "5,1",
+        "2,5"
+      ],
+      "color": "#a4292a",
+      "data": {}
+    },
+    "G": {
+      "endpoints": [
+        "2,2",
+        "5,7"
+      ],
+      "color": "#ff0000",
+      "data": {}
+    },
+    "H": {
+      "endpoints": [
+        "0,6",
+        "6,8"
+      ],
+      "color": "#eadf00",
+      "data": {}
+    }
+  },
+  "rules": {
+    "coverage": {
+      "mode": "all-cells",
+      "overrides": {}
+    },
+    "paths": {
+      "endpoint_degree": 1,
+      "internal_degree": 2,
+      "connected": true
+    },
+    "multi_channel_cell_color_policy": "distinct"
+  },
+  "display": {
+    "dimension": 2,
+    "cells": {
+      "0,0": {
+        "data": {},
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,1": {
+        "data": {},
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,2": {
+        "data": {},
+        "position": [
+          0.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,3": {
+        "data": {},
+        "position": [
+          0.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,4": {
+        "data": {},
+        "position": [
+          0.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,5": {
+        "data": {},
+        "position": [
+          0.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,6": {
+        "data": {},
+        "position": [
+          0.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,7": {
+        "data": {},
+        "position": [
+          0.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "0,8": {
+        "data": {},
+        "position": [
+          0.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,0": {
+        "data": {},
+        "position": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,1": {
+        "data": {},
+        "position": [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,2": {
+        "data": {},
+        "position": [
+          1.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,3": {
+        "data": {},
+        "position": [
+          1.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,4": {
+        "data": {},
+        "position": [
+          1.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,5": {
+        "data": {},
+        "position": [
+          1.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,6": {
+        "data": {},
+        "position": [
+          1.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,7": {
+        "data": {},
+        "position": [
+          1.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "1,8": {
+        "data": {},
+        "position": [
+          1.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,0": {
+        "data": {},
+        "position": [
+          2.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,1": {
+        "data": {},
+        "position": [
+          2.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,2": {
+        "data": {},
+        "position": [
+          2.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,3": {
+        "data": {},
+        "position": [
+          2.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,4": {
+        "data": {},
+        "position": [
+          2.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,5": {
+        "data": {},
+        "position": [
+          2.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,6": {
+        "data": {},
+        "position": [
+          2.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,7": {
+        "data": {},
+        "position": [
+          2.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "2,8": {
+        "data": {},
+        "position": [
+          2.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,0": {
+        "data": {},
+        "position": [
+          3.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,1": {
+        "data": {},
+        "position": [
+          3.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,2": {
+        "data": {},
+        "position": [
+          3.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,3": {
+        "data": {},
+        "position": [
+          3.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,4": {
+        "data": {},
+        "position": [
+          3.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,5": {
+        "data": {},
+        "position": [
+          3.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,6": {
+        "data": {},
+        "position": [
+          3.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,7": {
+        "data": {},
+        "position": [
+          3.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "3,8": {
+        "data": {},
+        "position": [
+          3.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,0": {
+        "data": {},
+        "position": [
+          4.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,1": {
+        "data": {},
+        "position": [
+          4.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,2": {
+        "data": {},
+        "position": [
+          4.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,3": {
+        "data": {},
+        "position": [
+          4.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,4": {
+        "data": {},
+        "position": [
+          4.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,5": {
+        "data": {},
+        "position": [
+          4.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,6": {
+        "data": {},
+        "position": [
+          4.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,7": {
+        "data": {},
+        "position": [
+          4.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "4,8": {
+        "data": {},
+        "position": [
+          4.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,0": {
+        "data": {},
+        "position": [
+          5.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,1": {
+        "data": {},
+        "position": [
+          5.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,2": {
+        "data": {},
+        "position": [
+          5.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,3": {
+        "data": {},
+        "position": [
+          5.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,4": {
+        "data": {},
+        "position": [
+          5.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,5": {
+        "data": {},
+        "position": [
+          5.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,6": {
+        "data": {},
+        "position": [
+          5.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,7": {
+        "data": {},
+        "position": [
+          5.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "5,8": {
+        "data": {},
+        "position": [
+          5.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,0": {
+        "data": {},
+        "position": [
+          6.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,1": {
+        "data": {},
+        "position": [
+          6.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,2": {
+        "data": {},
+        "position": [
+          6.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,3": {
+        "data": {},
+        "position": [
+          6.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,4": {
+        "data": {},
+        "position": [
+          6.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,5": {
+        "data": {},
+        "position": [
+          6.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,6": {
+        "data": {},
+        "position": [
+          6.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,7": {
+        "data": {},
+        "position": [
+          6.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "6,8": {
+        "data": {},
+        "position": [
+          6.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,0": {
+        "data": {},
+        "position": [
+          7.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,1": {
+        "data": {},
+        "position": [
+          7.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,2": {
+        "data": {},
+        "position": [
+          7.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,3": {
+        "data": {},
+        "position": [
+          7.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,4": {
+        "data": {},
+        "position": [
+          7.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,5": {
+        "data": {},
+        "position": [
+          7.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,6": {
+        "data": {},
+        "position": [
+          7.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,7": {
+        "data": {},
+        "position": [
+          7.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "7,8": {
+        "data": {},
+        "position": [
+          7.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,0": {
+        "data": {},
+        "position": [
+          8.0,
+          0.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,1": {
+        "data": {},
+        "position": [
+          8.0,
+          -1.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,2": {
+        "data": {},
+        "position": [
+          8.0,
+          -2.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,3": {
+        "data": {},
+        "position": [
+          8.0,
+          -3.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,4": {
+        "data": {},
+        "position": [
+          8.0,
+          -4.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,5": {
+        "data": {},
+        "position": [
+          8.0,
+          -5.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,6": {
+        "data": {},
+        "position": [
+          8.0,
+          -6.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,7": {
+        "data": {},
+        "position": [
+          8.0,
+          -7.0,
+          0.0
+        ],
+        "polygon": []
+      },
+      "8,8": {
+        "data": {},
+        "position": [
+          8.0,
+          -8.0,
+          0.0
+        ],
+        "polygon": []
+      }
+    },
+    "channels": {
+      "0,0": {
+        "data": {},
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "0,1": {
+        "data": {},
+        "position": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "0,2": {
+        "data": {},
+        "position": [
+          0.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "0,3": {
+        "data": {},
+        "position": [
+          0.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "0,4": {
+        "data": {},
+        "position": [
+          0.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "0,5": {
+        "data": {},
+        "position": [
+          0.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "0,6": {
+        "data": {},
+        "position": [
+          0.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "0,7": {
+        "data": {},
+        "position": [
+          0.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "0,8": {
+        "data": {},
+        "position": [
+          0.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "1,0": {
+        "data": {},
+        "position": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "1,1": {
+        "data": {},
+        "position": [
+          1.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "1,2": {
+        "data": {},
+        "position": [
+          1.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "1,3": {
+        "data": {},
+        "position": [
+          1.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "1,4": {
+        "data": {},
+        "position": [
+          1.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "1,5": {
+        "data": {},
+        "position": [
+          1.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "1,6": {
+        "data": {},
+        "position": [
+          1.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "1,7": {
+        "data": {},
+        "position": [
+          1.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "1,8": {
+        "data": {},
+        "position": [
+          1.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "2,0": {
+        "data": {},
+        "position": [
+          2.0,
+          0.0,
+          0.0
+        ]
+      },
+      "2,1": {
+        "data": {},
+        "position": [
+          2.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "2,2": {
+        "data": {},
+        "position": [
+          2.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "2,3": {
+        "data": {},
+        "position": [
+          2.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "2,4": {
+        "data": {},
+        "position": [
+          2.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "2,5": {
+        "data": {},
+        "position": [
+          2.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "2,6": {
+        "data": {},
+        "position": [
+          2.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "2,7": {
+        "data": {},
+        "position": [
+          2.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "2,8": {
+        "data": {},
+        "position": [
+          2.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "3,0": {
+        "data": {},
+        "position": [
+          3.0,
+          0.0,
+          0.0
+        ]
+      },
+      "3,1": {
+        "data": {},
+        "position": [
+          3.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "3,2": {
+        "data": {},
+        "position": [
+          3.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "3,3": {
+        "data": {},
+        "position": [
+          3.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "3,4": {
+        "data": {},
+        "position": [
+          3.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "3,5": {
+        "data": {},
+        "position": [
+          3.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "3,6": {
+        "data": {},
+        "position": [
+          3.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "3,7": {
+        "data": {},
+        "position": [
+          3.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "3,8": {
+        "data": {},
+        "position": [
+          3.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "4,0": {
+        "data": {},
+        "position": [
+          4.0,
+          0.0,
+          0.0
+        ]
+      },
+      "4,1": {
+        "data": {},
+        "position": [
+          4.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "4,2": {
+        "data": {},
+        "position": [
+          4.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "4,3": {
+        "data": {},
+        "position": [
+          4.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "4,4": {
+        "data": {},
+        "position": [
+          4.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "4,5": {
+        "data": {},
+        "position": [
+          4.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "4,6": {
+        "data": {},
+        "position": [
+          4.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "4,7": {
+        "data": {},
+        "position": [
+          4.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "4,8": {
+        "data": {},
+        "position": [
+          4.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "5,0": {
+        "data": {},
+        "position": [
+          5.0,
+          0.0,
+          0.0
+        ]
+      },
+      "5,1": {
+        "data": {},
+        "position": [
+          5.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "5,2": {
+        "data": {},
+        "position": [
+          5.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "5,3": {
+        "data": {},
+        "position": [
+          5.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "5,4": {
+        "data": {},
+        "position": [
+          5.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "5,5": {
+        "data": {},
+        "position": [
+          5.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "5,6": {
+        "data": {},
+        "position": [
+          5.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "5,7": {
+        "data": {},
+        "position": [
+          5.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "5,8": {
+        "data": {},
+        "position": [
+          5.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "6,0": {
+        "data": {},
+        "position": [
+          6.0,
+          0.0,
+          0.0
+        ]
+      },
+      "6,1": {
+        "data": {},
+        "position": [
+          6.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "6,2": {
+        "data": {},
+        "position": [
+          6.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "6,3": {
+        "data": {},
+        "position": [
+          6.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "6,4": {
+        "data": {},
+        "position": [
+          6.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "6,5": {
+        "data": {},
+        "position": [
+          6.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "6,6": {
+        "data": {},
+        "position": [
+          6.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "6,7": {
+        "data": {},
+        "position": [
+          6.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "6,8": {
+        "data": {},
+        "position": [
+          6.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "7,0": {
+        "data": {},
+        "position": [
+          7.0,
+          0.0,
+          0.0
+        ]
+      },
+      "7,1": {
+        "data": {},
+        "position": [
+          7.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "7,2": {
+        "data": {},
+        "position": [
+          7.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "7,3": {
+        "data": {},
+        "position": [
+          7.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "7,4": {
+        "data": {},
+        "position": [
+          7.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "7,5": {
+        "data": {},
+        "position": [
+          7.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "7,6": {
+        "data": {},
+        "position": [
+          7.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "7,7": {
+        "data": {},
+        "position": [
+          7.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "7,8": {
+        "data": {},
+        "position": [
+          7.0,
+          -8.0,
+          0.0
+        ]
+      },
+      "8,0": {
+        "data": {},
+        "position": [
+          8.0,
+          0.0,
+          0.0
+        ]
+      },
+      "8,1": {
+        "data": {},
+        "position": [
+          8.0,
+          -1.0,
+          0.0
+        ]
+      },
+      "8,2": {
+        "data": {},
+        "position": [
+          8.0,
+          -2.0,
+          0.0
+        ]
+      },
+      "8,3": {
+        "data": {},
+        "position": [
+          8.0,
+          -3.0,
+          0.0
+        ]
+      },
+      "8,4": {
+        "data": {},
+        "position": [
+          8.0,
+          -4.0,
+          0.0
+        ]
+      },
+      "8,5": {
+        "data": {},
+        "position": [
+          8.0,
+          -5.0,
+          0.0
+        ]
+      },
+      "8,6": {
+        "data": {},
+        "position": [
+          8.0,
+          -6.0,
+          0.0
+        ]
+      },
+      "8,7": {
+        "data": {},
+        "position": [
+          8.0,
+          -7.0,
+          0.0
+        ]
+      },
+      "8,8": {
+        "data": {},
+        "position": [
+          8.0,
+          -8.0,
+          0.0
+        ]
+      }
+    },
+    "ports": {},
+    "adjacencies": {},
+    "layers": [],
+    "data": {}
+  },
+  "catalog": {
+    "mechanics": [
+      "warp",
+      "warps"
+    ],
+    "data": {},
+    "variant": "custom",
+    "display_size": {
+      "data": {},
+      "label": "9x9",
+      "width": 9,
+      "height": 9,
+      "unit": "template"
+    }
+  },
+  "meta": {
+    "source": "image-import",
+    "source_image": "IMG_4065.png",
+    "image_size": "1242x2688",
+    "crop": "17,649,1208,1207",
+    "crop_size": "1208x1207",
+    "generated": "image_import",
+    "level_type_geometry": "square",
+    "level_type_modifiers": "warps",
+    "level_type_source": "classifier",
+    "recommended_output": "json",
+    "terminal_colors": {
+      "A": "#ff0ac8",
+      "B": "#008c00",
+      "C": "#fb8800",
+      "D": "#0c29fe",
+      "E": "#00ffff",
+      "F": "#a4292a",
+      "G": "#ff0000",
+      "H": "#eadf00"
+    }
+  },
+  "extensions": {}
+}

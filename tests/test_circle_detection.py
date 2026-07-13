@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
 import unittest
 from collections import Counter
 from pathlib import Path
 
-from backend.image_utils import detect_circle_grid, detect_circle_terminals, load_image
+from PIL import Image, ImageDraw
+
+from backend.image_utils import classify_level_type, detect_circle_grid, detect_circle_terminals, load_image
 
 
 class CircleDetectionTests(unittest.TestCase):
@@ -48,6 +51,34 @@ class CircleDetectionTests(unittest.TestCase):
         letters = Counter(p.letter for p in placements)
         self.assertGreaterEqual(len(letters), 4)
         self.assertTrue(all(count == 2 for count in letters.values()))
+
+    def test_classifier_prefers_concentric_grid_over_diagonal_line_signal(self) -> None:
+        image = Image.new("RGB", (520, 520), color="black")
+        draw = ImageDraw.Draw(image)
+        center = 260
+        for radius in (70, 130, 190, 245):
+            draw.ellipse(
+                (center - radius, center - radius, center + radius, center + radius),
+                outline=(255, 130, 150),
+                width=5,
+            )
+        for index in range(12):
+            angle = 2.0 * math.pi * index / 12.0
+            draw.line(
+                (
+                    center + 70 * math.cos(angle),
+                    center + 70 * math.sin(angle),
+                    center + 245 * math.cos(angle),
+                    center + 245 * math.sin(angle),
+                ),
+                fill=(125, 60, 70),
+                width=3,
+            )
+
+        detection = classify_level_type(image)
+
+        self.assertEqual(detection.geometry, "circle")
+        self.assertEqual(detection.signals["circle_grid"]["rings"], 4)
 
 
 if __name__ == "__main__":

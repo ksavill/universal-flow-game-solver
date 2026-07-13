@@ -53,15 +53,15 @@ class ReferencePuzzleImageClassifierTests(unittest.TestCase):
                 msg=f"{name}: expected {geometry} in top2, got {top2}",
             )
 
-    def test_special_shape_references_auto_generate_topology_targets(self) -> None:
+    def test_special_shape_references_prefer_exact_region_topology(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         ref_dir = repo_root / "reference_puzzle_images"
         expected = {
-            "IMG_3241.PNG": "star",
+            "IMG_3241.PNG": "graph",
             "IMG_3244.PNG": "circle",
-            "IMG_3243.PNG": "cube",
-            "IMG_3245.PNG": "figure8",
-            "IMG_3246.PNG": "figure8",
+            "IMG_3243.PNG": "graph",
+            "IMG_3245.PNG": "graph",
+            "IMG_3246.PNG": "graph",
         }
         available = [(name, geom) for name, geom in expected.items() if (ref_dir / name).exists()]
         if not available:
@@ -83,6 +83,12 @@ class ReferencePuzzleImageClassifierTests(unittest.TestCase):
             body = resp.json()
             target_used = str(body.get("detection", {}).get("target_type_used", ""))
             self.assertEqual(target_used, geometry, msg=f"{name}: expected target {geometry}, got {target_used}")
+            if geometry == "graph":
+                self.assertEqual(body["detection"].get("graph_layout_auto_selected"), "regions")
+                self.assertEqual(
+                    body["detection"]["modifier_info"]["regions"]["warnings"],
+                    [],
+                )
 
     def test_auto_crop_finds_board_region_on_reference(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

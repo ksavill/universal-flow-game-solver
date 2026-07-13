@@ -1,5 +1,5 @@
 {
-  "name": "flow-solver-ui",
+  "name": "universal-flow-game-solver-ui",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,11 +13,14 @@
     "@emotion/styled": "^11.11.5",
     "@mui/icons-material": "^5.16.10",
     "@mui/material": "^5.16.10",
+    "mermaid": "^11.16.0",
     "plotly.js-dist-min": "^2.33.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-image-crop": "^11.0.5",
-    "react-plotly.js": "^2.6.0"
+    "react-markdown": "^10.1.0",
+    "react-plotly.js": "^2.6.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

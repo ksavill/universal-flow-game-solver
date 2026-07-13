@@ -1,4 +1,4 @@
-import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -7,33 +7,70 @@ import {
   CardActionArea,
   CardContent,
   CardActions,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
+  IconButton,
+  InputAdornment,
   MenuItem,
   Select,
   SelectChangeEvent,
+  Skeleton,
+  Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableRow,
+  Tabs,
   TextField,
-  Typography
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
+  Typography,
+  useMediaQuery
 } from "@mui/material";
-import { deletePuzzle, getPuzzle, getPuzzleGraph, listPuzzles, PuzzleEntry, renamePuzzle, SolveResponse } from "../api";
+import { useTheme } from "@mui/material/styles";
+import {
+  AutoAwesome,
+  Clear,
+  DeleteOutline,
+  EditOutlined,
+  GridView,
+  LibraryBooks,
+  PhotoCamera,
+  Refresh,
+  Search,
+  ViewList
+} from "@mui/icons-material";
+import {
+  deletePuzzle,
+  getPuzzle,
+  getPuzzleGraph,
+  ImageImportEntry,
+  listPuzzles,
+  PuzzleEntry,
+  renamePuzzle,
+  SolveResponse
+} from "../api";
 import { GameView } from "../components/GameView";
+import { ScreenshotArchive } from "../components/ScreenshotArchive";
 
 const entryKey = (entry: PuzzleEntry) => `${entry.source}:${entry.rel_path}:${entry.mtime ?? 0}`;
 
 type LibraryViewProps = {
-  onLoadPuzzle: (name: string, text: string) => void;
+  onLoadPuzzle: (name: string, text: string, opts?: { autoSolve?: boolean }) => void;
+  onImportScreenshot?: () => void;
+  onReprocessImports?: (entries: ImageImportEntry[]) => void;
 };
 
-export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
+export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImports }: LibraryViewProps) {
+  const [section, setSection] = useState<"puzzles" | "screenshots">("puzzles");
   const [entries, setEntries] = useState<PuzzleEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +79,6 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
   const [search, setSearch] = useState<string>("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [page, setPage] = useState(1);
-  const [pageInput, setPageInput] = useState("1");
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [activeEntry, setActiveEntry] = useState<PuzzleEntry | null>(null);
@@ -50,6 +86,8 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
   const [graphCache, setGraphCache] = useState<Record<string, SolveResponse["graph"]>>({});
   const [graphLoading, setGraphLoading] = useState<Record<string, boolean>>({});
   const pendingRef = useRef<Record<string, boolean>>({});
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
 
   const fetchEntries = useCallback(async () => {
     try {
@@ -90,11 +128,13 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
       if (!query) {
         return true;
       }
-      return entry.name.toLowerCase().includes(query) || (entry.meta?.title ?? "").toLowerCase().includes(query);
+      return [entry.name, entry.rel_path, entry.meta?.title, entry.meta?.pack, entry.meta?.tags]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
     });
   }, [entries, search, typeFilter, sizeFilter]);
 
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE = isMobile ? 12 : 24;
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
 
   useEffect(() => {
@@ -106,20 +146,18 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
   }, [page, pageCount]);
 
   useEffect(() => {
-    setPageInput(String(page));
-  }, [page]);
-
-  useEffect(() => {
     setPage(1);
   }, [search, typeFilter, sizeFilter]);
 
   const pagedEntries = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filtered.slice(start, start + PAGE_SIZE);
-  }, [filtered, page]);
+  }, [PAGE_SIZE, filtered, page]);
+
+  const effectiveViewMode = isMobile ? "grid" : viewMode;
 
   useEffect(() => {
-    if (viewMode !== "grid" || loading) {
+    if (effectiveViewMode !== "grid" || loading) {
       return;
     }
     pagedEntries.forEach((entry) => {
@@ -143,7 +181,7 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
         });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, pagedEntries, viewMode]);
+  }, [effectiveViewMode, loading, pagedEntries]);
 
   const handleTypeChange = (event: SelectChangeEvent<string>) => {
     setTypeFilter(event.target.value);
@@ -153,27 +191,25 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
     setSizeFilter(event.target.value);
   };
 
-  const handleViewMode = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setViewMode(event.target.value as "grid" | "list");
-  };
-
-  const applyPageInput = () => {
-    const next = Number(pageInput);
-    if (Number.isFinite(next) && next >= 1 && next <= pageCount) {
-      setPage(next);
-    } else {
-      setPageInput(String(page));
-    }
-  };
-
   const pageButtons = useMemo(() => {
-    return Array.from({ length: pageCount }, (_, idx) => idx + 1);
-  }, [pageCount]);
+    const first = Math.max(1, Math.min(page - 2, pageCount - 4));
+    const last = Math.min(pageCount, first + 4);
+    return Array.from({ length: last - first + 1 }, (_, idx) => first + idx);
+  }, [page, pageCount]);
 
-  async function handleLoad(entry: PuzzleEntry) {
+  const hasFilters = Boolean(search.trim()) || typeFilter !== "all" || sizeFilter !== "all";
+  const userCount = entries.filter((entry) => entry.source === "user").length;
+
+  const clearFilters = () => {
+    setSearch("");
+    setTypeFilter("all");
+    setSizeFilter("all");
+  };
+
+  async function handleLoad(entry: PuzzleEntry, opts?: { autoSolve?: boolean }) {
     try {
       const data = await getPuzzle(entry.source, entry.rel_path);
-      onLoadPuzzle(data.name, data.text);
+      onLoadPuzzle(data.name, data.text, opts);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load puzzle.");
     }
@@ -222,100 +258,178 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
     }
   };
 
+  const paginationControls = pageCount > 1 ? (
+    <Box display="flex" justifyContent="center" alignItems="center" gap={0.75} flexWrap="wrap" py={1}>
+      <Button
+        variant="text"
+        size="small"
+        onClick={() => setPage((previous) => Math.max(1, previous - 1))}
+        disabled={page <= 1}
+      >
+        Previous
+      </Button>
+      {pageButtons.map((pageNumber) => (
+        <Button
+          key={`page-${pageNumber}`}
+          size="small"
+          variant={pageNumber === page ? "contained" : "text"}
+          onClick={() => setPage(pageNumber)}
+          sx={{ minWidth: 36 }}
+        >
+          {pageNumber}
+        </Button>
+      ))}
+      <Button
+        variant="text"
+        size="small"
+        onClick={() => setPage((previous) => Math.min(pageCount, previous + 1))}
+        disabled={page >= pageCount}
+      >
+        Next
+      </Button>
+      <Typography variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+        Page {page} of {pageCount}
+      </Typography>
+    </Box>
+  ) : null;
+
   return (
-    <Box display="flex" flexDirection="column" gap={2}>
-      <Box display="flex" gap={2} flexWrap="wrap" alignItems="center">
+    <Box display="flex" flexDirection="column" gap={2.5}>
+      <Card
+        sx={{
+          background:
+            "linear-gradient(135deg, rgba(130,177,255,0.16), rgba(255,82,82,0.08) 60%, rgba(22,26,34,0.95))"
+        }}
+      >
+        <CardContent>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }}>
+            <Box sx={{ flex: 1 }}>
+              <Box display="flex" gap={1} alignItems="center" mb={0.5}>
+                <LibraryBooks color="secondary" />
+                <Typography variant="h5" fontWeight={750}>
+                  Puzzle library
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Open an example, continue one of your saved puzzles, or import a new screenshot.
+              </Typography>
+              <Box display="flex" gap={1} flexWrap="wrap" mt={1.5}>
+                <Chip label={`${entries.length} total`} size="small" />
+                <Chip label={`${userCount} saved by you`} size="small" color="secondary" variant="outlined" />
+              </Box>
+            </Box>
+            {onImportScreenshot && (
+              <Button
+                variant="contained"
+                startIcon={<PhotoCamera />}
+                onClick={onImportScreenshot}
+                sx={{ minHeight: 44, alignSelf: { xs: "stretch", sm: "center" } }}
+              >
+                Import screenshot
+              </Button>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <Tabs
+          value={section}
+          onChange={(_event, value) => value && setSection(value)}
+          variant="fullWidth"
+        >
+          <Tab value="puzzles" label="Puzzles" />
+          <Tab value="screenshots" label="Uploaded screenshots" />
+        </Tabs>
+      </Card>
+
+      {section === "screenshots" && (
+        <Card>
+          <CardContent>
+            <ScreenshotArchive
+              onOpenResult={(name, text) => onLoadPuzzle(name, text)}
+              onReprocess={onReprocessImports}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {section === "puzzles" && (
+        <>
+      <Card>
+        <CardContent sx={{ py: 2 }}>
+          <Stack direction={{ xs: "column", md: "row" }} gap={1.25} alignItems={{ md: "center" }}>
         <TextField
-          label="Search"
+          placeholder="Search names, packs, or tags"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           size="small"
+          fullWidth
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <Search fontSize="small" />
+              </InputAdornment>
+            ),
+            endAdornment: search ? (
+              <InputAdornment position="end">
+                <IconButton size="small" aria-label="Clear search" onClick={() => setSearch("")}>
+                  <Clear fontSize="small" />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined
+          }}
         />
-        <Select size="small" value={typeFilter} onChange={handleTypeChange} sx={{ minWidth: 160 }}>
+        <Select size="small" value={typeFilter} onChange={handleTypeChange} sx={{ minWidth: 150 }}>
           {types.map((type) => (
             <MenuItem key={type} value={type}>
               {type === "all" ? "All types" : type}
             </MenuItem>
           ))}
         </Select>
-        <Select size="small" value={sizeFilter} onChange={handleSizeChange} sx={{ minWidth: 140 }}>
+        <Select size="small" value={sizeFilter} onChange={handleSizeChange} sx={{ minWidth: 130 }}>
           {sizes.map((size) => (
             <MenuItem key={size} value={size}>
               {size === "all" ? "All sizes" : size}
             </MenuItem>
           ))}
         </Select>
-        <Typography variant="body2" color="text.secondary">
-          {filtered.length} puzzle(s)
-        </Typography>
-        <TextField
-          label="View"
-          select
-          value={viewMode}
-          onChange={handleViewMode}
-          size="small"
-          sx={{ width: 140 }}
-        >
-          <MenuItem value="grid">Grid</MenuItem>
-          <MenuItem value="list">List</MenuItem>
-        </TextField>
-        <Button variant="outlined" size="small" onClick={fetchEntries} disabled={loading}>
-          Refresh
-        </Button>
-      </Box>
-
-      <Box display="flex" flexDirection="column" gap={1}>
-        <Box display="flex" gap={1} alignItems="center" flexWrap="wrap">
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-            disabled={page <= 1}
-          >
-            Prev
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => setPage((prev) => Math.min(pageCount, prev + 1))}
-            disabled={page >= pageCount}
-          >
-            Next
-          </Button>
-          <TextField
-            label="Page"
-            size="small"
-            value={pageInput}
-            onChange={(event) => setPageInput(event.target.value)}
-            onBlur={applyPageInput}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                applyPageInput();
-              }
-            }}
-            sx={{ width: 120 }}
-          />
-          <Typography variant="body2" color="text.secondary">
-            / {pageCount}
-          </Typography>
-        </Box>
-        <Box display="flex" gap={1} sx={{ overflowX: "auto", pb: 1 }}>
-          {pageButtons.map((p) => (
-            <Button
-              key={`page-${p}`}
-              size="small"
-              variant={p === page ? "contained" : "outlined"}
-              onClick={() => setPage(p)}
-            >
-              {p}
-            </Button>
-          ))}
-        </Box>
-      </Box>
+            {!isMobile && (
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={viewMode}
+                onChange={(_event, value) => value && setViewMode(value)}
+                aria-label="Library view"
+              >
+                <ToggleButton value="grid" aria-label="Grid view"><GridView fontSize="small" /></ToggleButton>
+                <ToggleButton value="list" aria-label="List view"><ViewList fontSize="small" /></ToggleButton>
+              </ToggleButtonGroup>
+            )}
+            <Tooltip title="Refresh library">
+              <span>
+                <IconButton onClick={fetchEntries} disabled={loading} aria-label="Refresh library">
+                  <Refresh fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Stack>
+          <Box display="flex" gap={1} alignItems="center" flexWrap="wrap" mt={1.5}>
+            <Typography variant="caption" color="text.secondary">
+              Showing {filtered.length} of {entries.length}
+            </Typography>
+            {hasFilters && (
+              <Button size="small" variant="text" startIcon={<Clear />} onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
 
       {error && <Alert severity="error">{error}</Alert>}
 
-      {viewMode === "list" && (
+      {effectiveViewMode === "list" && (
         <Card>
           <CardContent>
             {loading ? (
@@ -358,8 +472,11 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
                       <TableCell>{entry.source}</TableCell>
                       <TableCell align="right">
                         <Box display="flex" gap={1} justifyContent="flex-end">
+                          <Button variant="contained" size="small" onClick={() => handleLoad(entry, { autoSolve: true })}>
+                            Solve
+                          </Button>
                           <Button variant="outlined" size="small" onClick={() => handleLoad(entry)}>
-                            Load
+                            Open
                           </Button>
                           {entry.source === "user" && (
                             <>
@@ -396,14 +513,30 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
         </Card>
       )}
 
-      {viewMode === "grid" && (
-        <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(240px, 1fr))" gap={2}>
+      {effectiveViewMode === "grid" && (
+        <Box
+          display="grid"
+          gridTemplateColumns={{
+            xs: "1fr",
+            sm: "repeat(2, minmax(0, 1fr))",
+            lg: "repeat(3, minmax(0, 1fr))",
+            xl: "repeat(4, minmax(0, 1fr))"
+          }}
+          gap={{ xs: 1.5, sm: 2 }}
+        >
           {(loading ? [] : pagedEntries).map((entry) => {
             const key = entryKey(entry);
             const graph = graphCache[key];
             const isLoading = graphLoading[key];
             return (
-              <Card key={`thumb-${key}`}>
+              <Card
+                key={`thumb-${key}`}
+                sx={{
+                  minWidth: 0,
+                  transition: "transform 160ms ease, border-color 160ms ease",
+                  "&:hover": { transform: "translateY(-2px)", borderColor: "rgba(130,177,255,0.42)" }
+                }}
+              >
                 <CardActionArea onClick={() => handleLoad(entry)}>
                   <CardContent>
                     <Box
@@ -431,7 +564,7 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
                           }}
                         >
                           {isLoading ? (
-                            <CircularProgress size={24} />
+                            <Skeleton variant="rounded" width="100%" height={160} animation="wave" />
                           ) : (
                             <Typography variant="caption" color="text.secondary">
                               Preview unavailable
@@ -440,51 +573,87 @@ export function LibraryView({ onLoadPuzzle }: LibraryViewProps) {
                         </Box>
                       )}
                     </Box>
-                    <Box mt={1}>
-                      <Typography variant="subtitle2">{entry.name}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {entry.type_label} · {entry.size_label}
+                    <Box mt={1.25}>
+                      <Typography variant="subtitle2" fontWeight={700} noWrap title={entry.name}>
+                        {entry.meta?.title || entry.name}
                       </Typography>
                       {entry.meta?.title && (
-                        <Typography variant="caption" color="text.secondary">
-                          {entry.meta.title}
+                        <Typography variant="caption" color="text.secondary" noWrap display="block">
+                          {entry.name}
                         </Typography>
                       )}
+                      <Box display="flex" gap={0.75} flexWrap="wrap" mt={1}>
+                        <Chip label={entry.type_label} size="small" variant="outlined" />
+                        {entry.size_label && <Chip label={entry.size_label} size="small" />}
+                        <Chip
+                          label={entry.source === "user" ? "Saved" : "Example"}
+                          size="small"
+                          color={entry.source === "user" ? "secondary" : "default"}
+                        />
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" display="block" mt={1}>
+                        {entry.meta?.pack ? `${entry.meta.pack} · ` : ""}{entry.colors ?? "?"} colors
+                      </Typography>
                     </Box>
                   </CardContent>
                 </CardActionArea>
-                {entry.source === "user" && (
-                  <CardActions sx={{ px: 2, pb: 2 }}>
-                    <Button variant="outlined" size="small" onClick={() => openRename(entry)}>
-                      Rename
+                <CardActions sx={{ px: 2, pb: 1.5, pt: 0, justifyContent: "space-between" }}>
+                  <Box display="flex" gap={0.5}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<AutoAwesome fontSize="small" />}
+                      onClick={() => handleLoad(entry, { autoSolve: true })}
+                    >
+                      Solve
                     </Button>
-                    <Button variant="outlined" color="error" size="small" onClick={() => openDelete(entry)}>
-                      Delete
-                    </Button>
-                  </CardActions>
-                )}
+                    <Button size="small" onClick={() => handleLoad(entry)}>Open</Button>
+                  </Box>
+                  {entry.source === "user" && (
+                    <Box>
+                      <Tooltip title="Rename">
+                        <IconButton size="small" onClick={() => openRename(entry)} aria-label={`Rename ${entry.name}`}>
+                          <EditOutlined fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Delete">
+                        <IconButton size="small" color="error" onClick={() => openDelete(entry)} aria-label={`Delete ${entry.name}`}>
+                          <DeleteOutline fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  )}
+                </CardActions>
               </Card>
             );
           })}
           {!loading && !pagedEntries.length && (
-            <Card>
-              <CardContent>
-                <Typography variant="body2" color="text.secondary">
-                  No puzzles match the filters.
+            <Card sx={{ gridColumn: "1 / -1" }}>
+              <CardContent sx={{ textAlign: "center", py: 6 }}>
+                <Typography variant="h6" gutterBottom>No puzzles found</Typography>
+                <Typography variant="body2" color="text.secondary" mb={2}>
+                  Try a broader search or clear the active filters.
                 </Typography>
+                {hasFilters && <Button variant="outlined" onClick={clearFilters}>Clear filters</Button>}
               </CardContent>
             </Card>
           )}
           {loading && (
-            <Card>
-              <CardContent>
-                <Box display="flex" justifyContent="center" py={4}>
-                  <CircularProgress />
-                </Box>
-              </CardContent>
-            </Card>
+            Array.from({ length: isMobile ? 3 : 8 }, (_, index) => (
+              <Card key={`loading-card-${index}`}>
+                <CardContent>
+                  <Skeleton variant="rounded" height={160} />
+                  <Skeleton width="72%" sx={{ mt: 1.5 }} />
+                  <Skeleton width="48%" />
+                </CardContent>
+              </Card>
+            ))
           )}
         </Box>
+      )}
+
+      {paginationControls}
+        </>
       )}
 
       <Dialog open={renameDialogOpen} onClose={() => setRenameDialogOpen(false)}>

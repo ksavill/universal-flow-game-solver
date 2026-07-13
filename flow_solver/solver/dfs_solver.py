@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..graph import NodeId
 from ..puzzle import Color, Puzzle
 from .types import SolveResult
+from .validation import validate_solution
 
 
 class DfsTimeoutError(ValueError):
@@ -15,7 +16,7 @@ class DfsTimeoutError(ValueError):
 def solve_with_dfs(puzzle: Puzzle, *, timeout_ms: int | None = 30_000) -> SolveResult:
     """Solve using a backtracking DFS that grows paths from both terminals."""
 
-    start_time = time.monotonic()
+    start_time = time.perf_counter()
 
     nodes = list(puzzle.graph.nodes.keys())
     neighbors: Dict[NodeId, List[NodeId]] = {n: sorted(puzzle.graph.neighbors(n)) for n in nodes}
@@ -43,7 +44,7 @@ def solve_with_dfs(puzzle: Puzzle, *, timeout_ms: int | None = 30_000) -> SolveR
     def check_timeout() -> None:
         if timeout_ms is None:
             return
-        elapsed_ms = (time.monotonic() - start_time) * 1000.0
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         if elapsed_ms > timeout_ms:
             raise DfsTimeoutError(f"DFS solver timed out after {timeout_ms}ms")
 
@@ -167,8 +168,7 @@ def solve_with_dfs(puzzle: Puzzle, *, timeout_ms: int | None = 30_000) -> SolveR
     def search() -> bool:
         nonlocal steps
         steps += 1
-        if steps % 1000 == 0:
-            check_timeout()
+        check_timeout()
 
         if all(done[color] for color in colors):
             if puzzle.fill and not all_tiles_used():
@@ -239,4 +239,21 @@ def solve_with_dfs(puzzle: Puzzle, *, timeout_ms: int | None = 30_000) -> SolveR
             prev, cur = cur, nxt
         paths[color] = path
 
-    return SolveResult(node_color=node_color, paths=paths)
+    result = SolveResult(
+        node_color=node_color,
+        paths=paths,
+        path_edges={color: list(zip(path, path[1:])) for color, path in paths.items()},
+        stats={
+            "solver": "dfs",
+            "steps": steps,
+            "total_ms": (time.perf_counter() - start_time) * 1000.0,
+            "uniqueness_checked": False,
+        },
+    )
+    validation = validate_solution(puzzle, result)
+    if not validation.valid:
+        raise RuntimeError(
+            "Internal DFS solution failed validation: " + "; ".join(validation.errors[:4])
+        )
+    check_timeout()
+    return result

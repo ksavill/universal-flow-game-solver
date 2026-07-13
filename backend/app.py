@@ -5,11 +5,14 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
+import threading
 import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # Allow running `python backend/app.py` from repo root.
 _ROOT = Path(__file__).resolve().parents[1]
@@ -17,12 +20,18 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from flow_solver.puzzle import Puzzle
-from flow_solver.solver import solve_puzzle
+from flow_solver.migration import puzzle_to_spec
+from flow_solver.schema_v2 import CatalogSpec, DisplaySizeSpec, parse_v2_dict
+from flow_solver.solver import check_uniqueness_with_z3, solve_puzzle
+from flow_solver.spaces.square import build_square_space_from_tokens
+from flow_solver.topologies import build_grid_topology, build_hex_topology, build_ring_topology
+from flow_solver.validation import validate_puzzle
+from backend.acceleration import acceleration_capabilities
 from backend.image_utils import (
     CropBox,
     apply_crop,
@@ -33,11 +42,14 @@ from backend.image_utils import (
     build_graph_json,
     build_grid,
     classify_level_type,
+    detect_bridge_cells,
     detect_circle_grid,
     detect_circle_terminals,
     detect_grid,
+    detect_region_topology,
     detect_terminals_on_nodes,
     detect_wall_edges,
+    detect_warp_edges,
     detect_terminals,
     load_image,
 )
@@ -89,6 +101,255 @@ def _examples_dir() -> Path:
 
 def _user_puzzles_dir() -> Path:
     return _repo_root() / "puzzles"
+
+
+def _image_imports_dir() -> Path:
+    configured = os.environ.get("FLOW_IMAGE_IMPORTS_DIR", "").strip()
+    if not configured:
+        return _repo_root() / "data" / "image_imports"
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else _repo_root() / path
+
+
+def _image_import_dir(import_id: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{32}", import_id):
+        raise HTTPException(status_code=400, detail="Invalid image import id")
+    return _image_imports_dir() / import_id
+
+
+def _read_image_import(import_id: str) -> Dict[str, Any]:
+    record_path = _image_import_dir(import_id) / "record.json"
+    if not record_path.exists():
+        raise HTTPException(status_code=404, detail="Image import not found")
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Stored image import is unreadable") from exc
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=500, detail="Stored image import is invalid")
+    return _restore_archived_terminal_colors(record)
+
+
+def _image_import_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    summary = {
+        key: value
+        for key, value in record.items()
+        if key not in {"image_file", "processing", "result", "solve", "runs"}
+    }
+    solve = record.get("solve") if isinstance(record.get("solve"), dict) else None
+    if solve is not None:
+        summary["solve_status"] = solve.get("status")
+        summary["solve_error"] = solve.get("error")
+        result = solve.get("result") if isinstance(solve.get("result"), dict) else {}
+        stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+        summary["solve_ms"] = stats.get("total_ms")
+        summary["solver"] = stats.get("solver")
+    runs = record.get("runs") if isinstance(record.get("runs"), list) else []
+    summary["run_count"] = len(runs) + 1
+    return summary
+
+
+def _image_import_run_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    solve = record.get("solve") if isinstance(record.get("solve"), dict) else {}
+    solve_result = solve.get("result") if isinstance(solve.get("result"), dict) else {}
+    solve_stats = solve_result.get("stats") if isinstance(solve_result.get("stats"), dict) else {}
+    return {
+        "completed_at": record.get("updated_at", record.get("created_at")),
+        "status": record.get("status", "processed"),
+        "geometry": record.get("geometry"),
+        "grid": record.get("grid"),
+        "terminal_count": record.get("terminal_count", 0),
+        "processing": record.get("processing", {}),
+        "solve_status": solve.get("status"),
+        "solve_error": solve.get("error"),
+        "solve_ms": solve_stats.get("total_ms"),
+        "solver": solve_stats.get("solver"),
+        "error": record.get("error"),
+    }
+
+
+# Record updates are read-modify-write on a per-import record.json; concurrent
+# requests for the same import (parallel batch reprocess, solve attach) must
+# serialize or one update silently overwrites the other. Per-process only —
+# running multiple uvicorn workers would need cross-process file locking.
+_IMPORT_LOCKS: Dict[str, threading.Lock] = {}
+_IMPORT_LOCKS_GUARD = threading.Lock()
+
+
+def _import_lock(import_id: str) -> threading.Lock:
+    with _IMPORT_LOCKS_GUARD:
+        lock = _IMPORT_LOCKS.get(import_id)
+        if lock is None:
+            lock = threading.Lock()
+            _IMPORT_LOCKS[import_id] = lock
+        return lock
+
+
+def _write_image_import_record(import_id: str, record: Dict[str, Any]) -> None:
+    record_path = _image_import_dir(import_id) / "record.json"
+    temporary_record = record_path.with_suffix(".json.tmp")
+    temporary_record.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_record.replace(record_path)
+
+
+def _replace_image_import(
+    import_id: str,
+    *,
+    data: bytes,
+    result: Dict[str, Any],
+    processing: Dict[str, Any],
+) -> Dict[str, Any]:
+    with _import_lock(import_id):
+        return _replace_image_import_locked(import_id, data=data, result=result, processing=processing)
+
+
+def _replace_image_import_locked(
+    import_id: str,
+    *,
+    data: bytes,
+    result: Dict[str, Any],
+    processing: Dict[str, Any],
+) -> Dict[str, Any]:
+    record = _read_image_import(import_id)
+    image_file = str(record.get("image_file", ""))
+    if Path(image_file).name != image_file:
+        raise HTTPException(status_code=500, detail="Stored image import has an invalid image path")
+    image_path = _image_import_dir(import_id) / image_file
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Stored screenshot not found")
+    if image_path.read_bytes() != data:
+        raise HTTPException(status_code=400, detail="Reprocessed image does not match the archived screenshot")
+
+    runs = record.get("runs") if isinstance(record.get("runs"), list) else []
+    runs.append(_image_import_run_summary(record))
+    detection = result.get("detection") if isinstance(result.get("detection"), dict) else {}
+    grid = detection.get("grid") if isinstance(detection.get("grid"), dict) else None
+    level_type = detection.get("level_type") if isinstance(detection.get("level_type"), dict) else {}
+    terminals = detection.get("terminals") if isinstance(detection.get("terminals"), list) else []
+    record.update(
+        {
+            "updated_at": time.time(),
+            "status": "processed",
+            "generated_name": str(result.get("name") or record.get("generated_name") or "image"),
+            "geometry": level_type.get("geometry") or detection.get("target_type_used"),
+            "grid": grid,
+            "terminal_count": len(terminals),
+            "processing": processing,
+            "result": result,
+            "runs": runs,
+        }
+    )
+    record.pop("error", None)
+    record.pop("solve", None)
+    _write_image_import_record(import_id, record)
+    return record
+
+
+def _record_image_import_reprocess_failure(import_id: str, *, error: str, stage: str) -> Dict[str, Any]:
+    with _import_lock(import_id):
+        record = _read_image_import(import_id)
+        runs = record.get("runs") if isinstance(record.get("runs"), list) else []
+        runs.append(_image_import_run_summary(record))
+        record.update(
+            {
+                "updated_at": time.time(),
+                "status": "failed",
+                "processing": {"stage": stage, "reprocessed": True},
+                "error": error[:4000],
+                "runs": runs,
+            }
+        )
+        record.pop("result", None)
+        record.pop("solve", None)
+        _write_image_import_record(import_id, record)
+        return record
+
+
+def _store_image_import_solve(
+    import_id: str,
+    *,
+    name: str,
+    text: str,
+    result: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> bool:
+    """Attach an immediate solve outcome to its exact archived generation."""
+
+    with _import_lock(import_id):
+        record_path = _image_import_dir(import_id) / "record.json"
+        if not record_path.exists():
+            return False
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        generated = record.get("result") if isinstance(record.get("result"), dict) else {}
+        if generated.get("name") != name or generated.get("text") != text:
+            return False
+        solve_record: Dict[str, Any] = {
+            "status": "solved" if result is not None else "failed",
+            "updated_at": time.time(),
+        }
+        if result is not None:
+            solve_record["result"] = result
+        if error:
+            solve_record["error"] = error[:4000]
+        record["solve"] = solve_record
+        record["updated_at"] = solve_record["updated_at"]
+        _write_image_import_record(import_id, record)
+        return True
+
+
+def _store_image_import(
+    *,
+    data: bytes,
+    original_name: str,
+    content_type: Optional[str],
+    image_size: Tuple[int, int],
+    result: Optional[Dict[str, Any]],
+    processing: Dict[str, Any],
+    status: str = "processed",
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    import_id = uuid.uuid4().hex
+    created_at = time.time()
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+        suffix = ".bin"
+    image_file = f"source{suffix}"
+    result_payload = result or {}
+    detection = result_payload.get("detection") if isinstance(result_payload.get("detection"), dict) else {}
+    grid = detection.get("grid") if isinstance(detection.get("grid"), dict) else None
+    level_type = detection.get("level_type") if isinstance(detection.get("level_type"), dict) else {}
+    terminals = detection.get("terminals") if isinstance(detection.get("terminals"), list) else []
+    record: Dict[str, Any] = {
+        "id": import_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "status": status,
+        "original_name": Path(original_name).name or "image",
+        "content_type": content_type or "application/octet-stream",
+        "byte_size": len(data),
+        "image_size": {"width": image_size[0], "height": image_size[1]},
+        "image_file": image_file,
+        "generated_name": str(result_payload.get("name") or Path(original_name).stem),
+        "geometry": level_type.get("geometry") or detection.get("target_type_used"),
+        "grid": grid,
+        "terminal_count": len(terminals),
+        "processing": processing,
+    }
+    if result is not None:
+        record["result"] = result
+    if error:
+        record["error"] = error
+    record_dir = _image_imports_dir() / import_id
+    try:
+        record_dir.mkdir(parents=True, exist_ok=False)
+        (record_dir / image_file).write_bytes(data)
+        temporary_record = record_dir / "record.json.tmp"
+        temporary_record.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        temporary_record.replace(record_dir / "record.json")
+    except Exception:
+        shutil.rmtree(record_dir, ignore_errors=True)
+        raise
+    return record
 
 
 def _type_label(kind: str) -> str:
@@ -151,6 +412,63 @@ def _scan_flow_text(text: str) -> Tuple[str, bool, Dict[str, str], List[List[str
 
 def _scan_json_text(text: str) -> Tuple[str, Dict[str, str], Dict[str, int]]:
     obj = json.loads(text)
+    if isinstance(obj, dict) and ("format" in obj or "schema_version" in obj):
+        from flow_solver.schema_v2 import parse_v2_dict
+
+        spec = parse_v2_dict(obj)
+        template_id = spec.topology.template.id.lower() if spec.topology.template else "graph"
+        if template_id in SUPPORTED_LEVEL_GEOMETRIES:
+            kind = template_id
+        elif "cube" in template_id:
+            kind = "cube"
+        elif "star" in template_id:
+            kind = "star"
+        elif "figure8" in template_id or "figure-8" in template_id:
+            kind = "figure8"
+        elif "circle" in template_id or "ring" in template_id:
+            kind = "circle"
+        elif "hex" in template_id:
+            kind = "hex"
+        elif "square" in template_id or "grid" in template_id:
+            kind = "square"
+        else:
+            kind = "graph"
+
+        meta = _normalize_meta(spec.meta)
+        catalog = spec.catalog
+        if catalog.app:
+            meta.setdefault("app", catalog.app)
+        if catalog.variant:
+            meta.setdefault("variant", catalog.variant)
+        if catalog.pack:
+            if catalog.pack.name:
+                meta.setdefault("pack", catalog.pack.name)
+            elif catalog.pack.id:
+                meta.setdefault("pack", catalog.pack.id)
+        if catalog.level:
+            if catalog.level.name:
+                meta.setdefault("level", catalog.level.name)
+            elif catalog.level.number is not None:
+                meta.setdefault("level", str(catalog.level.number))
+            elif catalog.level.id:
+                meta.setdefault("level", catalog.level.id)
+        if catalog.mechanics:
+            meta.setdefault("mechanics", ", ".join(catalog.mechanics))
+
+        metrics: Dict[str, int] = {
+            "cells": len(spec.topology.cells),
+            "nodes": len(spec.topology.channels),
+            "edges": sum(1 for edge in spec.topology.adjacencies if edge.state == "open"),
+        }
+        if catalog.display_size:
+            if catalog.display_size.width is not None:
+                metrics["width"] = catalog.display_size.width
+            if catalog.display_size.height is not None:
+                metrics["height"] = catalog.display_size.height
+            if catalog.display_size.label:
+                meta.setdefault("display_size", catalog.display_size.label)
+        return kind, meta, metrics
+
     space = obj.get("space", {})
     kind = space.get("type", "graph")
     if kind == "graph":
@@ -192,7 +510,7 @@ def _flow_metrics(kind: str, token_rows: List[List[str]]) -> Dict[str, int]:
 def _type_size_from_text(text: str, *, name: str) -> Tuple[str, str]:
     if name.lower().endswith(".json"):
         kind, _meta, metrics = _scan_json_text(text)
-        if kind == "square" and "width" in metrics and "height" in metrics:
+        if "width" in metrics and "height" in metrics:
             return kind, f"{metrics['width']}x{metrics['height']}"
         if kind in {"graph", "cube", "star", "figure8"} and metrics.get("nodes"):
             return kind, f"{metrics['nodes']} nodes"
@@ -208,7 +526,7 @@ def _type_size_from_text(text: str, *, name: str) -> Tuple[str, str]:
 
 
 def _format_size_label(kind: str, metrics: Dict[str, int], nodes: Optional[int]) -> str:
-    if kind in {"square", "hex"} and metrics.get("width") and metrics.get("height"):
+    if metrics.get("width") and metrics.get("height"):
         return f"{metrics['width']}x{metrics['height']}"
     if kind == "circle" and metrics.get("rings") and metrics.get("sectors"):
         return f"{metrics['rings']}x{metrics['sectors']}"
@@ -336,6 +654,12 @@ def _graph_payload(puzzle: Puzzle) -> Dict[str, Any]:
     }
     if terminal_colors:
         payload["terminal_colors"] = terminal_colors
+    if puzzle.source_spec is not None:
+        source = puzzle.source_spec.to_dict()
+        payload["schema_version"] = source["schema_version"]
+        payload["adjacencies"] = source["topology"]["adjacencies"]
+        payload["display"] = source["display"]
+        payload["catalog"] = source["catalog"]
     return payload
 
 
@@ -364,6 +688,107 @@ def _normalize_hex_color(raw: Any) -> Optional[str]:
         except Exception:
             return None
     return None
+
+
+def _terminal_color_map_from_placements(placements: Sequence[Any]) -> Dict[str, str]:
+    """Average each detected endpoint pair into one stable display color."""
+
+    samples: Dict[str, List[Tuple[float, float, float]]] = {}
+    for placement in placements:
+        if isinstance(placement, dict):
+            letter_raw = placement.get("letter")
+            color_raw = placement.get("color")
+        else:
+            letter_raw = getattr(placement, "letter", None)
+            color_raw = getattr(placement, "color", None)
+        letter = str(letter_raw or "").strip().upper()
+        if not letter:
+            continue
+        rgb: Optional[Tuple[float, float, float]] = None
+        if isinstance(color_raw, (list, tuple)) and len(color_raw) >= 3:
+            try:
+                rgb = (float(color_raw[0]), float(color_raw[1]), float(color_raw[2]))
+            except (TypeError, ValueError):
+                rgb = None
+        else:
+            normalized = _normalize_hex_color(color_raw)
+            if normalized is not None:
+                rgb = tuple(float(int(normalized[index : index + 2], 16)) for index in (1, 3, 5))
+        if rgb is not None:
+            samples.setdefault(letter, []).append(rgb)
+
+    colors: Dict[str, str] = {}
+    for letter, values in samples.items():
+        count = float(len(values))
+        averaged = tuple(sum(value[channel] for value in values) / count for channel in range(3))
+        normalized = _normalize_hex_color(averaged)
+        if normalized is not None:
+            colors[letter] = normalized
+    return colors
+
+
+def _restore_archived_terminal_colors(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill old archived results from their retained detector RGB samples."""
+
+    result = record.get("result") if isinstance(record.get("result"), dict) else None
+    if result is None:
+        return record
+    detection = result.get("detection") if isinstance(result.get("detection"), dict) else {}
+    placements = detection.get("terminals") if isinstance(detection.get("terminals"), list) else []
+    recovered = _terminal_color_map_from_placements(placements)
+    text = result.get("text")
+    if not recovered or not isinstance(text, str) or not text.strip():
+        return record
+
+    if text.lstrip().startswith("{"):
+        try:
+            puzzle_data = json.loads(text)
+        except Exception:
+            return record
+        if not isinstance(puzzle_data, dict):
+            return record
+        meta = puzzle_data.get("meta") if isinstance(puzzle_data.get("meta"), dict) else {}
+        existing = _terminal_color_map_from_meta(meta)
+        terminals = puzzle_data.get("terminals")
+        declared: Dict[str, str] = {}
+        if isinstance(terminals, dict):
+            for letter, terminal in terminals.items():
+                if not isinstance(terminal, dict):
+                    continue
+                color = _normalize_hex_color(terminal.get("color"))
+                if color is not None:
+                    declared[str(letter).strip().upper()] = color
+        # Explicit schema/meta colors are user intent and take precedence over
+        # recovered detector samples; recovery only fills historical gaps.
+        merged = {**recovered, **declared, **existing}
+        meta["terminal_colors"] = merged
+        puzzle_data["meta"] = meta
+        if isinstance(terminals, dict):
+            for letter, color in merged.items():
+                terminal = terminals.get(letter)
+                if isinstance(terminal, dict) and not _normalize_hex_color(terminal.get("color")):
+                    terminal["color"] = color
+        result["text"] = json.dumps(puzzle_data, indent=2)
+        return record
+
+    if not _terminal_color_map_from_meta(
+        {"terminal_colors": next(
+            (
+                line.split(":", 1)[1].strip()
+                for line in text.splitlines()
+                if line.lstrip("# ").lower().startswith("terminal_colors:")
+            ),
+            "",
+        )}
+    ):
+        lines = text.splitlines()
+        insert_at = next(
+            (index + 1 for index, line in enumerate(lines) if line.lower().startswith("# fill:")),
+            0,
+        )
+        lines.insert(insert_at, f"# terminal_colors: {json.dumps(recovered, separators=(',', ':'))}")
+        result["text"] = "\n".join(lines).rstrip() + "\n"
+    return record
 
 
 def _parse_terminal_color_pairs(text: str) -> Dict[str, str]:
@@ -721,6 +1146,221 @@ def _parse_edge_overrides_payload(raw: Any) -> Dict[str, List[Tuple[str, str]]]:
     }
 
 
+def _image_graph_schema_v2(
+    obj: Dict[str, Any],
+    *,
+    target_type: str,
+    graph_layout: str,
+    width: Optional[int],
+    height: Optional[int],
+    level_modifiers: Sequence[str],
+) -> Dict[str, Any]:
+    """Upgrade a generated legacy graph to the canonical, typed v2 schema."""
+
+    space = obj.get("space") if isinstance(obj.get("space"), dict) else {}
+    nodes = space.get("nodes") if isinstance(space.get("nodes"), dict) else {}
+    base_edges = _parse_edge_pairs(space.get("edges"), field="space.edges")
+    warps = _parse_edge_pairs(space.get("warps"), field="space.warps")
+    walls = _parse_edge_pairs(space.get("walls"), field="space.walls")
+    overrides = space.get("edge_overrides") if isinstance(space.get("edge_overrides"), dict) else {}
+    additions = _parse_edge_pairs(overrides.get("add"), field="space.edge_overrides.add")
+    removals = _parse_edge_pairs(overrides.get("remove"), field="space.edge_overrides.remove")
+
+    def edge_key(pair: Tuple[str, str]) -> Tuple[str, str]:
+        u, v = pair
+        return (u, v) if u < v else (v, u)
+
+    warp_keys = {edge_key(pair) for pair in warps}
+    edge_kinds: Dict[Tuple[str, str], str] = {}
+    if target_type in {"cube", "star"}:
+        for pair in base_edges:
+            left = nodes.get(pair[0]) if isinstance(nodes.get(pair[0]), dict) else {}
+            right = nodes.get(pair[1]) if isinstance(nodes.get(pair[1]), dict) else {}
+            left_data = left.get("data") if isinstance(left.get("data"), dict) else {}
+            right_data = right.get("data") if isinstance(right.get("data"), dict) else {}
+            if left_data.get("face") != right_data.get("face"):
+                edge_kinds[edge_key(pair)] = "seam"
+    edge_kinds.update({
+        edge_key(pair): ("warp" if edge_key(pair) in warp_keys else "custom")
+        for pair in additions
+    })
+    edge_kinds.update({edge_key(pair): "warp" for pair in warps})
+    wall_keys = {edge_key(pair) for pair in walls}
+    blocked_edges = {
+        edge_key(pair): ("custom" if edge_key(pair) not in wall_keys else "local")
+        for pair in removals
+    }
+    blocked_edges.update({edge_key(pair): "local" for pair in walls})
+
+    puzzle = Puzzle.from_json(json.dumps(obj))
+    template_id = target_type if target_type != "graph" else graph_layout
+    if template_id == "star":
+        template_id = "radial_star"
+    parameters: Dict[str, Any] = {}
+    if width is not None and width > 0:
+        parameters["width"] = int(width)
+    if height is not None and height > 0:
+        parameters["height"] = int(height)
+    parameters["cells"] = len(puzzle.tiles)
+
+    mechanics = set(str(item) for item in level_modifiers if str(item))
+    mechanics.update(kind for kind in edge_kinds.values() if kind != "local")
+    if blocked_edges:
+        mechanics.add("walls")
+    if graph_layout == "regions":
+        mechanics.add("irregular-regions")
+    variant = "shapes" if target_type in {"cube", "star", "figure8"} or graph_layout == "regions" else "custom"
+    display_size = None
+    if width is not None or height is not None:
+        display_size = DisplaySizeSpec(
+            label=(f"{width}x{height}" if width is not None and height is not None else None),
+            width=width,
+            height=height,
+            unit="template",
+        )
+    catalog = CatalogSpec(
+        variant=variant,
+        display_size=display_size,
+        mechanics=tuple(sorted(mechanics)),
+    )
+    spec = puzzle_to_spec(
+        puzzle,
+        template_id=template_id,
+        template_parameters=parameters,
+        edge_kinds=edge_kinds,
+        blocked_edges=blocked_edges,
+        catalog=catalog,
+    )
+    payload = spec.to_dict()
+
+    if any(
+        isinstance(node, dict)
+        and isinstance(node.get("pos"), (list, tuple))
+        and len(node["pos"]) >= 3
+        and abs(float(node["pos"][2])) > 1e-9
+        for node in nodes.values()
+    ):
+        payload["display"]["dimension"] = 3
+    if target_type in {"cube", "star"}:
+        for node_id, node in nodes.items():
+            data = node.get("data") if isinstance(node, dict) else None
+            face = data.get("face") if isinstance(data, dict) else None
+            if face is not None:
+                payload["display"]["cells"].setdefault(str(node_id), {})["face"] = str(face)
+    if graph_layout == "regions":
+        for node_id, node in nodes.items():
+            data = node.get("data") if isinstance(node, dict) else None
+            polygon = data.get("polygon") if isinstance(data, dict) else None
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                continue
+            payload["display"]["cells"].setdefault(str(node_id), {})["polygon"] = [
+                [float(point[0]), -float(point[1]), 0.0]
+                for point in polygon
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
+    return parse_v2_dict(payload).to_dict()
+
+
+def _image_grid_schema_v2(
+    *,
+    target_type: str,
+    grid: Sequence[Sequence[str]],
+    width: int,
+    height: int,
+    meta: Dict[str, str],
+    terminal_placements: Sequence[Any],
+    level_modifiers: Sequence[str],
+) -> Dict[str, Any]:
+    """Encode square, hex, and circular image imports in canonical v2 form."""
+
+    if target_type == "square":
+        topology = build_grid_topology(width=width, height=height)
+        template_id = "grid"
+        parameters: Dict[str, Any] = {"width": width, "height": height}
+    elif target_type == "hex":
+        topology = build_hex_topology(width=width, height=height)
+        template_id = "hex_grid"
+        parameters = {"width": width, "height": height, "offset": "odd-r"}
+    elif target_type == "circle":
+        topology = build_ring_topology(rings=height, sectors=width, core=False)
+        template_id = "ring"
+        parameters = {"rings": height, "sectors": width, "core": False}
+    else:  # pragma: no cover - guarded by the image endpoint
+        raise ValueError(f"Unsupported grid target for schema v2: {target_type!r}")
+
+    terminal_lists: Dict[str, List[str]] = {}
+    for row, values in enumerate(grid):
+        for column, raw_token in enumerate(values):
+            token = str(raw_token)
+            if len(token) == 1 and token.isalpha() and token.upper() == token:
+                terminal_lists.setdefault(token, []).append(f"{column},{row}")
+    terminals = {
+        color: (nodes[0], nodes[1])
+        for color, nodes in terminal_lists.items()
+        if len(nodes) >= 2
+    }
+
+    canonical_meta: Dict[str, Any] = dict(meta)
+    terminal_colors = _terminal_color_map_from_placements(terminal_placements)
+    if terminal_colors:
+        canonical_meta["terminal_colors"] = terminal_colors
+
+    if target_type == "square":
+        # Reuse the square token compiler so holes and bridge '+' cells become
+        # real physical cells with independent horizontal/vertical channels.
+        graph, tiles, parsed_terminals = build_square_space_from_tokens(
+            [list(row) for row in grid],
+            require_terminals=False,
+        )
+        puzzle = Puzzle(
+            graph=graph,
+            tiles=tiles,
+            terminals=parsed_terminals,
+            fill=True,
+            meta=canonical_meta,
+        )
+    else:
+        puzzle = Puzzle(
+            graph=topology.to_graph(),
+            tiles={node.id: [node.id] for node in topology.nodes},
+            terminals=terminals,
+            fill=True,
+            meta=canonical_meta,
+        )
+    edge_kinds: Dict[Tuple[str, str], str] = {}
+    mechanics = {str(item) for item in level_modifiers if str(item)}
+    if target_type == "circle":
+        for u, v in topology.edges:
+            left = u.split(",")
+            right = v.split(",")
+            if (
+                len(left) == 2
+                and len(right) == 2
+                and left[1] == right[1]
+                and abs(int(left[0]) - int(right[0])) == width - 1
+            ):
+                edge_kinds[(u, v)] = "seam"
+        mechanics.add("seam")
+
+    catalog = CatalogSpec(
+        variant={"square": "classic", "hex": "hexes", "circle": "shapes"}[target_type],
+        display_size=DisplaySizeSpec(
+            label=f"{width}x{height}",
+            width=width,
+            height=height,
+            unit="cells",
+        ),
+        mechanics=tuple(sorted(mechanics)),
+    )
+    return puzzle_to_spec(
+        puzzle,
+        template_id=template_id,
+        template_parameters=parameters,
+        edge_kinds=edge_kinds,
+        catalog=catalog,
+    ).to_dict()
+
+
 def _apply_flow_metadata(text: str, meta_updates: Dict[str, str], *, drop_empty: bool) -> str:
     lines = [ln.rstrip("\n") for ln in text.splitlines()]
     directives: Dict[str, str] = {}
@@ -784,6 +1424,14 @@ class ParseRequest(BaseModel):
 class SolveRequest(ParseRequest):
     solver: str = Field(default="z3")
     timeout_ms: Optional[int] = Field(default=30_000, ge=1, le=MAX_TIMEOUT_MS)
+    check_unique: bool = False
+    import_id: Optional[str] = None
+
+
+class ValidateRequest(ParseRequest):
+    check_solvable: bool = False
+    solver: str = Field(default="z3")
+    timeout_ms: Optional[int] = Field(default=30_000, ge=1, le=MAX_TIMEOUT_MS)
 
 
 class SavePuzzleRequest(BaseModel):
@@ -810,7 +1458,16 @@ class CropTemplateRequest(BaseModel):
     pipeline: Optional[Dict[str, Any]] = None
 
 
-app = FastAPI(title="Flow Solver API", version="0.1.0")
+class ImageImportBulkDeleteRequest(BaseModel):
+    ids: List[str] = Field(default_factory=list, max_length=1000)
+
+
+class ImageImportReprocessFailureRequest(BaseModel):
+    error: str = Field(min_length=1, max_length=4000)
+    stage: str = Field(default="screenshot-library", min_length=1, max_length=100)
+
+
+app = FastAPI(title="Universal Flow Game Solver API", version="0.1.0")
 
 cors_raw = os.environ.get("CORS_ORIGINS", "*")
 cors_list = [c.strip() for c in cors_raw.split(",") if c.strip()]
@@ -824,14 +1481,51 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health() -> Dict[str, Any]:
+    return {"status": "ok", "acceleration": acceleration_capabilities()}
+
+
+@app.get("/capabilities")
+def capabilities() -> Dict[str, Any]:
+    return {"acceleration": acceleration_capabilities()}
 
 
 @app.get("/puzzles")
 def list_puzzles() -> Dict[str, Any]:
     entries = [_build_entry(path, source) for source, path in _list_puzzle_files()]
     return {"entries": entries}
+
+
+# Repository documentation surfaced in the frontend's Docs view. A whitelist
+# (rather than a path parameter into docs/) keeps this from ever serving
+# arbitrary repository files.
+DOC_PAGES: Dict[str, Tuple[str, str]] = {
+    "architecture": ("Architecture", "ARCHITECTURE.md"),
+    "variants": ("Flow variants & research", "FLOW_VARIANTS_AND_ARCHITECTURE.md"),
+    "production-readiness": ("Production readiness", "PRODUCTION_READINESS.md"),
+}
+
+
+@app.get("/docs-pages")
+def list_doc_pages() -> Dict[str, Any]:
+    return {
+        "pages": [
+            {"id": page_id, "title": title}
+            for page_id, (title, _file) in DOC_PAGES.items()
+        ]
+    }
+
+
+@app.get("/docs-pages/{page_id}")
+def get_doc_page(page_id: str) -> Dict[str, Any]:
+    entry = DOC_PAGES.get(page_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Unknown documentation page")
+    title, file_name = entry
+    path = _repo_root() / "docs" / file_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Documentation file is missing")
+    return {"id": page_id, "title": title, "markdown": path.read_text(encoding="utf-8")}
 
 
 @app.post("/puzzles/save")
@@ -849,9 +1543,10 @@ def save_puzzle(req: SavePuzzleRequest) -> Dict[str, Any]:
             final_text = _apply_json_metadata(req.text, req.metadata, drop_empty=req.drop_empty)
         else:
             final_text = _apply_flow_metadata(req.text, req.metadata, drop_empty=req.drop_empty)
-    # Validate terminals (each color must appear exactly twice).
+    # Validate both syntax and inexpensive topology/coverage invariants.
     try:
-        _parse_puzzle(final_text, name=safe_name)
+        puzzle = _parse_puzzle(final_text, name=safe_name)
+        validate_puzzle(puzzle).require_valid()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Puzzle validation failed: {e}") from e
     kind, size = _type_size_from_text(final_text, name=safe_name)
@@ -992,6 +1687,7 @@ def parse_puzzle(req: ParseRequest) -> Dict[str, Any]:
             "colors": len(puzzle.terminals),
             "fill": puzzle.fill,
         }
+        validation = validate_puzzle(puzzle)
         size_label = _format_size_label(kind, metrics, counts["nodes"])
         return {
             "kind": kind,
@@ -1001,7 +1697,33 @@ def parse_puzzle(req: ParseRequest) -> Dict[str, Any]:
             "counts": counts,
             "meta": meta,
             "terminals": {c: [a, b] for c, (a, b) in puzzle.terminals.items()},
+            "validation": validation.to_dict(),
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/validate")
+def validate(req: ValidateRequest) -> Dict[str, Any]:
+    try:
+        puzzle = _parse_puzzle(req.text, name=req.name)
+        if req.fill is not None:
+            puzzle = replace(puzzle, fill=req.fill)
+        report = validate_puzzle(puzzle)
+        payload = report.to_dict()
+        if req.check_solvable and report.valid:
+            try:
+                result = solve_puzzle(puzzle, solver=req.solver, timeout_ms=req.timeout_ms)
+                payload["solvable"] = True
+                payload["solution"] = {
+                    "path_lengths": {color: len(path) for color, path in result.paths.items()},
+                    "stats": dict(getattr(result, "stats", {}) or {}),
+                    "unique": getattr(result, "unique", None),
+                }
+            except Exception as exc:
+                payload["solvable"] = False
+                payload["solve_error"] = str(exc)
+        return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1012,14 +1734,48 @@ def solve(req: SolveRequest) -> Dict[str, Any]:
         puzzle = _parse_puzzle(req.text, name=req.name)
         if req.fill is not None:
             puzzle = replace(puzzle, fill=req.fill)
-        res = solve_puzzle(puzzle, solver=req.solver, timeout_ms=req.timeout_ms)
+        if req.check_unique:
+            if req.solver != "z3":
+                raise ValueError("Uniqueness checking is currently available only with the Z3 solver.")
+            res = check_uniqueness_with_z3(puzzle, timeout_ms=req.timeout_ms)
+        else:
+            res = solve_puzzle(puzzle, solver=req.solver, timeout_ms=req.timeout_ms)
         node_color = {k: v for k, v in res.node_color.items()}
-        return {
+        solve_stats = dict(res.stats)
+        acceleration = acceleration_capabilities()
+        solve_stats["cuda_available"] = bool(acceleration.get("cuda_available"))
+        solve_stats["image_acceleration"] = str(acceleration.get("image_backend", "cpu"))
+        solve_stats["exact_solver_acceleration"] = "native-cpu-sat"
+        payload = {
             "node_color": node_color,
             "paths": {c: path for c, path in res.paths.items()},
+            "path_edges": {
+                c: [[u, v] for u, v in edges]
+                for c, edges in res.path_edges.items()
+            },
+            "stats": solve_stats,
+            "unique": res.unique,
             "graph": _graph_payload(puzzle),
         }
+        if req.import_id:
+            _store_image_import_solve(
+                req.import_id,
+                name=req.name,
+                text=req.text,
+                result=payload,
+            )
+        return payload
     except Exception as e:
+        if req.import_id:
+            try:
+                _store_image_import_solve(
+                    req.import_id,
+                    name=req.name,
+                    text=req.text,
+                    error=str(e),
+                )
+            except Exception:
+                pass
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
@@ -1158,6 +1914,107 @@ def get_puzzle(source: str, name: str) -> Dict[str, Any]:
     return {"name": path.name, "text": text, "entry": entry}
 
 
+@app.get("/image-imports")
+def list_image_imports(limit: int = 50) -> Dict[str, Any]:
+    bounded_limit = max(1, min(limit, 1000))
+    records: List[Dict[str, Any]] = []
+    base = _image_imports_dir()
+    if base.exists():
+        for record_path in base.glob("*/record.json"):
+            try:
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                if isinstance(record, dict):
+                    records.append(_image_import_summary(record))
+            except Exception:
+                continue
+    records.sort(
+        key=lambda item: float(item.get("updated_at", item.get("created_at", 0))),
+        reverse=True,
+    )
+    return {"entries": records[:bounded_limit], "total": len(records)}
+
+
+@app.post("/image-imports/failed")
+async def archive_failed_image_import(
+    file: UploadFile = File(...),
+    error: str = Form(...),
+    stage: str = Form("processing"),
+) -> Dict[str, Any]:
+    data = await file.read()
+    try:
+        image = load_image(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid screenshot: {exc}") from exc
+    try:
+        record = _store_image_import(
+            data=data,
+            original_name=file.filename or "image",
+            content_type=file.content_type,
+            image_size=(image.width, image.height),
+            result=None,
+            processing={"stage": stage},
+            status="failed",
+            error=error[:4000],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not archive failed screenshot: {exc}") from exc
+    return _image_import_summary(record)
+
+
+@app.post("/image-imports/bulk-delete")
+def bulk_delete_image_imports(request: ImageImportBulkDeleteRequest) -> Dict[str, Any]:
+    unique_ids = list(dict.fromkeys(request.ids))
+    record_dirs = [(import_id, _image_import_dir(import_id)) for import_id in unique_ids]
+    deleted: List[str] = []
+    missing: List[str] = []
+    for import_id, record_dir in record_dirs:
+        if not (record_dir / "record.json").exists():
+            missing.append(import_id)
+            continue
+        shutil.rmtree(record_dir)
+        deleted.append(import_id)
+    return {"deleted": deleted, "missing": missing}
+
+
+@app.post("/image-imports/{import_id}/failure")
+def record_image_import_reprocess_failure(
+    import_id: str,
+    request: ImageImportReprocessFailureRequest,
+) -> Dict[str, Any]:
+    record = _record_image_import_reprocess_failure(
+        import_id,
+        error=request.error,
+        stage=request.stage,
+    )
+    return _image_import_summary(record)
+
+
+@app.get("/image-imports/{import_id}/image")
+def get_image_import_image(import_id: str):
+    record = _read_image_import(import_id)
+    image_file = str(record.get("image_file", ""))
+    if Path(image_file).name != image_file:
+        raise HTTPException(status_code=500, detail="Stored image import has an invalid image path")
+    image_path = _image_import_dir(import_id) / image_file
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Stored screenshot not found")
+    return FileResponse(image_path, media_type=str(record.get("content_type") or "application/octet-stream"))
+
+
+@app.get("/image-imports/{import_id}")
+def get_image_import(import_id: str) -> Dict[str, Any]:
+    return _read_image_import(import_id)
+
+
+@app.delete("/image-imports/{import_id}")
+def delete_image_import(import_id: str) -> Dict[str, Any]:
+    record_dir = _image_import_dir(import_id)
+    if not (record_dir / "record.json").exists():
+        raise HTTPException(status_code=404, detail="Image import not found")
+    shutil.rmtree(record_dir)
+    return {"deleted": True, "id": import_id}
+
+
 @app.post("/image/crop/auto")
 async def image_auto_crop(
     file: UploadFile = File(...),
@@ -1174,19 +2031,28 @@ async def image_auto_crop(
     seed_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     image_for_crop = apply_crop(image, seed_crop)
     crop = auto_crop(image_for_crop, threshold=threshold, invert=invert, padding=padding)
+    message: Optional[str] = None
     if crop is not None and seed_crop is not None:
-        crop = CropBox(
-            x=seed_crop.x + crop.x,
-            y=seed_crop.y + crop.y,
-            width=crop.width,
-            height=crop.height,
-        )
+        seed_area = float(max(1, seed_crop.width * seed_crop.height))
+        refined_area = float(max(1, crop.width * crop.height))
+        if refined_area < seed_area * 0.38:
+            # Prevent over-aggressive refinement (e.g. snapping onto a single terminal).
+            crop = seed_crop
+            message = "Auto-crop refinement was too aggressive; kept the seed crop."
+        else:
+            crop = CropBox(
+                x=seed_crop.x + crop.x,
+                y=seed_crop.y + crop.y,
+                width=crop.width,
+                height=crop.height,
+            )
     elif crop is None and seed_crop is not None:
         # If refinement within the seed failed, retry on the full image.
         crop = auto_crop(image, threshold=threshold, invert=invert, padding=padding)
         if crop is None:
             # Last-resort behavior keeps the user-provided/templated seed.
             crop = seed_crop
+            message = "No refined crop found; kept the seed crop."
     if crop is None:
         return {
             "crop": None,
@@ -1198,7 +2064,7 @@ async def image_auto_crop(
             ),
             "message": "No crop detected.",
         }
-    return {
+    payload: Dict[str, Any] = {
         "crop": {"x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height},
         "image_size": {"width": image.width, "height": image.height},
         "seed_crop": (
@@ -1207,6 +2073,9 @@ async def image_auto_crop(
             else None
         ),
     }
+    if message:
+        payload["message"] = message
+    return payload
 
 
 @app.post("/image/classify")
@@ -1473,11 +2342,13 @@ async def image_terminals_detect(
 @app.post("/image/generate")
 async def image_generate(
     file: UploadFile = File(...),
+    replace_import_id: Optional[str] = Form(None),
     target_type: str = Form("auto"),
     grid_width: Optional[int] = Form(None),
     grid_height: Optional[int] = Form(None),
     graph_layout: str = Form("grid"),
     graph_nodes: int = Form(10),
+    output_schema_version: int = Form(1),
     auto_terminals: bool = Form(True),
     auto_classify: bool = Form(True),
     level_type_json: Optional[str] = Form(None),
@@ -1499,6 +2370,8 @@ async def image_generate(
     perspective: bool = Form(False),
 ) -> Dict[str, Any]:
     data = await file.read()
+    if output_schema_version not in {1, 2}:
+        raise HTTPException(status_code=400, detail="output_schema_version must be 1 or 2")
     image = load_image(data)
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
@@ -1593,6 +2466,10 @@ async def image_generate(
     else:
         raise HTTPException(status_code=400, detail=f"Unknown target_type: {target_type}")
 
+    auto_level_signals = level_type.get("signals") if isinstance(level_type.get("signals"), dict) else {}
+    if requested_target == "auto" and auto_level_signals.get("recommended_graph_layout") == "regions":
+        target_used = "graph"
+
     auto_target_adjustment: Optional[Dict[str, Any]] = None
     if requested_target == "auto" and target_used in FLOW_LEVEL_GEOMETRIES:
         top_conf = 0.0
@@ -1625,6 +2502,15 @@ async def image_generate(
     if target_used not in SUPPORTED_LEVEL_GEOMETRIES:
         raise HTTPException(status_code=400, detail=f"Unsupported target_type after classification: {target_used}")
 
+    level_signals = level_type.get("signals") if isinstance(level_type.get("signals"), dict) else {}
+    if (
+        target_used == "graph"
+        and graph_layout == "grid"
+        and level_signals.get("recommended_graph_layout") == "regions"
+    ):
+        graph_layout = "regions"
+        detection_info["graph_layout_auto_selected"] = "regions"
+
     if requested_target in FLOW_LEVEL_GEOMETRIES and target_used in FLOW_LEVEL_GEOMETRIES:
         if not bool(level_type.get("can_emit_flow", True)):
             classification_warnings.append(
@@ -1654,6 +2540,60 @@ async def image_generate(
             "warps": len(manual_edge_overrides["warps"]),
             "walls": len(manual_edge_overrides["walls"]),
         }
+
+    def finalize_generation(payload: Dict[str, Any]) -> Dict[str, Any]:
+        acceleration = acceleration_capabilities()
+        payload.setdefault("detection", {}).setdefault("acceleration", acceleration)
+        processing = {
+            "target_type": requested_target,
+            "target_type_used": target_used,
+            "output_schema_version": output_schema_version,
+            "graph_layout": graph_layout,
+            "graph_nodes": graph_nodes,
+            "grid_width": grid_width,
+            "grid_height": grid_height,
+            "auto_terminals": auto_terminals,
+            "auto_classify": auto_classify,
+            "crop": (
+                {"x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height}
+                if crop is not None
+                else None
+            ),
+            "threshold": threshold,
+            "line_threshold": line_threshold,
+            "invert": invert,
+            "perspective": perspective,
+            "sat_threshold": sat_threshold,
+            "brightness_min": brightness_min,
+            "brightness_max": brightness_max,
+            "margin_ratio": margin_ratio,
+            "cluster_threshold": cluster_threshold,
+            "bg_threshold": bg_threshold,
+            "acceleration": acceleration,
+            "reprocessed": replace_import_id is not None,
+        }
+        try:
+            if replace_import_id is not None:
+                record = _replace_image_import(
+                    replace_import_id,
+                    data=data,
+                    result=payload,
+                    processing=processing,
+                )
+            else:
+                record = _store_image_import(
+                    data=data,
+                    original_name=file.filename or "image",
+                    content_type=file.content_type,
+                    image_size=(image.width, image.height),
+                    result=payload,
+                    processing=processing,
+                )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not archive processed screenshot: {exc}") from exc
+        payload["import_id"] = record["id"]
+        payload["archived_at"] = record["created_at"]
+        return payload
 
     if target_used in {"square", "hex", "circle"}:
         if any(manual_edge_overrides.values()):
@@ -1713,9 +2653,22 @@ async def image_generate(
         if grid_width <= 0 or grid_height <= 0:
             raise HTTPException(status_code=400, detail="Invalid grid size.")
 
+        bridge_cells: List[Tuple[int, int]] = []
+        bridge_info: Dict[str, Any] = {}
+        if target_used == "square" and "bridges" in level_modifiers:
+            bridge_cells, bridge_info = detect_bridge_cells(
+                warped,
+                rows=grid_height,
+                cols=grid_width,
+            )
+            detection_info["bridge_info"] = bridge_info
+            classification_warnings.extend(str(item) for item in bridge_info.get("warnings", []))
+        bridge_cell_set = set(bridge_cells)
+
         terminals_payload: List[Dict[str, Any]] = []
         terminal_warnings: List[str] = []
         terminal_info: Dict[str, Any] = {}
+        placements: List[Any] = []
         if auto_terminals:
             if target_used == "circle":
                 placements, info = detect_circle_terminals(
@@ -1742,7 +2695,18 @@ async def image_generate(
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
                 )
-            grid_tokens, grid_warnings = build_grid(rows=grid_height, cols=grid_width, terminals=placements)
+            if bridge_cell_set:
+                placements = [
+                    placement
+                    for placement in placements
+                    if (placement.row, placement.col) not in bridge_cell_set
+                ]
+            grid_tokens, grid_warnings = build_grid(
+                rows=grid_height,
+                cols=grid_width,
+                terminals=placements,
+                fallback=False,
+            )
             terminal_warnings = grid_warnings + info.get("warnings", [])
             terminal_info = info
             terminals_payload = [
@@ -1755,15 +2719,57 @@ async def image_generate(
                 for t in placements
             ]
         else:
-            grid_tokens, grid_warnings = build_grid(rows=grid_height, cols=grid_width, terminals=[])
+            grid_tokens, grid_warnings = build_grid(
+                rows=grid_height,
+                cols=grid_width,
+                terminals=[],
+                fallback=False,
+            )
             terminal_warnings = grid_warnings
 
-        flow_text = build_flow_text(target_used, grid_tokens, meta)
+        for bridge_row, bridge_col in bridge_cells:
+            if 0 <= bridge_row < grid_height and 0 <= bridge_col < grid_width:
+                if grid_tokens[bridge_row][bridge_col] == ".":
+                    grid_tokens[bridge_row][bridge_col] = "+"
+                else:
+                    terminal_warnings.append(
+                        f"Bridge marker at ({bridge_col},{bridge_row}) overlaps a terminal and was ignored."
+                    )
+
+        flow_meta = dict(meta)
+        detected_terminal_colors = _terminal_color_map_from_placements(placements)
+        if detected_terminal_colors:
+            flow_meta["terminal_colors"] = json.dumps(
+                detected_terminal_colors,
+                separators=(",", ":"),
+            )
+        flow_text = build_flow_text(target_used, grid_tokens, flow_meta)
         name = f"{Path(meta.get('source_image', 'image')).stem}_{target_used}_{grid_width}x{grid_height}.flow"
+        output_text = flow_text
+        if output_schema_version == 2:
+            try:
+                output_obj = _image_grid_schema_v2(
+                    target_type=target_used,
+                    grid=grid_tokens,
+                    width=grid_width,
+                    height=grid_height,
+                    meta=meta,
+                    terminal_placements=placements,
+                    level_modifiers=level_modifiers,
+                )
+                output_text = json.dumps(output_obj, indent=2)
+                name = str(Path(name).with_suffix(".json"))
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not encode generated grid as schema v2: {exc}",
+                ) from exc
         detection_info["terminals"] = terminals_payload
         detection_info["terminal_info"] = terminal_info
         detection_info["warnings"] = classification_warnings + terminal_warnings
-        return {"name": name, "text": flow_text, "metadata": meta, "detection": detection_info}
+        return finalize_generation(
+            {"name": name, "text": output_text, "metadata": meta, "detection": detection_info}
+        )
 
     if target_used in {"graph", "cube", "star", "figure8"}:
         warp_edges: List[Tuple[str, str]] = []
@@ -1829,8 +2835,72 @@ async def image_generate(
                 if inferred_terminals:
                     obj["terminals"] = inferred_terminals
                 else:
+                    obj["terminals"] = {}
                     graph_terminal_warnings.append("No topology terminals were confidently detected.")
+            else:
+                obj["terminals"] = {}
             name = f"{Path(meta.get('source_image', 'image')).stem}_{target_used}_{topo_width}x{topo_height}.json"
+        elif graph_layout == "regions":
+            nodes_obj, region_edges, region_info = detect_region_topology(
+                warped,
+                prefer_hex=level_geometry == "hex",
+            )
+            if len(nodes_obj) < 2:
+                warnings = region_info.get("warnings", [])
+                suffix = f" ({'; '.join(str(item) for item in warnings)})" if warnings else ""
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Region graph detection found fewer than two cells{suffix}.",
+                )
+            space: Dict[str, Any] = {
+                "type": "graph",
+                "topology": "regions",
+                "nodes": nodes_obj,
+                "edges": region_edges,
+            }
+            add_pairs = add_edges + list(manual_edge_overrides["warps"])
+            remove_pairs = remove_edges + list(manual_edge_overrides["walls"])
+            if add_pairs or remove_pairs:
+                space["edge_overrides"] = {}
+                if add_pairs:
+                    space["edge_overrides"]["add"] = [[u, v] for u, v in add_pairs]
+                if remove_pairs:
+                    space["edge_overrides"]["remove"] = [[u, v] for u, v in remove_pairs]
+            if manual_edge_overrides["warps"]:
+                space["warps"] = [[u, v] for u, v in manual_edge_overrides["warps"]]
+            if manual_edge_overrides["walls"]:
+                space["walls"] = [[u, v] for u, v in manual_edge_overrides["walls"]]
+            obj = {"space": space, "terminals": {}, "meta": meta}
+            modifier_info["regions"] = region_info
+            graph_terminal_warnings.extend([str(w) for w in region_info.get("warnings", [])])
+            if auto_terminals:
+                node_placements, node_info = detect_terminals_on_nodes(
+                    warped,
+                    nodes=nodes_obj,
+                    sat_threshold=sat_threshold,
+                    brightness_min=brightness_min,
+                    brightness_max=brightness_max,
+                    margin_ratio=margin_ratio,
+                    cluster_threshold=cluster_threshold,
+                    bg_threshold=bg_threshold,
+                )
+                graph_terminal_info = node_info
+                graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
+                graph_terminal_payload = [
+                    {
+                        "node_id": placement.node_id,
+                        "letter": placement.letter,
+                        "color": [round(c, 2) for c in placement.color],
+                    }
+                    for placement in node_placements
+                ]
+                inferred_terminals = build_graph_terminals_from_node_placements(node_placements)
+                if inferred_terminals:
+                    obj["terminals"] = inferred_terminals
+                else:
+                    obj["terminals"] = {}
+                    graph_terminal_warnings.append("No region terminals were confidently detected.")
+            name = f"{Path(meta.get('source_image', 'image')).stem}_regions_{len(nodes_obj)}.json"
         elif graph_layout == "line":
             if graph_nodes < 2:
                 raise HTTPException(status_code=400, detail="Line graphs need at least 2 nodes.")
@@ -1876,6 +2946,11 @@ async def image_generate(
                 inferred_terminals = build_graph_terminals_from_node_placements(node_placements)
                 if inferred_terminals:
                     obj["terminals"] = inferred_terminals
+                else:
+                    obj["terminals"] = {}
+                    graph_terminal_warnings.append("No line-graph terminals were confidently detected.")
+            else:
+                obj["terminals"] = {}
             name = f"{Path(meta.get('source_image', 'image')).stem}_line_{graph_nodes}.json"
         else:
             if grid_width is None or grid_height is None:
@@ -1892,10 +2967,28 @@ async def image_generate(
             if grid_width is None or grid_height is None or grid_width * grid_height < 2:
                 raise HTTPException(status_code=400, detail="Grid graphs need a valid width/height.")
             if "warps" in level_modifiers:
-                warp_edges = _grid_wrap_edges(grid_width, grid_height)
-                modifier_info["warps"] = {"count": len(warp_edges), "mode": "toroidal-wrap"}
+                warp_edges, warp_info = detect_warp_edges(
+                    warped,
+                    rows=grid_height,
+                    cols=grid_width,
+                )
+                hint_tokens = level_signals.get("hint_tokens")
+                is_boundless = isinstance(hint_tokens, list) and any(
+                    str(token).strip().lower() == "boundless" for token in hint_tokens
+                )
+                if not warp_edges and is_boundless:
+                    warp_edges = _grid_wrap_edges(grid_width, grid_height)
+                    warp_info = {
+                        **warp_info,
+                        "count": len(warp_edges),
+                        "mode": "full-boundless-wrap",
+                        "warnings": [],
+                    }
+                modifier_info["warps"] = warp_info
                 if not warp_edges:
-                    classification_warnings.append("Warp modifier detected, but grid is too small for wrap edges.")
+                    classification_warnings.append(
+                        "Warp modifier detected, but no paired boundary ports were confidently inferred."
+                    )
             warp_edges.extend(manual_edge_overrides["warps"])
             if "walls" in level_modifiers:
                 wall_edges, wall_info = detect_wall_edges(
@@ -1956,7 +3049,10 @@ async def image_generate(
                 if mapped_terminals:
                     obj["terminals"] = mapped_terminals
                 else:
+                    obj["terminals"] = {}
                     graph_terminal_warnings.append("No graph-grid terminals were confidently detected.")
+            else:
+                obj["terminals"] = {}
             name = f"{Path(meta.get('source_image', 'image')).stem}_graph_{grid_width}x{grid_height}.json"
         manual_applied = len(add_edges) + len(remove_edges) + len(manual_edge_overrides["warps"]) + len(manual_edge_overrides["walls"])
         if manual_applied:
@@ -1972,8 +3068,45 @@ async def image_generate(
             detection_info["terminals"] = graph_terminal_payload
         if graph_terminal_info:
             detection_info["terminal_info"] = graph_terminal_info
+        detected_terminal_colors = _terminal_color_map_from_placements(graph_terminal_payload)
+        if detected_terminal_colors:
+            graph_meta = dict(obj.get("meta") if isinstance(obj.get("meta"), dict) else {})
+            graph_meta["terminal_colors"] = detected_terminal_colors
+            obj["meta"] = graph_meta
         detection_info["warnings"] = classification_warnings + graph_terminal_warnings
-        return {"name": name, "text": json.dumps(obj, indent=2), "metadata": meta, "detection": detection_info}
+        output_obj = obj
+        if output_schema_version == 2:
+            if target_used in {"cube", "star", "figure8"}:
+                canonical_width = topo_width
+                canonical_height = topo_height
+            elif graph_layout in {"line", "regions"}:
+                canonical_width = None
+                canonical_height = None
+            else:
+                canonical_width = grid_width
+                canonical_height = grid_height
+            try:
+                output_obj = _image_graph_schema_v2(
+                    obj,
+                    target_type=target_used,
+                    graph_layout=graph_layout,
+                    width=canonical_width,
+                    height=canonical_height,
+                    level_modifiers=level_modifiers,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not encode generated graph as schema v2: {exc}",
+                ) from exc
+        return finalize_generation(
+            {
+                "name": name,
+                "text": json.dumps(output_obj, indent=2),
+                "metadata": meta,
+                "detection": detection_info,
+            }
+        )
 
     raise HTTPException(status_code=400, detail=f"Unknown target_type after classification: {target_used}")
 

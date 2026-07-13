@@ -1,0 +1,212 @@
+{
+  "user/circle/2x8/classic_level_61.flow": {
+    "colors": 4,
+    "nodes": 16,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/classic_level_61.flow": {
+    "colors": 6,
+    "nodes": 49,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/31 nodes/IMG_3245_regions_31.json": {
+    "colors": 4,
+    "nodes": 31,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/35 nodes/IMG_3246_regions_35.json": {
+    "colors": 4,
+    "nodes": 35,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/54 nodes/IMG_3957_regions_54.json": {
+    "colors": 5,
+    "nodes": 54,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/63 nodes/IMG_3968_regions_63.json": {
+    "colors": 7,
+    "nodes": 63,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/64 nodes/IMG_3963_regions_64.json": {
+    "colors": 7,
+    "nodes": 64,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/graph/69 nodes/IMG_3958_regions_69.json": {
+    "colors": 6,
+    "nodes": 69,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/10x10/classic_level_142.flow": {
+    "colors": 9,
+    "nodes": 100,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/15x15/classic_level_150.flow": {
+    "colors": 16,
+    "nodes": 225,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_1.flow": {
+    "colors": 5,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_10.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_2.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_3.flow": {
+    "colors": 5,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_4.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_5.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_6.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_7.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_8.flow": {
+    "colors": 5,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/5x5/classic_level_9.flow": {
+    "colors": 4,
+    "nodes": 25,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/6x10/IMG_4024_square_6x10.json": {
+    "colors": 5,
+    "nodes": 62,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/6x11/IMG_4025_square_6x11.json": {
+    "colors": 4,
+    "nodes": 69,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/7x10/IMG_4028_square_7x10.json": {
+    "colors": 5,
+    "nodes": 73,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/7x8/IMG_4026_square_7x8.json": {
+    "colors": 4,
+    "nodes": 59,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/7x9/IMG_4027_square_7x9.json": {
+    "colors": 4,
+    "nodes": 65,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/8x12/IMG_4035_square_8x12.json": {
+    "colors": 6,
+    "nodes": 100,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/8x8/classic_level_104.flow": {
+    "colors": 6,
+    "nodes": 64,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/8x8/classic_level_121.flow": {
+    "colors": 8,
+    "nodes": 64,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/9x9/IMG_4064_graph_9x9.json": {
+    "colors": 8,
+    "nodes": 81,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  },
+  "user/square/9x9/IMG_4065_graph_9x9.json": {
+    "colors": 8,
+    "nodes": 81,
+    "parses": true,
+    "solution_valid": true,
+    "solvable": true
+  }
+}
