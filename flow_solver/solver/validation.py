@@ -76,6 +76,15 @@ def validate_solution(puzzle: Puzzle, result: SolveResult) -> SolutionValidation
                 f"Path {color!r} must run between {a!r} and {b!r}, "
                 f"not {path[0]!r} and {path[-1]!r}"
             )
+        minimum_nodes, maximum_nodes = puzzle.path_length_bounds
+        if minimum_nodes is not None and len(path) < minimum_nodes:
+            errors.append(
+                f"Path {color!r} has {len(path)} channels; minimum is {minimum_nodes}"
+            )
+        if maximum_nodes is not None and len(path) > maximum_nodes:
+            errors.append(
+                f"Path {color!r} has {len(path)} channels; maximum is {maximum_nodes}"
+            )
 
         seen: Set[NodeId] = set()
         for index, node in enumerate(path):
@@ -135,15 +144,22 @@ def validate_solution(puzzle: Puzzle, result: SolveResult) -> SolutionValidation
                 node_to_tiles[node].append(tile_id)
 
         used = [node for node in tile_nodes if node in occupied]
-        if puzzle.fill and not used:
-            errors.append(f"Required cell/tile {tile_id!r} is unfilled")
+        minimum, maximum = puzzle.cell_coverage_bounds(tile_id)
+        if len(used) < minimum:
+            errors.append(
+                f"Cell/tile {tile_id!r} uses {len(used)} channels; minimum is {minimum}"
+            )
+        if len(used) > maximum:
+            errors.append(
+                f"Cell/tile {tile_id!r} uses {len(used)} channels; maximum is {maximum}"
+            )
 
         by_color: Dict[Color, int] = {}
         for node in used:
             color = occupied[node]
             by_color[color] = by_color.get(color, 0) + 1
         for color, count in by_color.items():
-            if count > 1:
+            if count > 1 and puzzle.multi_channel_cell_color_policy == "distinct":
                 errors.append(
                     f"Path {color!r} occupies {count} channels in cell/tile {tile_id!r}"
                 )

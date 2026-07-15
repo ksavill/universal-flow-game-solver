@@ -39,11 +39,24 @@ docker compose up ui    # frontend only
 
 That's it! Open http://localhost:5173 to start creating and solving puzzles.
 
+For the same-origin, supervised production layout, set the public origin and
+use the production Compose file:
+
+```bash
+PUBLIC_ORIGIN=https://flow.example.com docker compose -f docker-compose.prod.yml up -d --build
+```
+
+See [Production readiness](docs/PRODUCTION_READINESS.md) for backup, validation,
+and restore checks.
+
 ---
 
 ## Using the UI
 
-The React UI centers on four destinations: **Import**, **Create**, **Library**, and **Batch**. On phones these stay reachable from a persistent bottom navigation bar.
+The React UI centers on three destinations: **Screenshot**, **Create**, and
+**Library**. Single-image and durable background batch import are modes of the
+Screenshot page. On phones these stay reachable from a persistent bottom
+navigation bar.
 
 ### Import Screenshot
 
@@ -51,7 +64,7 @@ This is the default starting point. Choose a screenshot from Photos or Files, cr
 
 The screenshot may be portrait, landscape, square, letterboxed, or ultrawide and may use any practical resolution. Auto-crop and the detectors normalize against the recovered puzzle bounds, provided the complete board remains visible and has enough pixels to distinguish its cell boundaries.
 
-Every completed or failed processing run is archived under `data/image_imports/`. The **Screenshot library** on the Import tab can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
+Every completed or failed processing run is archived under `data/image_imports/`. The **Uploaded screenshots** section in Library can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
 
 ### New Puzzle Tab
 
@@ -70,7 +83,7 @@ Build puzzles interactively with a visual grid editor:
 
 The "Image Import" panel on the right lets you upload a screenshot and auto-detect the grid/terminals (see below).
 
-### Bulk Import Tab
+### Screenshot Batch Mode
 
 Process multiple puzzle images at once:
 
@@ -80,7 +93,8 @@ Process multiple puzzle images at once:
    - **OCR**: detect level name from the image
    - **Grid**: auto-detect grid dimensions
    - **Terminals**: auto-detect colored dot positions and preserve their sampled screenshot colors in the builder, solver, archive, and saved puzzle
-4. **Run pipeline** — processes all images in batch
+4. **Start background batch** — persists sources and work under
+   `data/image_jobs/`; the browser may disconnect and resume status later
 5. **Review and save** — edit names, check for duplicates, and save to library
 
 Advanced settings let you tune thresholds for grid line detection, terminal color detection, perspective correction, and more.
@@ -98,15 +112,13 @@ Browse all saved puzzles (both user-created and built-in examples):
 After loading a puzzle (from any tab), you enter the Solve View:
 
 1. **Edit the puzzle text** directly if needed
-2. **Choose a solver**:
-   - `Z3 (exact)` — explicit edge-path model compiled to native SAT when PySAT is available, with a pure-Z3 fallback
-   - `DFS` — depth-first search (experimental)
-3. **Set timeout** (default 30 seconds)
-4. Click **Solve** to find a solution
-5. View the **graph preview** with solution overlay (toggle on/off)
-6. **Save to library** with optional metadata (title, author, difficulty, tags)
+2. **Set the exact-solver timeout** (default 30 seconds)
+3. Click **Solve** to find a solution
+4. Switch between the game-style board and lightweight graph preview
+5. **Save to library** with optional metadata (title, author, difficulty, tags)
 
-Toggle **Plotly view** for interactive 2D/3D graph visualization.
+The exact edge-path model compiles to native SAT when PySAT is available and
+uses pure Z3 as its fallback.
 
 ---
 
@@ -348,12 +360,17 @@ Release-quality sample puzzles live under `puzzles/`, organized by geometry and 
 | `POST /image/terminals/detect` | Detect terminal positions |
 | `POST /image/generate` | Generate puzzle from image |
 | `POST /image/ocr` | Extract text from image |
+| `POST /image/jobs` | Submit a durable background image batch |
+| `GET /image/jobs` | List durable jobs |
+| `GET /image/jobs/{id}` | Read job progress and per-image results |
+| `GET /image/jobs/{id}/items/{index}/image` | Recover a retained job source after reconnecting |
+| `POST /image/jobs/{id}/retry` | Retry failed work in a retained job |
 
 ### Screenshot Archive
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /image-imports?limit=1000` | List retained screenshot samples and latest outcomes |
+| `GET /image-imports?limit=100&offset=0` | Paginated samples; supports status/search/order filters |
 | `GET /image-imports/{id}` | Read a sample, its latest result, and prior run summaries |
 | `GET /image-imports/{id}/image` | Read the retained source screenshot |
 | `POST /image-imports/{id}/failure` | Record an in-place reprocessing failure |
@@ -435,13 +452,14 @@ Highlights, each diagrammed in the architecture doc:
   channels, and typed port adjacencies (`local`/`seam`/`warp`, `open`/`blocked`);
   square, hex, circle, bridges, walls, warps, and shaped boards are all
   instances of it.
-- **Exact solving with lazy connectivity** — a Boolean edge model solved by a
-  native SAT engine (Z3 fallback), with stray cycles removed by incremental
-  cut-set constraints, and every solution re-verified by an independent
-  validator before it is returned.
+- **Exact solving with topology preprocessing** — a Boolean edge model solved
+  by a native SAT engine (Z3 fallback), with cached bridge/articulation pruning
+  and lazy connectivity cuts as a backstop; every solution is re-verified by
+  an independent validator before it is returned.
 - **Evidence-driven screenshot import** — auto-crop, classification, grid or
   region detection, terminal clustering, and bridge/wall/warp detectors; every
   upload is archived and can be bulk-reprocessed as the pipeline improves.
 - **Regression safety** — `scripts/validate_puzzles.py` re-solves the whole
   library (and optionally the archive) against a golden baseline, and
-  `scripts/benchmark_solver.py` tracks solve-time drift.
+  `scripts/benchmark_solver.py` fails CI on material solve-time or model-size
+  drift.

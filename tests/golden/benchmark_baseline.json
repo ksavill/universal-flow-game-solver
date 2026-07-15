@@ -1,0 +1,32 @@
+{
+  "benchmark": "flow-solver-z3-edge",
+  "recorded_on": "2026-07-14",
+  "python": "3.13.3",
+  "records": [
+    {
+      "puzzle": "puzzles/square/5x5/classic_level_1.flow",
+      "status": "solved",
+      "wall": {"median_ms": 7.53},
+      "solver_stats": {"node_color_vars": 57, "edge_color_vars": 66}
+    },
+    {
+      "puzzle": "puzzles/square/8x8/classic_level_104.flow",
+      "status": "solved",
+      "wall": {"median_ms": 54.72},
+      "solver_stats": {"node_color_vars": 320, "edge_color_vars": 493}
+    },
+    {
+      "puzzle": "puzzles/square/10x10/classic_level_142.flow",
+      "status": "solved",
+      "wall": {"median_ms": 129.76},
+      "solver_stats": {"node_color_vars": 756, "edge_color_vars": 1157}
+    },
+    {
+      "puzzle": "puzzles/square/15x15/classic_level_150.flow",
+      "status": "solved",
+      "wall": {"median_ms": 866.22},
+      "solver_stats": {"node_color_vars": 3023, "edge_color_vars": 5021}
+    }
+  ],
+  "schema_version": 1
+}

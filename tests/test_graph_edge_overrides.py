@@ -186,6 +186,18 @@ class GraphEdgeOverrideTests(unittest.TestCase):
         self.assertIn((("0,1", "2,1"), "warp", "open"), typed)
         self.assertIn((("0,0", "1,0"), "custom", "blocked"), typed)
         self.assertIn((("1,0", "1,1"), "local", "blocked"), typed)
+        import_extension = payload["extensions"]["flow-solver/import"]
+        self.assertEqual(import_extension["classifier"]["source"], "manual")
+        self.assertEqual(import_extension["classifier"]["confidence"], 1.0)
+        self.assertEqual(
+            import_extension["manual_edge_corrections"],
+            {
+                "add": [["0,0", "1,1"]],
+                "remove": [["0,0", "1,0"]],
+                "walls": [["1,0", "1,1"]],
+                "warps": [["0,1", "2,1"]],
+            },
+        )
         self.assertEqual(
             set(Puzzle.from_json(response.json()["text"]).graph.edges()),
             {

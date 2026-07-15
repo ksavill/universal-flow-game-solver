@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -12,7 +12,6 @@ import {
   CircularProgress,
   FormControlLabel,
   LinearProgress,
-  MenuItem,
   Stack,
   Switch,
   TextField,
@@ -40,10 +39,6 @@ type SolveViewProps = {
 
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 1_000_000;
-const GraphPlotly = lazy(async () => ({
-  default: (await import("../components/GraphPlotly")).GraphPlotly
-}));
-
 function formatDuration(ms: number | null): string | null {
   if (ms === null || !Number.isFinite(ms)) {
     return null;
@@ -64,7 +59,6 @@ export function SolveView({
   backLabel = "Back"
 }: SolveViewProps) {
   const [fillAll, setFillAll] = useState(true);
-  const [solver, setSolver] = useState<"z3" | "dfs">("z3");
   const [checkUnique, setCheckUnique] = useState(false);
   const [timeoutMs, setTimeoutMs] = useState(30000);
   const [parseResult, setParseResult] = useState<ParseResponse | null>(null);
@@ -82,8 +76,7 @@ export function SolveView({
   const [metaDifficulty, setMetaDifficulty] = useState("");
   const [metaTags, setMetaTags] = useState("");
   const [metaNotes, setMetaNotes] = useState("");
-  const [viewMode, setViewMode] = useState<"game" | "graph" | "plotly">("game");
-  const [use3d, setUse3d] = useState(false);
+  const [viewMode, setViewMode] = useState<"game" | "graph">("game");
   const [showSolutionOverlay, setShowSolutionOverlay] = useState(false);
   const graphAbortRef = useRef<AbortController | null>(null);
   const handledSolveTokenRef = useRef(0);
@@ -159,7 +152,7 @@ export function SolveView({
         name: puzzleName,
         text: puzzleText,
         fill: fillAll,
-        solver,
+        solver: "z3",
         timeout_ms: timeoutMs,
         check_unique: checkUnique
       });
@@ -299,15 +292,8 @@ export function SolveView({
               >
                 <ToggleButton value="game">Board</ToggleButton>
                 <ToggleButton value="graph">Graph</ToggleButton>
-                <ToggleButton value="plotly">Interactive</ToggleButton>
               </ToggleButtonGroup>
               <Box display="flex" gap={1} alignItems="center">
-                {viewMode === "plotly" && (
-                  <FormControlLabel
-                    control={<Switch size="small" checked={use3d} onChange={(event) => setUse3d(event.target.checked)} />}
-                    label="3D"
-                  />
-                )}
                 {solveResult && (
                   <FormControlLabel
                     control={
@@ -335,23 +321,6 @@ export function SolveView({
                   showSolution={showSolutionOverlay}
                   height={boardHeight}
                 />
-              ) : viewMode === "plotly" ? (
-                <Suspense
-                  fallback={
-                    <Box sx={{ py: 6, display: "flex", justifyContent: "center" }}>
-                      <CircularProgress size={24} />
-                    </Box>
-                  }
-                >
-                  <GraphPlotly
-                    graph={graphResult}
-                    use3d={use3d}
-                    nodeColor={solveResult?.node_color}
-                    pathEdges={solveResult?.path_edges}
-                    paths={solveResult?.paths}
-                    showSolution={showSolutionOverlay}
-                  />
-                </Suspense>
               ) : (
                 <GraphPreview
                   graph={graphResult}
@@ -429,17 +398,6 @@ export function SolveView({
         <AccordionDetails>
           <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
             <TextField
-              label="Solver"
-              select
-              value={solver}
-              onChange={(event) => setSolver(event.target.value as "z3" | "dfs")}
-              size="small"
-              sx={{ minWidth: 160 }}
-            >
-              <MenuItem value="z3">Z3 (SMT)</MenuItem>
-              <MenuItem value="dfs">DFS (experimental)</MenuItem>
-            </TextField>
-            <TextField
               label="Timeout (ms)"
               type="number"
               value={timeoutMs}
@@ -453,7 +411,6 @@ export function SolveView({
                 <Switch
                   checked={checkUnique}
                   onChange={(event) => setCheckUnique(event.target.checked)}
-                  disabled={solver !== "z3"}
                 />
               }
               label="Check uniqueness"

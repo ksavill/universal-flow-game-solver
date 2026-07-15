@@ -9,7 +9,7 @@ a nonzero exit instead of silently corrupting future solves.
 
 Typical usage from the repository root::
 
-    python scripts/validate_puzzles.py --write-baseline   # first run / accept changes
+    python scripts/validate_puzzles.py --write-baseline --accept-baseline-update
     python scripts/validate_puzzles.py                    # CI / pre-release check
     python scripts/validate_puzzles.py --include-imports  # also archived screenshots
 
@@ -143,12 +143,26 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--write-baseline", action="store_true",
                         help="Record current outcomes as the new golden baseline")
+    parser.add_argument(
+        "--accept-baseline-update",
+        action="store_true",
+        help="Explicitly acknowledge that a golden baseline change was reviewed",
+    )
     parser.add_argument("--include-imports", action="store_true",
                         help="Also validate generated puzzles from archived screenshot imports")
     parser.add_argument("--timeout-ms", type=int, default=60_000)
     parser.add_argument("--jobs", type=int, default=4,
                         help="Parallel solves (z3 releases the GIL, so threads scale)")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress expected unsolvable-entry details while retaining failures and summaries",
+    )
     args = parser.parse_args()
+    if args.write_baseline and not args.accept_baseline_update:
+        parser.error("--write-baseline requires --accept-baseline-update after review")
+    if args.accept_baseline_update and not args.write_baseline:
+        parser.error("--accept-baseline-update requires --write-baseline")
 
     jobs: List[Dict[str, Any]] = []
     for key, path in discover_library_puzzles().items():
@@ -181,7 +195,8 @@ def main() -> int:
           f"({args.jobs} workers): {ok} solved+verified, "
           f"{len(unsolvable)} unsolvable, {len(unparsed)} parse failures, "
           f"{len(invalid)} INVALID solutions.")
-    for outcome in (*unparsed, *unsolvable, *invalid):
+    reported_outcomes = (*unparsed, *invalid) if args.quiet else (*unparsed, *unsolvable, *invalid)
+    for outcome in reported_outcomes:
         print(f"  - {outcome.key}: {outcome.error}")
 
     if args.write_baseline:

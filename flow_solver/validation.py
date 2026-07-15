@@ -170,6 +170,67 @@ def validate_puzzle(puzzle: Puzzle) -> ValidationReport:
                 continue
             node_tiles[node].append(tile_id)
 
+    coverage_bounds_valid = True
+    for tile_id, bounds in puzzle.coverage_bounds.items():
+        if tile_id not in puzzle.tiles:
+            report.add(
+                "unknown_coverage_cell",
+                f"Coverage bounds reference unknown cell/tile {tile_id!r}.",
+            )
+            continue
+        if (
+            not isinstance(bounds, (tuple, list))
+            or len(bounds) != 2
+            or any(not isinstance(value, int) or isinstance(value, bool) for value in bounds)
+        ):
+            coverage_bounds_valid = False
+            report.add(
+                "invalid_coverage_bounds",
+                f"Coverage bounds for cell/tile {tile_id!r} must be two integers.",
+            )
+            continue
+        minimum, maximum = bounds
+        if minimum < 0 or maximum < minimum or maximum > len(puzzle.tiles[tile_id]):
+            coverage_bounds_valid = False
+            report.add(
+                "invalid_coverage_bounds",
+                f"Coverage bounds for cell/tile {tile_id!r} must satisfy "
+                f"0 <= minimum <= maximum <= {len(puzzle.tiles[tile_id])}.",
+            )
+
+    if puzzle.multi_channel_cell_color_policy not in {"distinct", "allow"}:
+        report.add(
+            "invalid_multi_channel_policy",
+            "Multi-channel cell color policy must be 'distinct' or 'allow'.",
+        )
+    path_bounds = puzzle.path_length_bounds
+    if (
+        not isinstance(path_bounds, (tuple, list))
+        or len(path_bounds) != 2
+        or any(
+            value is not None
+            and (not isinstance(value, int) or isinstance(value, bool) or value < 2)
+            for value in path_bounds
+        )
+        or (
+            isinstance(path_bounds, (tuple, list))
+            and len(path_bounds) == 2
+            and path_bounds[0] is not None
+            and path_bounds[1] is not None
+            and path_bounds[1] < path_bounds[0]
+        )
+    ):
+        report.add(
+            "invalid_path_length_bounds",
+            "Path-length bounds must be optional integers >= 2 with maximum >= minimum.",
+        )
+
+    # Later necessary-condition checks index coverage tuples; malformed direct
+    # runtime Puzzle construction should produce a stable validation error, not
+    # an IndexError inside those checks.
+    if not coverage_bounds_valid:
+        return report
+
     for node, tile_ids in node_tiles.items():
         if not tile_ids:
             report.add(
@@ -279,7 +340,12 @@ def validate_puzzle(puzzle: Puzzle) -> ValidationReport:
                 colors=[color],
             )
 
-    if puzzle.fill:
+    required_coverage = {
+        tile_id: puzzle.cell_coverage_bounds(tile_id)[0]
+        for tile_id in puzzle.tiles
+        if puzzle.cell_coverage_bounds(tile_id)[0] > 0
+    }
+    if required_coverage:
         for index, component in enumerate(components):
             component_terminals = [node for node in component if node in terminal_owner]
             if component_terminals:
@@ -290,7 +356,7 @@ def validate_puzzle(puzzle: Puzzle) -> ValidationReport:
             for node in component:
                 for tile_id in node_tiles.get(node, []):
                     tile_nodes = set(puzzle.tiles[tile_id])
-                    if tile_nodes and tile_nodes <= component:
+                    if required_coverage.get(tile_id, 0) > 0 and tile_nodes and tile_nodes <= component:
                         requires_component = True
                         break
                 if requires_component:
@@ -304,7 +370,11 @@ def validate_puzzle(puzzle: Puzzle) -> ValidationReport:
 
         # Single-channel cells are necessarily used on a fill-all board.
         for tile_id, tile_nodes in puzzle.tiles.items():
-            if len(tile_nodes) != 1 or tile_nodes[0] not in graph_nodes:
+            if (
+                len(tile_nodes) != 1
+                or tile_nodes[0] not in graph_nodes
+                or required_coverage.get(tile_id, 0) < 1
+            ):
                 continue
             node = tile_nodes[0]
             required_degree = 1 if node in terminal_owner else 2
@@ -319,7 +389,10 @@ def validate_puzzle(puzzle: Puzzle) -> ValidationReport:
 
         # On a bipartite topology where every cell has exactly one channel,
         # full coverage fixes the black/white endpoint balance.
-        all_channels_required = all(len(nodes) == 1 for nodes in puzzle.tiles.values())
+        all_channels_required = all(
+            len(nodes) == 1 and puzzle.cell_coverage_bounds(tile_id) == (1, 1)
+            for tile_id, nodes in puzzle.tiles.items()
+        )
         all_channels_grouped = all(len(tile_ids) == 1 for tile_ids in node_tiles.values())
         if all_channels_required and all_channels_grouped:
             for index, component in enumerate(components):

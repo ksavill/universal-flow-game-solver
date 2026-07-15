@@ -13,6 +13,10 @@ frontend/.env*
 .streamlit/
 node_modules/
 data/image_imports/
+data/image_jobs/
+data/.image_pipeline.locks/
+data/.image_imports.locks/
+backups/
 
 
 

@@ -14,6 +14,7 @@ from .schema_v2 import (
     CatalogLevelSpec,
     CatalogPackSpec,
     CatalogSpec,
+    CellCoverageOverride,
     CellDisplaySpec,
     CellSpec,
     ChannelDisplaySpec,
@@ -22,6 +23,7 @@ from .schema_v2 import (
     DisplaySizeSpec,
     DisplaySpec,
     PortSpec,
+    PathRulesSpec,
     PuzzleSpec,
     RulesSpec,
     TemplateSpec,
@@ -324,7 +326,22 @@ def puzzle_to_spec(
         ),
         terminals=terminals,
         rules=RulesSpec(
-            coverage=CoverageSpec(mode="all-cells" if puzzle.fill else "optional")
+            coverage=CoverageSpec(
+                mode="all-cells" if puzzle.fill else "optional",
+                overrides={
+                    tile_id: CellCoverageOverride(
+                        min_used_channels=minimum,
+                        max_used_channels=maximum,
+                    )
+                    for tile_id in sorted(puzzle.coverage_bounds)
+                    for minimum, maximum in [puzzle.cell_coverage_bounds(tile_id)]
+                },
+            ),
+            paths=PathRulesSpec(
+                minimum_nodes=puzzle.path_length_bounds[0],
+                maximum_nodes=puzzle.path_length_bounds[1],
+            ),
+            multi_channel_cell_color_policy=puzzle.multi_channel_cell_color_policy,
         ),
         display=DisplaySpec(cells=cell_display, channels=channel_display),
         catalog=catalog,

@@ -10,8 +10,10 @@ from flow_solver.topologies import (
     build_figure8_topology,
     build_grid_topology,
     build_hex_topology,
+    build_linked_loops_2x2_topology,
     build_radial_star_topology,
     build_ring_topology,
+    build_selective_warp_grid_topology,
     build_topology,
     topology_names,
 )
@@ -56,11 +58,22 @@ def _articulation_points(spec) -> set[str]:
 
 
 def test_registry_exposes_stable_templates_and_aliases() -> None:
-    assert topology_names() == ("cube", "figure8", "grid", "hex_grid", "radial_star", "ring")
+    assert topology_names() == (
+        "cube",
+        "figure8",
+        "grid",
+        "hex_grid",
+        "linked_loops_2x2",
+        "radial_star",
+        "ring",
+        "selective_warp_grid",
+    )
     assert build_topology("square", width=2, height=2).template == "grid"
     assert build_topology("hex", width=2, height=2).template == "hex_grid"
     assert build_topology("circle", rings=2, sectors=8).template == "ring"
     assert build_topology("star", size=2, faces=5).template == "radial_star"
+    assert build_topology("img_3246").template == "linked_loops_2x2"
+    assert build_topology("img_4064").template == "selective_warp_grid"
 
 
 def test_square_grid_3x3_exact_graph() -> None:
@@ -130,6 +143,22 @@ def test_reference_figure8_track_exact_region_dual() -> None:
     assert _degree_histogram(spec) == {2: 9, 3: 20, 4: 2}
     assert spec.max_degree == 4
     assert _articulation_points(spec) == {"fig8:n09"}
+
+
+def test_second_linked_loop_reference_exact_region_dual() -> None:
+    spec = build_linked_loops_2x2_topology()
+    assert (spec.node_count, spec.edge_count) == (35, 54)
+    assert _degree_histogram(spec) == {2: 6, 3: 20, 4: 9}
+    assert spec.parameters["source_fixture"] == "IMG_3246.PNG"
+
+
+def test_selective_warp_reference_exact_ports() -> None:
+    spec = build_selective_warp_grid_topology()
+    assert (spec.node_count, spec.edge_count) == (81, 156)
+    assert _degree_histogram(spec) == {2: 4, 3: 4, 4: 73}
+    assert len(spec.parameters["warp_edges"]) == 12
+    assert ("0,1", "8,1") in spec.edges
+    assert ("1,0", "1,8") in spec.edges
 
 
 def test_specs_compile_to_existing_graph_and_json_without_topology_loss() -> None:

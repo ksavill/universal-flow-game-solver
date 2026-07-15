@@ -299,14 +299,49 @@ class SchemaV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(SchemaV2Error, "parallel enabled adjacencies"):
             PuzzleSpec.from_dict(parallel)
 
-    def test_current_compiler_rejects_unrepresentable_rules(self) -> None:
+    def test_compiler_applies_per_cell_coverage_overrides(self) -> None:
         raw = _base_document()
         raw["rules"]["coverage"]["overrides"] = {  # type: ignore[index]
-            "a": {"min_used_channels": 0}
+            "b": {"min_used_channels": 0, "max_used_channels": 0}
         }
         spec = PuzzleSpec.from_dict(raw)
-        with self.assertRaisesRegex(SchemaV2Error, "not supported by the current runtime compiler"):
-            spec.compile()
+        puzzle = spec.compile()
+        self.assertEqual(puzzle.cell_coverage_bounds("a"), (1, 1))
+        self.assertEqual(puzzle.cell_coverage_bounds("b"), (0, 0))
+        result = solve_with_z3(puzzle, timeout_ms=2_000)
+        self.assertNotIn("b:main", result.paths["A"])
+
+    def test_compiler_supports_multi_channel_coverage_policy(self) -> None:
+        raw = _bridge_document()
+        raw["rules"] = {
+            "coverage": {
+                "mode": "all-cells",
+                "overrides": {"bridge": {"min_used_channels": 2, "max_used_channels": 2}},
+            },
+            "multi_channel_cell_color_policy": "allow",
+        }
+        puzzle = Puzzle.from_json(json.dumps(raw))
+        self.assertEqual(puzzle.cell_coverage_bounds("bridge"), (2, 2))
+        self.assertEqual(puzzle.multi_channel_cell_color_policy, "allow")
+        result = solve_with_z3(puzzle, timeout_ms=2_000)
+        self.assertEqual({result.node_color["bridge:h"], result.node_color["bridge:v"]}, {"A", "B"})
+
+    def test_declared_path_length_rules_are_solved_and_independently_validated(self) -> None:
+        raw = _base_document()
+        raw["rules"]["coverage"]["overrides"] = {  # type: ignore[index]
+            "b": {"min_used_channels": 0, "max_used_channels": 0}
+        }
+        raw["rules"]["paths"]["minimum_nodes"] = 2  # type: ignore[index]
+        raw["rules"]["paths"]["maximum_nodes"] = 2  # type: ignore[index]
+        puzzle = Puzzle.from_json(json.dumps(raw))
+        result = solve_with_z3(puzzle, timeout_ms=2_000)
+        self.assertEqual(len(result.paths["A"]), 2)
+
+        raw["rules"]["paths"]["minimum_nodes"] = 3  # type: ignore[index]
+        raw["rules"]["paths"].pop("maximum_nodes")  # type: ignore[index]
+        impossible = Puzzle.from_json(json.dumps(raw))
+        with self.assertRaisesRegex(ValueError, "UNSAT"):
+            solve_with_z3(impossible, timeout_ms=2_000)
 
 
 if __name__ == "__main__":

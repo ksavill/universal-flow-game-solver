@@ -39,8 +39,10 @@ import ReactCrop, { Crop, PixelCrop } from "react-image-crop";
 import "react-image-crop/dist/ReactCrop.css";
 import {
   archiveImageImportFailure,
+  createImageJob,
   cropTemplatePreviewUrl,
   deleteCropTemplate,
+  fetchImageJobItemFile,
   fetchImageImportFile,
   imageAutoCrop,
   imageClassify,
@@ -49,6 +51,9 @@ import {
   imageGenerate,
   imageOcr,
   ImageImportEntry,
+  ImageJob,
+  getImageJob,
+  getImageImport,
   LevelType,
   listCropTemplates,
   listPuzzles,
@@ -121,6 +126,7 @@ type BatchSource = {
 };
 
 const DEFAULT_CROP: Crop = { unit: "%", x: 0, y: 0, width: 100, height: 100 };
+const SERVER_IMAGE_JOB_KEY = "flow-solver.image-job.v1";
 
 type PipelineState = "idle" | "pending" | "ok" | "fail" | "skipped";
 
@@ -352,6 +358,8 @@ export function ImageView({
 
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [serverJob, setServerJob] = useState<ImageJob | null>(null);
+  const [serverJobSubmitting, setServerJobSubmitting] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState<{ current: number; total: number } | null>(null);
   const [reprocessError, setReprocessError] = useState<string | null>(null);
   const [libraryIndex, setLibraryIndex] = useState<{
@@ -364,11 +372,12 @@ export function ImageView({
   const autoRanForSrcRef = useRef<string | null>(null);
   const batchUrlsRef = useRef<string[]>([]);
   const handledReprocessTokenRef = useRef(0);
+  const hydratedServerJobRef = useRef<string | null>(null);
 
   // Batch mode is only offered in the standalone importer; the builder's
   // embedded importer applies one screenshot to the board at a time.
   const allowBatch = !onApplyGrid;
-  const batchMode = batchItems.length > 0;
+  const batchMode = batchItems.length > 0 || serverJob !== null;
 
   // Warn about duplicates before saving batch results into the library.
   useEffect(() => {
@@ -434,6 +443,111 @@ export function ImageView({
       batchUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      const jobId = window.localStorage.getItem(SERVER_IMAGE_JOB_KEY);
+      if (jobId) {
+        void getImageJob(jobId).then(setServerJob).catch(() => {
+          try {
+            window.localStorage.removeItem(SERVER_IMAGE_JOB_KEY);
+          } catch {
+            // Ignore unavailable storage while discarding a stale job id.
+          }
+        });
+      }
+    } catch {
+      // localStorage may be unavailable in restricted browser contexts.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!serverJob || !["queued", "running"].includes(serverJob.status)) return;
+    const timer = window.setTimeout(() => {
+      void getImageJob(serverJob.id).then(setServerJob).catch(() => undefined);
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [serverJob]);
+
+  useEffect(() => {
+    if (!serverJob || serverJob.status !== "completed") return;
+    if (hydratedServerJobRef.current === serverJob.id) return;
+    hydratedServerJobRef.current = serverJob.id;
+    const hydrate = async () => {
+      const records = await Promise.all(
+        serverJob.items.map(async (item) => {
+          if (!item.import_id) return { item, record: null };
+          try {
+            return { item, record: await getImageImport(item.import_id) };
+          } catch {
+            return { item, record: null };
+          }
+        })
+      );
+      const recoveredItems: BatchItem[] = [];
+      if (batchItems.length === 0) {
+        for (const { item, record } of records) {
+          try {
+            const recoveredFile = await fetchImageJobItemFile(
+              serverJob.id,
+              item.index,
+              item.original_name
+            );
+            const previewUrl = URL.createObjectURL(recoveredFile);
+            batchUrlsRef.current.push(previewUrl);
+            const result = record?.result;
+            const solved = record?.solve?.result;
+            recoveredItems.push({
+              id: `server-${serverJob.id}-${item.index}`,
+              file: recoveredFile,
+              previewUrl,
+              status: solved ? "solved" : result ? "detected" : "error",
+              name: result?.name ?? item.generated_name ?? item.original_name,
+              text: result?.text,
+              solve: solved,
+              solveMs: typeof solved?.stats?.total_ms === "number" ? solved.stats.total_ms : null,
+              archiveImportId: item.import_id,
+              error: item.error ?? item.solve_error,
+              saveState: "idle"
+            });
+          } catch {
+            // The job remains visible in Library even if a retained source cannot be restored locally.
+          }
+        }
+      }
+      const byName = new Map<string, typeof records>();
+      records.forEach((value) => {
+        const values = byName.get(value.item.original_name) ?? [];
+        values.push(value);
+        byName.set(value.item.original_name, values);
+      });
+      setBatchItems((current) =>
+        current.length === 0 && recoveredItems.length > 0
+          ? recoveredItems
+          : current.map((batchItem) => {
+          if (batchItem.status !== "processing") return batchItem;
+          const values = byName.get(batchItem.file.name);
+          const value = values?.shift();
+          if (!value) return batchItem;
+          const result = value.record?.result;
+          const solved = value.record?.solve?.result;
+          return {
+            ...batchItem,
+            status: solved ? "solved" : result ? "detected" : "error",
+            name: result?.name ?? value.item.generated_name ?? batchItem.name,
+            text: result?.text,
+            solve: solved,
+            solveMs: typeof solved?.stats?.total_ms === "number" ? solved.stats.total_ms : null,
+            archiveImportId: value.item.import_id,
+            error: value.item.error ?? value.item.solve_error
+          };
+        })
+      );
+    };
+    void hydrate().catch(() => {
+      hydratedServerJobRef.current = null;
+    });
+  }, [batchItems.length, serverJob]);
 
   const selectImageFile = useCallback((next: File | null) => {
     if (!next) {
@@ -1705,6 +1819,48 @@ export function ImageView({
     }
   }
 
+  async function submitServerBatch() {
+    const targets = batchItems.filter((item) => item.status === "queued" || item.status === "error");
+    if (!targets.length || serverJobSubmitting) return;
+    setServerJobSubmitting(true);
+    try {
+      const options: Record<string, unknown> = {
+        target_type: targetType,
+        graph_layout: graphLayout,
+        graph_nodes: graphNodes,
+        output_schema_version: 2,
+        auto_terminals: true,
+        auto_classify: targetType === "auto",
+        threshold,
+        line_threshold: lineThreshold,
+        invert,
+        perspective,
+        sat_threshold: satThreshold,
+        brightness_min: brightnessMin,
+        brightness_max: brightnessMax,
+        margin_ratio: marginRatio,
+        cluster_threshold: clusterThreshold,
+        bg_threshold: bgThreshold
+      };
+      if (targetType !== "auto" && targetType !== "graph") {
+        options.grid_width = gridWidth;
+        options.grid_height = gridHeight;
+      }
+      const job = await createImageJob(targets.map((item) => item.file), options);
+      setServerJob(job);
+      try {
+        window.localStorage.setItem(SERVER_IMAGE_JOB_KEY, job.id);
+      } catch {
+        // The job still runs even if this browser cannot persist its id.
+      }
+      targets.forEach((item) => updateBatchItem(item.id, { status: "processing" }));
+    } catch (err) {
+      setReprocessError(err instanceof Error ? err.message : "Could not submit the server batch job.");
+    } finally {
+      setServerJobSubmitting(false);
+    }
+  }
+
   const addBatchSources = (sources: BatchSource[]) => {
     // Batch replaces the single-image workflow; clear that state.
     selectImageFile(null);
@@ -1735,6 +1891,13 @@ export function ImageView({
     batchUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     batchUrlsRef.current = [];
     setBatchItems([]);
+    setServerJob(null);
+    hydratedServerJobRef.current = null;
+    try {
+      window.localStorage.removeItem(SERVER_IMAGE_JOB_KEY);
+    } catch {
+      // Clearing the visible batch still succeeds when storage is unavailable.
+    }
   };
 
   // Route incoming files: several at once (or adding while a batch exists)
@@ -2597,7 +2760,25 @@ export function ImageView({
                 >
                   {batchBusy ? "Processing…" : "Process pending"}
                 </Button>
+                <Button
+                  variant="outlined"
+                  onClick={() => void submitServerBatch()}
+                  disabled={
+                    serverJobSubmitting ||
+                    batchBusy ||
+                    !batchItems.some((item) => item.status === "queued" || item.status === "error")
+                  }
+                  sx={{ whiteSpace: "nowrap", minWidth: 190 }}
+                >
+                  {serverJobSubmitting ? "Submitting…" : "Run in background"}
+                </Button>
               </Stack>
+              {serverJob && (
+                <Alert severity={serverJob.status === "completed" ? "success" : "info"}>
+                  Server job {serverJob.id.slice(0, 8)}: {serverJob.status} ({serverJob.completed}/
+                  {serverJob.total}). You can close this tab; completed imports remain available in Library.
+                </Alert>
+              )}
               {batchBusy && <LinearProgress />}
               <Stack spacing={1.5}>
                 {batchItems.map((item) => {

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Set, Tuple
 
 from ..graph import NodeId
+from ..preprocessing import analyze_topology, topology_cache_info
 from ..puzzle import Color, Puzzle
 from ..validation import validate_puzzle
 from .types import PathEdge, SolveResult
@@ -101,14 +102,14 @@ def _prepare_puzzle(
     nodes = tuple(sorted(puzzle.graph.nodes))
     colors = tuple(puzzle.all_colors())
     edges = tuple(sorted(puzzle.graph.edges()))
-
-    incident_lists: Dict[NodeId, List[int]] = {node: [] for node in nodes}
-    for edge_index, (u, v) in enumerate(edges):
-        incident_lists[u].append(edge_index)
-        incident_lists[v].append(edge_index)
-        if edge_index % 256 == 0:
-            deadline.check("topology indexing")
-    incident = {node: tuple(indices) for node, indices in incident_lists.items()}
+    cache_hits_before = topology_cache_info().hits
+    topology = analyze_topology(puzzle)
+    incident = topology.incident
+    stats["topology_schema_hash"] = topology.schema_hash
+    stats["topology_cache_hit"] = topology_cache_info().hits > cache_hits_before
+    stats["articulation_points"] = len(topology.articulation_components)
+    stats["bridge_edges"] = len(topology.bridges)
+    deadline.check("topology analysis")
 
     terminals_by_node = puzzle.terminal_nodes()
     terminal_nodes = set(terminals_by_node)
@@ -142,6 +143,76 @@ def _prepare_puzzle(
                 allowed[node].add(color)
         if color_index % 8 == 0:
             deadline.check("color-domain preprocessing")
+
+    bridge_pruned = 0
+    separator_pruned = 0
+    required_separators: Dict[NodeId, Color] = {}
+
+    def remove_color(nodes_to_prune: Set[NodeId] | FrozenSet[NodeId], color: Color) -> int:
+        removed = 0
+        for node in nodes_to_prune:
+            if color in allowed[node]:
+                allowed[node].remove(color)
+                removed += 1
+        return removed
+
+    # A simple terminal path cannot enter and leave a component through the
+    # same one-edge/one-vertex separator.  Prune those impossible assignments,
+    # and enforce the unit capacity of articulation channels needed by paths.
+    for color in colors:
+        start, goal = puzzle.terminals[color]
+        for separator in topology.bridges:
+            if start in separator.left and goal in separator.left:
+                bridge_pruned += remove_color(separator.right, color)
+            elif start in separator.right and goal in separator.right:
+                bridge_pruned += remove_color(separator.left, color)
+
+        for articulation, components in topology.articulation_components.items():
+            start_component = next((part for part in components if start in part), None)
+            goal_component = next((part for part in components if goal in part), None)
+            keep: FrozenSet[NodeId] | None = None
+            if start == articulation and goal_component is not None:
+                keep = goal_component
+            elif goal == articulation and start_component is not None:
+                keep = start_component
+            elif start_component is not None and start_component is goal_component:
+                keep = start_component
+            elif start_component is not None and goal_component is not None:
+                previous = required_separators.get(articulation)
+                if previous is not None and previous != color:
+                    raise PuzzleUnsolvableError(
+                        f"Puzzle is UNSAT: articulation channel {articulation!r} is required "
+                        f"by both {previous!r} and {color!r}"
+                    )
+                required_separators[articulation] = color
+            if keep is not None:
+                for component in components:
+                    if component is not keep:
+                        separator_pruned += remove_color(component, color)
+
+    for articulation, required_color in required_separators.items():
+        if required_color not in allowed[articulation]:
+            raise PuzzleUnsolvableError(
+                f"Puzzle is UNSAT: required separator {articulation!r} cannot carry {required_color!r}"
+            )
+        for other_color in tuple(allowed[articulation]):
+            if other_color != required_color:
+                allowed[articulation].remove(other_color)
+                separator_pruned += 1
+
+    stats["bridge_pruned_assignments"] = bridge_pruned
+    stats["separator_pruned_assignments"] = separator_pruned
+    stats["required_separators"] = len(required_separators)
+
+    minimum_path_nodes, _maximum_path_nodes = puzzle.path_length_bounds
+    if minimum_path_nodes is not None:
+        for color in colors:
+            possible_nodes = sum(color in allowed[node] for node in nodes)
+            if possible_nodes < minimum_path_nodes:
+                raise PuzzleUnsolvableError(
+                    f"Puzzle is UNSAT: {color!r} can use at most {possible_nodes} channels, "
+                    f"below its declared minimum of {minimum_path_nodes}"
+                )
 
     # Peel color assignments that cannot supply the two distinct incident
     # edges required by a nonterminal path channel.  This is a fixed-point
@@ -177,12 +248,14 @@ def _prepare_puzzle(
                     "remaining color-compatible adjacency"
                 )
 
-    if puzzle.fill:
-        for tile_id, tile_nodes in puzzle.tiles.items():
-            if not any(allowed[node] for node in tile_nodes):
+    for tile_id, tile_nodes in puzzle.tiles.items():
+        minimum, _maximum = puzzle.cell_coverage_bounds(tile_id)
+        if minimum > 0:
+            possible_channels = sum(bool(allowed[node]) for node in tile_nodes)
+            if possible_channels < minimum:
                 raise PuzzleUnsolvableError(
-                    f"Puzzle is UNSAT: required cell/tile {tile_id!r} cannot be used "
-                    "by any terminal pair"
+                    f"Puzzle is UNSAT: required cell/tile {tile_id!r} needs at least "
+                    f"{minimum} used channel(s), but only {possible_channels} can be used"
                 )
 
     stats["preprocessing_ms"] = (time.perf_counter() - preprocessing_started) * 1000.0
@@ -295,27 +368,39 @@ class _EdgeZ3Session:
         for color in p.colors:
             start, goal = p.puzzle.terminals[color]
             self.solver.add(self.x[start, color], self.x[goal, color])
+            color_vars = [
+                self.x[node, color] for node in p.nodes if (node, color) in self.x
+            ]
+            minimum_nodes, maximum_nodes = p.puzzle.path_length_bounds
+            if minimum_nodes is not None:
+                self.solver.add(z3.PbGe([(variable, 1) for variable in color_vars], minimum_nodes))
+            if maximum_nodes is not None and maximum_nodes < len(color_vars):
+                self.solver.add(z3.PbLe([(variable, 1) for variable in color_vars], maximum_nodes))
 
         # Preserve the existing bridge/multi-channel tile contract:
         # different colors may occupy independent channels simultaneously, but
         # one path may not self-cross by using two channels in the same tile.
         # Full coverage means at least one channel per physical tile, not every
         # internal bridge channel.
-        for tile_index, tile_nodes in enumerate(p.puzzle.tiles.values()):
-            for color in p.colors:
-                tile_color_vars = [
-                    self.x[node, color] for node in tile_nodes if (node, color) in self.x
-                ]
-                if len(tile_color_vars) > 1:
-                    self.solver.add(z3.AtMost(*tile_color_vars, 1))
-            if p.puzzle.fill:
-                tile_vars = [
-                    self.x[node, color]
-                    for node in tile_nodes
-                    for color in p.colors
-                    if (node, color) in self.x
-                ]
-                self.solver.add(z3.Or(*tile_vars))
+        for tile_index, (tile_id, tile_nodes) in enumerate(p.puzzle.tiles.items()):
+            if p.puzzle.multi_channel_cell_color_policy == "distinct":
+                for color in p.colors:
+                    tile_color_vars = [
+                        self.x[node, color] for node in tile_nodes if (node, color) in self.x
+                    ]
+                    if len(tile_color_vars) > 1:
+                        self.solver.add(z3.AtMost(*tile_color_vars, 1))
+            tile_vars = [
+                self.x[node, color]
+                for node in tile_nodes
+                for color in p.colors
+                if (node, color) in self.x
+            ]
+            minimum, maximum = p.puzzle.cell_coverage_bounds(tile_id)
+            if minimum > 0:
+                self.solver.add(z3.PbGe([(variable, 1) for variable in tile_vars], minimum))
+            if maximum < len(tile_nodes):
+                self.solver.add(z3.PbLe([(variable, 1) for variable in tile_vars], maximum))
             if tile_index % 128 == 0:
                 self.deadline.check("physical tile constraints")
 

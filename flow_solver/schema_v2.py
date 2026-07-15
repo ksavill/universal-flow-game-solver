@@ -103,6 +103,8 @@ class PathRulesSpec:
     endpoint_degree: int = 1
     internal_degree: int = 2
     connected: bool = True
+    minimum_nodes: Optional[int] = None
+    maximum_nodes: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -511,11 +513,29 @@ def _parse_coverage(raw: Any, path: str) -> CoverageSpec:
 
 def _parse_path_rules(raw: Any, path: str) -> PathRulesSpec:
     obj = _expect_object(raw, path)
-    _check_keys(obj, path, optional=("endpoint_degree", "internal_degree", "connected"))
+    _check_keys(
+        obj,
+        path,
+        optional=("endpoint_degree", "internal_degree", "connected", "minimum_nodes", "maximum_nodes"),
+    )
+    minimum_nodes = (
+        _expect_int(obj["minimum_nodes"], f"{path}.minimum_nodes", minimum=2)
+        if "minimum_nodes" in obj
+        else None
+    )
+    maximum_nodes = (
+        _expect_int(obj["maximum_nodes"], f"{path}.maximum_nodes", minimum=2)
+        if "maximum_nodes" in obj
+        else None
+    )
+    if minimum_nodes is not None and maximum_nodes is not None and maximum_nodes < minimum_nodes:
+        raise _error(path, "maximum_nodes must be greater than or equal to minimum_nodes")
     return PathRulesSpec(
         endpoint_degree=_expect_int(obj.get("endpoint_degree", 1), f"{path}.endpoint_degree", minimum=0),
         internal_degree=_expect_int(obj.get("internal_degree", 2), f"{path}.internal_degree", minimum=0),
         connected=_expect_bool(obj.get("connected", True), f"{path}.connected"),
+        minimum_nodes=minimum_nodes,
+        maximum_nodes=maximum_nodes,
     )
 
 
@@ -1044,6 +1064,16 @@ def spec_to_dict(spec: PuzzleSpec) -> Dict[str, Any]:
                 "endpoint_degree": spec.rules.paths.endpoint_degree,
                 "internal_degree": spec.rules.paths.internal_degree,
                 "connected": spec.rules.paths.connected,
+                **(
+                    {"minimum_nodes": spec.rules.paths.minimum_nodes}
+                    if spec.rules.paths.minimum_nodes is not None
+                    else {}
+                ),
+                **(
+                    {"maximum_nodes": spec.rules.paths.maximum_nodes}
+                    if spec.rules.paths.maximum_nodes is not None
+                    else {}
+                ),
             },
             "multi_channel_cell_color_policy": spec.rules.multi_channel_cell_color_policy,
         },
@@ -1070,20 +1100,14 @@ def compile_puzzle_spec(spec: PuzzleSpec) -> "Puzzle":
     # the same strict validation as JSON-loaded documents.
     normalized = parse_v2_dict(spec_to_dict(spec))
     rules = normalized.rules
-    if rules.coverage.overrides:
-        raise _error(
-            "$.rules.coverage.overrides",
-            "per-cell coverage overrides are not supported by the current runtime compiler",
-        )
-    if rules.paths != PathRulesSpec():
+    if (
+        rules.paths.endpoint_degree != 1
+        or rules.paths.internal_degree != 2
+        or not rules.paths.connected
+    ):
         raise _error(
             "$.rules.paths",
             "the current runtime compiler requires endpoint_degree=1, internal_degree=2, connected=true",
-        )
-    if rules.multi_channel_cell_color_policy != "distinct":
-        raise _error(
-            "$.rules.multi_channel_cell_color_policy",
-            "the current runtime compiler supports only 'distinct'",
         )
 
     graph = Graph()
@@ -1114,6 +1138,14 @@ def compile_puzzle_spec(spec: PuzzleSpec) -> "Puzzle":
         cell_id: sorted(channel_ids)
         for cell_id, channel_ids in sorted(channels_by_cell.items())
     }
+    coverage_bounds: Dict[str, Tuple[int, int]] = {}
+    for cell_id, channel_ids in tiles.items():
+        override = rules.coverage.overrides.get(cell_id, CellCoverageOverride())
+        default_minimum = 1 if rules.coverage.mode == "all-cells" else 0
+        minimum = default_minimum if override.min_used_channels is None else override.min_used_channels
+        maximum = len(channel_ids) if override.max_used_channels is None else override.max_used_channels
+        if (minimum, maximum) != (default_minimum, len(channel_ids)):
+            coverage_bounds[cell_id] = (minimum, maximum)
     terminals = {
         color: terminal.endpoints
         for color, terminal in sorted(normalized.terminals.items())
@@ -1135,6 +1167,9 @@ def compile_puzzle_spec(spec: PuzzleSpec) -> "Puzzle":
         terminals=terminals,
         fill=rules.coverage.mode == "all-cells",
         meta=meta,
+        coverage_bounds=coverage_bounds,
+        multi_channel_cell_color_policy=rules.multi_channel_cell_color_policy,
+        path_length_bounds=(rules.paths.minimum_nodes, rules.paths.maximum_nodes),
         source_spec=normalized,
     )
 

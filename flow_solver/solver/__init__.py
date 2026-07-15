@@ -19,6 +19,12 @@ def solve_puzzle(puzzle: Puzzle, *, solver: SolverName = "z3", timeout_ms: int |
     if solver == "z3":
         return solve_with_z3(puzzle, timeout_ms=timeout_ms)
     if solver == "dfs":
+        if (
+            puzzle.coverage_bounds
+            or puzzle.multi_channel_cell_color_policy != "distinct"
+            or puzzle.path_length_bounds != (None, None)
+        ):
+            raise ValueError("Schema-v2 rule extensions require the exact Z3/PySAT solver")
         return solve_with_dfs(puzzle, timeout_ms=timeout_ms)
     raise ValueError(f"Unknown solver {solver!r}. Choose one of: {', '.join(SOLVER_CHOICES)}")
 

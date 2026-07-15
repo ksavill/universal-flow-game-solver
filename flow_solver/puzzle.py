@@ -51,10 +51,20 @@ class Puzzle:
     terminals: Dict[Color, Tuple[NodeId, NodeId]]
     fill: bool = True
     meta: Dict[str, Any] = field(default_factory=dict)
+    coverage_bounds: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+    multi_channel_cell_color_policy: str = "distinct"
+    path_length_bounds: Tuple[Optional[int], Optional[int]] = (None, None)
     source_spec: Optional["PuzzleSpec"] = field(default=None, repr=False, compare=False)
 
     def all_colors(self) -> List[Color]:
         return sorted(self.terminals.keys())
+
+    def cell_coverage_bounds(self, cell_id: str) -> Tuple[int, int]:
+        channels = self.tiles[cell_id]
+        return self.coverage_bounds.get(
+            cell_id,
+            (1 if self.fill else 0, len(channels)),
+        )
 
     def terminal_nodes(self) -> Dict[NodeId, Color]:
         out: Dict[NodeId, Color] = {}

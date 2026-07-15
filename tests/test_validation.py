@@ -85,6 +85,18 @@ A.
         self.assertTrue(report.valid, report.to_dict())
         self.assertIn("disconnected_graph", {issue.code for issue in report.warnings})
 
+    def test_direct_runtime_rule_bounds_receive_stable_validation_errors(self) -> None:
+        puzzle = Puzzle.from_flow_text("AA")
+        puzzle.coverage_bounds = {"0,0": (2, 1)}
+        puzzle.multi_channel_cell_color_policy = "unsupported"
+        puzzle.path_length_bounds = (1, 0)
+
+        codes = {issue.code for issue in validate_puzzle(puzzle).errors}
+
+        self.assertIn("invalid_coverage_bounds", codes)
+        self.assertIn("invalid_multi_channel_policy", codes)
+        self.assertIn("invalid_path_length_bounds", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

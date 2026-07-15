@@ -1,120 +1,134 @@
-# Production readiness — single-node roadmap
+# Production readiness — single-node deployment
 
-Status as of July 2026. The deployment target is one node (backend `python app.py`
-on :8000, frontend static build). This document tracks what is already in place
-and what remains, grouped by the four production axes.
+Status as of July 2026. The supported production target is one node running a
+multi-worker FastAPI backend and a same-origin static frontend. The roadmap
+items below are implemented; this document now records the operating contract
+and the checks required for a release.
 
-## 1. Parallel processing (single node)
+## 1. Parallel processing and durable work
 
-**In place**
+- Screenshot processing is bounded in both places that can create load. The
+  browser uses a three-item worker pool and the API admits at most
+  `FLOW_IMAGE_PIPELINE_CONCURRENCY` heavy image requests (default `3`). Regular
+  solve and archive requests remain responsive while a batch is active because
+  admitted OpenCV/PIL work runs off the FastAPI event loop.
+- `POST /image/jobs` persists a batch, its source images, options, per-file
+  progress, and results under `data/image_jobs/`. A client may disconnect and
+  later query `GET /image/jobs/{id}`. Queued or interrupted jobs are recovered
+  on process startup, and failed jobs can be retried.
+- Screenshot records still use atomic temporary-file replacement. Every
+  read-modify-write and delete path additionally takes a stable advisory file
+  lock under `.image_imports.locks`, so `uvicorn --workers N` processes cannot
+  overwrite each other's updates. The lock implementation uses
+  `msvcrt.locking` on Windows and `fcntl.flock` on POSIX.
+- Solver parallelism is real: Z3 runs outside the Python GIL and the preferred
+  python-sat engine runs in a worker process. Archive validation supports
+  `--jobs N` for bounded parallel re-solving.
 
-- The screenshot batch pipeline in the frontend runs items through a bounded
-  worker pool (`BATCH_CONCURRENCY = 3` in `ImageView`) instead of sequentially.
-  Each item is an independent chain of backend calls, so wall-clock drops
-  roughly by the pool size.
-- FastAPI runs sync endpoints (`/solve`, puzzle CRUD) on a threadpool, and both
-  solver backends escape the GIL: z3 via ctypes, and the preferred python-sat
-  engine in a separate worker process (`pysat_solver._sat_worker`). Concurrent
-  solves genuinely use multiple cores on one node.
-- Image-import records are one directory per import with atomic
-  tmp-file-then-rename writes. Read-modify-write paths (replace on reprocess,
-  solve attach, failure append) serialize on per-import `threading.Lock`s.
-- `scripts/validate_puzzles.py --jobs N` demonstrates the scaling: 652 puzzles
-  solve + verify in ~79 s at 8 workers.
-
-**Next**
-
-- The per-import locks are in-process only. Before running `uvicorn --workers N`
-  (multi-process), record updates need cross-process file locking (e.g.
-  `msvcrt.locking`/`fcntl` on `record.json`) or a move to SQLite.
-- Consider a small server-side job queue for batch imports so a phone can
-  submit a batch, disconnect, and collect results later; today the browser tab
-  orchestrates the batch and must stay open.
-- Cap concurrent heavy image-pipeline requests server-side (semaphore) so a
-  large batch cannot starve interactive solves.
+The API reports the configured image limit and available accelerators through
+`GET /capabilities`. Keep `API_WORKERS` and the image concurrency limit small
+on a memory-constrained host; extra workers do not bypass the file locks.
 
 ## 2. Algorithmic efficiency
 
-**In place**
+- The exact solver prefers a compact CNF encoding on python-sat and falls back
+  to Z3 when python-sat is unavailable (`FLOW_DISABLE_PYSAT=1` forces the
+  fallback). Every returned result is independently validated.
+- Deterministic topology preprocessing is cached by SHA-256 topology hash.
+  Repeated boards reuse incident maps, articulation components, and bridge
+  separators even when their terminal placements differ.
+- Bridge and articulation/separator-capacity reasoning prunes impossible color
+  assignments before model construction. Lazy connectivity cuts remain a
+  correctness backstop, but the representative corpus now needs zero such cuts.
+- The experimental DFS choice was removed from the UI. The supported UI path
+  is the exact solver; the DFS implementation remains available only for
+  development and rejects schema rule extensions it cannot enforce.
+- `scripts/benchmark_solver.py` compares status, median time, and model size to
+  `tests/golden/benchmark_baseline.json`. CI fails on a greater than 2× time or
+  model-size drift.
 
-- The "z3" solver transparently prefers an exact CNF encoding on python-sat's
-  native engines (dramatically faster on sparse boards), falling back to Z3
-  when python-sat is missing (`FLOW_DISABLE_PYSAT=1` forces the fallback).
-- Baseline (this machine, `scripts/benchmark_solver.py`): 5x5 ≈ 42 ms,
-  8x8 ≈ 16 ms, 10x10 ≈ 43 ms, 15x15/16-color ≈ 405 ms median. Interactive-grade
-  through 15x15.
-- Every solver result is independently re-verified
-  (`flow_solver.solver.validation.validate_solution`) before it is returned.
+Representative current medians on the development machine are approximately
+7.5 ms (5×5), 54.7 ms (8×8), 129.8 ms (10×10), and 866.2 ms (15×15). On the
+15×15 sample, SAT checking is now the dominant measured stage; preprocessing
+is about 23 ms and connectivity cuts are zero. Machine timings are indicative,
+so release decisions use the stored ratio thresholds rather than these numbers.
 
-**Next**
+## 3. Automated historical validation
 
-- Wire `scripts/benchmark_solver.py` into CI with stored medians and fail on
-  >2x drift, so encoding changes can't silently regress solve times.
-- Profile the 15x15 case: most time is incremental cut-set elimination; try
-  stronger connectivity encodings (e.g. spanning-tree or reachability ladder)
-  before adding cuts lazily.
-- The DFS solver is experimental and orders of magnitude slower; either invest
-  in pruning (dead-end detection, corridor forcing) or drop it from the UI to
-  reduce a confusing choice.
+- `scripts/validate_puzzles.py` re-solves the curated library and, with
+  `--include-imports`, every saved generated puzzle in the screenshot archive.
+  It independently validates solutions and compares stable outcomes against
+  `tests/golden/puzzle_baseline.json`.
+- Pull requests run backend tests, curated validation, benchmark comparison,
+  and the production frontend build in `.github/workflows/ci.yml`. The scheduled
+  run also executes the archive sweep when archived data is available to the
+  runner.
+- Golden results cannot be overwritten accidentally. A reviewed update requires
+  both flags:
 
-## 3. Automated validation of historical puzzles
+  ```bash
+  python scripts/validate_puzzles.py --write-baseline --accept-baseline-update
+  ```
 
-**In place**
+- `scripts/replay_image_imports.py --latest N` replays the actual retained
+  source images through the current importer and solver in isolated temporary
+  archives. Use `--failures-only` to investigate new failures and `--output`
+  to retain a machine-readable report.
 
-- `scripts/validate_puzzles.py` re-solves every puzzle in the curated `puzzles/`
-  library (and, with `--include-imports`, every generated puzzle in the
-  screenshot archive), independently validates each solution, and compares
-  stable outcomes (parses / solvable / solution-valid / node & color counts)
-  against a golden baseline at `tests/golden/puzzle_baseline.json`.
-  Exit codes: 0 ok, 2 regression vs baseline, 3 invalid solution.
-- Current findings: the release corpus has been deduplicated and known
-  historical misdetections and mechanic-only POCs have been removed. Recent
-  screenshot imports are promoted only after a recorded successful solve and
-  an independent validation pass.
-- Curated corpus: 30 unique, solved, independently verified puzzles (23 square,
-  6 irregular graph, 1 circle). The latest promotion contributed 14
-  screenshot-backed levels: 6 bridge boards, 6 irregular-region boards, and 2
-  warp boards. The cleanup removed 14 demonstration POCs, 4 semantic
-  duplicates, and 3 unsolvable historical misdetections.
-- Full archive sweep: 652 puzzles, 393 solved+verified, 0 invalid solutions.
-  The 259 unsolvable archive entries are old pipeline misdetections that the
-  archive intentionally retains for reprocessing.
+Release verification on 2026-07-14 completed the following gates:
 
-**Next**
-
-- Run `python scripts/validate_puzzles.py` in CI on every PR (library-only mode
-  is sub-second) and the `--include-imports` sweep nightly.
-- Regenerate the baseline (`--write-baseline`) only as a deliberate, reviewed
-  action when puzzles are added or fixed.
+- backend: 128 tests and 10 subtests passed;
+- curated baseline: 30/30 puzzles solved and independently verified;
+- full saved-puzzle sweep: 741 checked, 458 solved+verified, 283 retained
+  historical unsolvable detections, 0 parse failures, and 0 invalid solutions;
+- latest-source replay: 500 uploads checked, 498 regenerated, 335 solved, and
+  all 17 previously solved uploads remained solved (0 regressions); and
+- the three newly recorded failures were confirmed as two identical all-white
+  PNGs and one terminal-free empty grid, all correctly rejected.
 
 ## 4. Navigation and usability
 
-**In place**
+- The in-progress solve document, name, and selected source tab are restored
+  from `localStorage` after a mobile refresh.
+- `GET /image-imports` implements server-side status/search filtering,
+  ordering, limit, and offset pagination. The Screenshot Library requests only
+  its current page and displays the server total.
+- Odd-row-offset hex topology is rendered as game-style hexagonal cells with
+  tinted paths, pipes, and terminals. Square and irregular graph rendering are
+  unchanged.
+- The unused Plotly interactive/3D view and its roughly 4.9 MB dependency were
+  removed. Advanced graph inspection remains available without that download.
+- Durable background batch submission is available from the Screenshot page.
+  The last job id is stored locally so reopening the page resumes polling and
+  restores completed results.
 
-- Boards render like the actual game (grid cells, fat pipes, tinted path
-  cells, solid walls) everywhere; node/edge graph views are advanced-mode only.
-- Navigation is three destinations (Screenshot / Create / Library); the Batch
-  tab was consolidated into the Screenshot page's batch mode, which now also
-  warns about duplicate names/source images before saving.
-- The Library hosts the Uploaded screenshots cache (search, status filter,
-  pagination, save-to-library, bulk reprocess/delete). Reprocess hands off to
-  the Screenshot page's pipeline.
+## Deployment checklist
 
-**Next**
+The production Compose definition satisfies the checklist directly:
 
-- Persist the in-progress puzzle (solve view) to `localStorage` so a mobile
-  refresh doesn't lose state.
-- Server-side pagination for `/image-imports` (the UI paginates client-side but
-  still downloads all summaries).
-- Game-style rendering for hex boards (square-lattice only today).
-- Optional: replace the Plotly "Interactive" view (4.9 MB lazy chunk) with
-  `plotly.js-basic-dist` or drop 3D if usage stays low.
+```bash
+# PUBLIC_ORIGIN must be the public scheme + host, with no trailing slash.
+PUBLIC_ORIGIN=https://flow.example.com docker compose -f docker-compose.prod.yml up -d --build
+```
 
-## Deployment checklist (single node)
+- [x] Nginx serves the frontend and proxies `/api/` to FastAPI on the same
+      origin. `CORS_ORIGINS` is pinned to `PUBLIC_ORIGIN` rather than `*`.
+- [x] Both containers use `restart: unless-stopped`; FastAPI runs with
+      `RELOAD=0`, a health check, and `API_WORKERS` (default `2`).
+- [x] `puzzles/` and `data/` are mounted outside the containers.
+- [x] `scripts/backup_data.py` creates an atomic timestamped ZIP containing
+      `puzzles/`, `data/image_imports/`, and `data/image_jobs/`, plus a SHA-256
+      manifest, and applies retention. Schedule it with the host task runner:
 
-- [ ] Serve the frontend `dist/` behind the same origin as the API (or pin
-      CORS to the real origin instead of `*`).
-- [ ] Run the backend under a process supervisor with `RELOAD=0`.
-- [ ] Back up `puzzles/` and `data/image_imports/` (both are plain directories).
-- [ ] CI: `pytest tests`, `npm run build`, `python scripts/validate_puzzles.py`.
-- [ ] Restart the backend after deploying to pick up the per-import locking.
+      ```bash
+      python scripts/backup_data.py --output-dir /srv/flow-backups --retain 14
+      ```
+
+- [x] CI runs `pytest`, historical validation, performance comparison, and
+      `npm run build`; the nightly trigger adds the import sweep.
+- [x] Deployments recreate/restart the backend so new code, startup recovery,
+      and locking behavior take effect.
+
+Before exposing a host, set `PUBLIC_ORIGIN`, choose backup storage outside the
+repository/data volume, perform one restore drill, and confirm `/api/health`
+through the public Nginx endpoint.

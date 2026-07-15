@@ -199,6 +199,68 @@ def test_bulk_delete_image_imports(tmp_path: Path, monkeypatch) -> None:
     assert [entry["id"] for entry in remaining["entries"]] == [ids[2]]
 
 
+def test_image_import_listing_filters_and_paginates_server_side(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FLOW_IMAGE_IMPORTS_DIR", str(tmp_path / "imports"))
+    client = TestClient(app)
+    source = _png_bytes()
+    for index in range(3):
+        response = client.post(
+            "/image-imports/failed",
+            files={"file": (f"filter-{index}.png", source, "image/png")},
+            data={"error": "fixture", "stage": "test"},
+        )
+        assert response.status_code == 200
+
+    first = client.get("/image-imports?limit=2&offset=0&status=failed&search=filter&order=oldest")
+    second = client.get("/image-imports?limit=2&offset=2&status=failed&search=filter&order=oldest")
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["total"] == 3
+    assert first.json()["has_more"] is True
+    assert len(first.json()["entries"]) == 2
+    assert second.json()["has_more"] is False
+    assert len(second.json()["entries"]) == 1
+
+
+def test_server_side_image_job_survives_request_and_reports_results(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FLOW_IMAGE_IMPORTS_DIR", str(tmp_path / "imports"))
+    monkeypatch.setenv("FLOW_IMAGE_JOBS_DIR", str(tmp_path / "jobs"))
+    client = TestClient(app)
+    source = _png_bytes()
+    options = {
+        "target_type": "square",
+        "grid_width": 2,
+        "grid_height": 2,
+        "auto_terminals": False,
+        "auto_classify": False,
+        "output_schema_version": 2,
+        "crop_x": 0,
+        "crop_y": 0,
+        "crop_width": 40,
+        "crop_height": 40,
+    }
+
+    created = client.post(
+        "/image/jobs",
+        files=[
+            ("files", ("job-a.png", source, "image/png")),
+            ("files", ("job-b.png", source, "image/png")),
+        ],
+        data={"options_json": json.dumps(options)},
+    )
+
+    assert created.status_code == 200, created.text
+    job = client.get(f"/image/jobs/{created.json()['id']}")
+    assert job.status_code == 200
+    assert job.json()["status"] == "completed"
+    assert job.json()["completed"] == 2
+    assert job.json()["failed"] == 0
+    assert all(item["import_id"] for item in job.json()["items"])
+    retained_source = client.get(f"/image/jobs/{created.json()['id']}/items/0/image")
+    assert retained_source.status_code == 200
+    assert retained_source.content == source
+
+
 def test_reopening_legacy_archive_recovers_retained_terminal_colors(tmp_path: Path, monkeypatch) -> None:
     imports = tmp_path / "imports"
     monkeypatch.setenv("FLOW_IMAGE_IMPORTS_DIR", str(imports))

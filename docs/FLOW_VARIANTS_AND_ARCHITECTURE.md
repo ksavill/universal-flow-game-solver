@@ -1,6 +1,6 @@
 # Flow variants and solver architecture
 
-Research snapshot: 2026-07-11
+Research and implementation snapshot: 2026-07-14
 
 This document turns the Flow Free product family into a small set of solver
 mechanics.  That distinction matters: pack names such as *Mania*, *Extreme*,
@@ -124,11 +124,13 @@ invalid rules, and non-finite/non-JSON data.  If either v2 marker is present,
 an unsupported version is an error rather than a silent legacy fallback.
 Serialization sorts ids and produces deterministic JSON.
 
-The schema can describe some rules ahead of runtime support.  The current
-compiler supports full or optional coverage and the standard endpoint-degree
-1/internal-degree 2 connected-path contract.  It deliberately rejects
-per-cell coverage overrides and a non-`distinct` multi-channel color policy
-until their solver semantics are implemented.
+The compiler supports full or optional coverage, per-cell coverage bounds,
+the `distinct` and `allow` multi-channel color policies, and declared minimum
+or maximum node counts for each color path. Both exact backends encode these
+rules and the independent result validator checks them again. Nonstandard
+endpoint degree, internal degree, or disconnected-path contracts remain a
+schema error because the public solution format represents simple connected
+terminal-to-terminal paths.
 
 ### Exact edge-variable solver
 
@@ -153,9 +155,14 @@ keeps the initial model smaller than an all-pairs reachability encoding.
 
 Before model construction, exact domain pruning computes each color's
 reachability with foreign terminals removed, then repeatedly removes
-nonterminal assignments that cannot have two compatible neighbors.  A single
-deadline covers import, structural validation, preprocessing, model building,
-all Z3 checks, extraction, result validation, and optional uniqueness.
+nonterminal assignments that cannot have two compatible neighbors. Bridge and
+articulation-component analysis also rejects separator assignments that cannot
+connect the required sides or exceed the separator's routing capacity. The
+topology-only work is cached by a deterministic SHA-256 topology hash, so a
+batch of levels on the same board reuses its incident map and separators. A
+single deadline covers import, structural validation, preprocessing, model
+building, all exact checks, extraction, result validation, and optional
+uniqueness.
 
 Uniqueness is defined over the complete edge-colored assignment.  After the
 first solution, the session blocks that exact assignment and searches for a
@@ -207,12 +214,14 @@ Current reference contracts are:
 | `cube` | Three square faces joined around the visible corner | size 2 = 12 cells / 18 edges |
 | `radial_star` | Cyclic fan of five or six rhombus/square faces | 5x size 2 = 20/30; 6x size 3 = 54/90 |
 | `figure8` | Faithful linked-loop reference track | 31 cells / 43 edges |
+| `linked_loops_2x2` | Verified two-by-two linked-loop Shapes board | 35 cells / 54 edges |
+| `selective_warp_grid` | Square grid plus explicitly selected border warp pairs | 9x9 = 81 cells / 156 edges |
 
 The legacy space builders additionally support square, hex, circle, holes, and
-bridges.  Moving hex and any newly verified Shapes families into the registry
-will give all import paths one source of truth.  A silhouette is not enough to
-invent a generic lattice: a new knot, animal, or multi-face layout should be a
-new verified template or an explicit region graph.
+bridges. A silhouette is not enough to invent a generic lattice: a new knot,
+animal, or multi-face layout should be a new verified template or an explicit
+region graph. Registry fixtures assert exact node/edge counts and degree
+histograms so a visual-template change cannot silently alter feasibility.
 
 ### Legacy migration
 
@@ -271,6 +280,10 @@ python scripts/benchmark_solver.py puzzles/square/10x10 \
 
 # Include the exact second-solution search
 python scripts/benchmark_solver.py path/to/puzzle.json --unique
+
+# Compare the representative corpus to the committed CI baseline
+python scripts/benchmark_solver.py --warmup 1 --repeat 3 \
+  --baseline tests/golden/benchmark_baseline.json --max-drift 2
 ```
 
 The harness parses each puzzle once outside the measured interval.  Every
@@ -290,24 +303,30 @@ For useful performance comparisons:
 - use the same end-to-end timeout, including uniqueness when that is the
   feature being compared.
 
-## Capability roadmap
+## Capability roadmap status
 
-The graph-first model now covers every current product family's fundamental
-mechanics.  The next additions should extend explicit semantics rather than add
-special cases based on app or pack names:
+The six implementation items from the July 11 research roadmap are complete:
 
-1. Add verified registry templates for additional Shapes/Warps boards, with
-   edge/count fixtures taken from actual levels.
-2. Carry importer confidence and manual edge corrections into schema-v2
-   extensions, then validate before saving.
-3. Compile per-cell coverage overrides and additional declared path rules only
-   after exact solver constraints and result validation exist for them.
-4. Add articulation, separator-capacity, and bridge-aware preprocessing for
-   large irregular graphs; benchmark variable and cut reductions.
-5. Cache canonical topology preprocessing by a deterministic schema hash for
-   batches that share a board but change terminals.
-6. Keep a small representative performance corpus in CI and alert on both
-   correctness and material median-time/model-size regressions.
+1. The registry now includes verified `linked_loops_2x2` and
+   `selective_warp_grid` fixtures derived from retained reference captures,
+   with exact edge/count and degree contracts.
+2. Image-generated schema-v2 documents carry classifier confidence, source
+   geometry, detected modifiers, alternative candidates, target types, and
+   manual edge corrections in the namespaced `flow-solver/import` extension.
+   Generated documents are parsed through the strict schema validator before
+   they are archived.
+3. Per-cell coverage bounds, the additional multi-channel policy, and declared
+   path-length bounds have matching compiler, exact-solver, migration, and
+   independent-validation semantics.
+4. Bridge-aware and articulation/separator-capacity preprocessing is enabled
+   for irregular graphs and exposes prune/count statistics in solver results.
+5. Canonical topology preprocessing uses a bounded deterministic-hash cache.
+6. CI contains a representative 5×5/8×8/10×10/15×15 corpus and alerts on
+   correctness, median-time drift, and model-size drift.
+
+Future mechanics should continue to enter through explicit schema semantics,
+verified topology fixtures, and matching solver-plus-validator behavior—not
+through app-name or visual-distance heuristics.
 
 ## Sources and confidence
 

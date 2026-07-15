@@ -265,22 +265,34 @@ class _PySatSession:
             start, goal = p.puzzle.terminals[color]
             self.clauses.append([self.x[start, color]])
             self.clauses.append([self.x[goal, color]])
+            color_vars = [
+                self.x[node, color] for node in p.nodes if (node, color) in self.x
+            ]
+            minimum_nodes, maximum_nodes = p.puzzle.path_length_bounds
+            if minimum_nodes is not None:
+                self._extend_cardinality("atleast", color_vars, minimum_nodes)
+            if maximum_nodes is not None and maximum_nodes < len(color_vars):
+                self._extend_cardinality("atmost", color_vars, maximum_nodes)
 
-        for tile_index, tile_nodes in enumerate(p.puzzle.tiles.values()):
-            for color in p.colors:
-                tile_color_vars = [
-                    self.x[node, color] for node in tile_nodes if (node, color) in self.x
-                ]
-                if len(tile_color_vars) > 1:
-                    self._extend_cardinality("atmost", tile_color_vars, 1)
-            if p.puzzle.fill:
-                tile_vars = [
-                    self.x[node, color]
-                    for node in tile_nodes
-                    for color in p.colors
-                    if (node, color) in self.x
-                ]
-                self.clauses.append(tile_vars)
+        for tile_index, (tile_id, tile_nodes) in enumerate(p.puzzle.tiles.items()):
+            if p.puzzle.multi_channel_cell_color_policy == "distinct":
+                for color in p.colors:
+                    tile_color_vars = [
+                        self.x[node, color] for node in tile_nodes if (node, color) in self.x
+                    ]
+                    if len(tile_color_vars) > 1:
+                        self._extend_cardinality("atmost", tile_color_vars, 1)
+            tile_vars = [
+                self.x[node, color]
+                for node in tile_nodes
+                for color in p.colors
+                if (node, color) in self.x
+            ]
+            minimum, maximum = p.puzzle.cell_coverage_bounds(tile_id)
+            if minimum > 0:
+                self._extend_cardinality("atleast", tile_vars, minimum)
+            if maximum < len(tile_nodes):
+                self._extend_cardinality("atmost", tile_vars, maximum)
             if tile_index % 128 == 0:
                 self.deadline.check("SAT physical tile constraints")
 

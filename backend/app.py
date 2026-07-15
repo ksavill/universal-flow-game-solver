@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import io
 import json
 import os
@@ -10,19 +11,22 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence, Tuple
 
 # Allow running `python backend/app.py` from repo root.
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
 
 from flow_solver.puzzle import Puzzle
 from flow_solver.migration import puzzle_to_spec
@@ -32,6 +36,7 @@ from flow_solver.spaces.square import build_square_space_from_tokens
 from flow_solver.topologies import build_grid_topology, build_hex_topology, build_ring_topology
 from flow_solver.validation import validate_puzzle
 from backend.acceleration import acceleration_capabilities
+from backend.file_lock import FileLockTimeout, InterProcessFileLock
 from backend.image_utils import (
     CropBox,
     apply_crop,
@@ -111,6 +116,20 @@ def _image_imports_dir() -> Path:
     return path if path.is_absolute() else _repo_root() / path
 
 
+def _image_jobs_dir() -> Path:
+    configured = os.environ.get("FLOW_IMAGE_JOBS_DIR", "").strip()
+    if not configured:
+        return _repo_root() / "data" / "image_jobs"
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else _repo_root() / path
+
+
+def _image_job_dir(job_id: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise HTTPException(status_code=400, detail="Invalid image job id")
+    return _image_jobs_dir() / job_id
+
+
 def _image_import_dir(import_id: str) -> Path:
     if not re.fullmatch(r"[0-9a-f]{32}", import_id):
         raise HTTPException(status_code=400, detail="Invalid image import id")
@@ -170,8 +189,8 @@ def _image_import_run_summary(record: Dict[str, Any]) -> Dict[str, Any]:
 
 # Record updates are read-modify-write on a per-import record.json; concurrent
 # requests for the same import (parallel batch reprocess, solve attach) must
-# serialize or one update silently overwrites the other. Per-process only —
-# running multiple uvicorn workers would need cross-process file locking.
+# serialize or one update silently overwrites the other. The thread lock avoids
+# local contention and the stable advisory file lock covers uvicorn workers.
 _IMPORT_LOCKS: Dict[str, threading.Lock] = {}
 _IMPORT_LOCKS_GUARD = threading.Lock()
 
@@ -183,6 +202,17 @@ def _import_lock(import_id: str) -> threading.Lock:
             lock = threading.Lock()
             _IMPORT_LOCKS[import_id] = lock
         return lock
+
+
+@contextmanager
+def _locked_import(import_id: str) -> Iterator[None]:
+    """Serialize a record update across threads and uvicorn worker processes."""
+
+    imports_dir = _image_imports_dir()
+    lock_path = imports_dir.parent / f".{imports_dir.name}.locks" / f"{import_id}.lock"
+    with _import_lock(import_id):
+        with InterProcessFileLock(lock_path):
+            yield
 
 
 def _write_image_import_record(import_id: str, record: Dict[str, Any]) -> None:
@@ -199,7 +229,7 @@ def _replace_image_import(
     result: Dict[str, Any],
     processing: Dict[str, Any],
 ) -> Dict[str, Any]:
-    with _import_lock(import_id):
+    with _locked_import(import_id):
         return _replace_image_import_locked(import_id, data=data, result=result, processing=processing)
 
 
@@ -246,7 +276,7 @@ def _replace_image_import_locked(
 
 
 def _record_image_import_reprocess_failure(import_id: str, *, error: str, stage: str) -> Dict[str, Any]:
-    with _import_lock(import_id):
+    with _locked_import(import_id):
         record = _read_image_import(import_id)
         runs = record.get("runs") if isinstance(record.get("runs"), list) else []
         runs.append(_image_import_run_summary(record))
@@ -275,7 +305,7 @@ def _store_image_import_solve(
 ) -> bool:
     """Attach an immediate solve outcome to its exact archived generation."""
 
-    with _import_lock(import_id):
+    with _locked_import(import_id):
         record_path = _image_import_dir(import_id) / "record.json"
         if not record_path.exists():
             return False
@@ -350,6 +380,168 @@ def _store_image_import(
         shutil.rmtree(record_dir, ignore_errors=True)
         raise
     return record
+
+
+_IMAGE_JOB_OPTION_DEFAULTS: Dict[str, Any] = {
+    "target_type": "auto",
+    "grid_width": None,
+    "grid_height": None,
+    "graph_layout": "grid",
+    "graph_nodes": 10,
+    "output_schema_version": 2,
+    "auto_terminals": True,
+    "auto_classify": True,
+    "level_type_json": None,
+    "edge_overrides_json": None,
+    "metadata_json": None,
+    "crop_x": None,
+    "crop_y": None,
+    "crop_width": None,
+    "crop_height": None,
+    "threshold": 230,
+    "line_threshold": 0.6,
+    "invert": False,
+    "sat_threshold": 30.0,
+    "brightness_min": 30.0,
+    "brightness_max": 230.0,
+    "margin_ratio": 0.15,
+    "cluster_threshold": 60.0,
+    "bg_threshold": 40.0,
+    "perspective": False,
+}
+
+
+def _normalize_image_job_options(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("options_json must be a JSON object")
+    unknown = sorted(set(raw) - set(_IMAGE_JOB_OPTION_DEFAULTS))
+    if unknown:
+        raise ValueError(f"Unknown image job option(s): {', '.join(unknown)}")
+    options = {**_IMAGE_JOB_OPTION_DEFAULTS, **raw}
+    for key in ("level_type_json", "edge_overrides_json", "metadata_json"):
+        if options[key] is not None and not isinstance(options[key], str):
+            options[key] = json.dumps(options[key], separators=(",", ":"))
+    return options
+
+
+def _image_job_lock_path(job_id: str) -> Path:
+    return _image_jobs_dir() / ".locks" / f"{job_id}.lock"
+
+
+def _read_image_job(job_id: str) -> Dict[str, Any]:
+    path = _image_job_dir(job_id) / "job.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Image job not found")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Stored image job is unreadable") from exc
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=500, detail="Stored image job is invalid")
+    return record
+
+
+def _write_image_job(job_id: str, record: Dict[str, Any]) -> None:
+    path = _image_job_dir(job_id) / "job.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _update_image_job(job_id: str, mutate: Any) -> Dict[str, Any]:
+    with InterProcessFileLock(_image_job_lock_path(job_id)):
+        record = _read_image_job(job_id)
+        mutate(record)
+        record["updated_at"] = time.time()
+        _write_image_job(job_id, record)
+        return record
+
+
+async def _run_image_job(job_id: str) -> None:
+    claimed = False
+
+    def claim(record: Dict[str, Any]) -> None:
+        nonlocal claimed
+        if record.get("status") != "queued":
+            return
+        claimed = True
+        record["status"] = "running"
+        record["started_at"] = time.time()
+
+    _update_image_job(job_id, claim)
+    if not claimed:
+        return
+
+    record = _read_image_job(job_id)
+    options = _normalize_image_job_options(record.get("options", {}))
+    job_dir = _image_job_dir(job_id)
+    items = record.get("items") if isinstance(record.get("items"), list) else []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or item.get("status") == "processed":
+            continue
+        stored_name = str(item.get("stored_name", ""))
+        source_path = job_dir / stored_name
+        try:
+            data = source_path.read_bytes()
+            upload = UploadFile(
+                file=io.BytesIO(data),
+                filename=str(item.get("original_name") or source_path.name),
+                headers=Headers({"content-type": str(item.get("content_type") or "application/octet-stream")}),
+            )
+            async with _image_pipeline_permit():
+                generated = await image_generate(
+                    file=upload,
+                    replace_import_id=None,
+                    _permit=None,
+                    **options,
+                )
+            outcome = {
+                "status": "processed",
+                "import_id": generated.get("import_id"),
+                "generated_name": generated.get("name"),
+            }
+            try:
+                solved = solve(
+                    SolveRequest(
+                        name=str(generated.get("name") or "image.json"),
+                        text=str(generated.get("text") or ""),
+                        solver="z3",
+                        timeout_ms=30_000,
+                        import_id=str(generated.get("import_id") or "") or None,
+                    )
+                )
+                outcome.update(
+                    solve_status="solved",
+                    solve_ms=solved.get("stats", {}).get("total_ms"),
+                )
+            except Exception as solve_exc:
+                detail = solve_exc.detail if isinstance(solve_exc, HTTPException) else str(solve_exc)
+                outcome.update(solve_status="failed", solve_error=str(detail)[:4000])
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            outcome = {"status": "failed", "error": str(detail)[:4000]}
+
+        def finish_item(current: Dict[str, Any], *, item_index: int = index, result: Dict[str, Any] = outcome) -> None:
+            current_items = current.get("items")
+            if not isinstance(current_items, list) or item_index >= len(current_items):
+                return
+            current_items[item_index].update(result)
+            current["completed"] = sum(
+                isinstance(value, dict) and value.get("status") in {"processed", "failed"}
+                for value in current_items
+            )
+            current["failed"] = sum(
+                isinstance(value, dict) and value.get("status") == "failed"
+                for value in current_items
+            )
+
+        _update_image_job(job_id, finish_item)
+
+    def complete(current: Dict[str, Any]) -> None:
+        current["status"] = "completed"
+        current["finished_at"] = time.time()
+
+    _update_image_job(job_id, complete)
 
 
 def _type_label(kind: str) -> str:
@@ -657,6 +849,10 @@ def _graph_payload(puzzle: Puzzle) -> Dict[str, Any]:
     if puzzle.source_spec is not None:
         source = puzzle.source_spec.to_dict()
         payload["schema_version"] = source["schema_version"]
+        payload["topology"] = {
+            "template": source["topology"].get("template"),
+            "data": source["topology"].get("data", {}),
+        }
         payload["adjacencies"] = source["topology"]["adjacencies"]
         payload["display"] = source["display"]
         payload["catalog"] = source["catalog"]
@@ -1146,6 +1342,33 @@ def _parse_edge_overrides_payload(raw: Any) -> Dict[str, List[Tuple[str, str]]]:
     }
 
 
+def _import_schema_extension(
+    detection: Dict[str, Any],
+    edge_corrections: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+) -> Dict[str, Any]:
+    level_type = detection.get("level_type") if isinstance(detection.get("level_type"), dict) else {}
+    candidates = level_type.get("candidates") if isinstance(level_type.get("candidates"), list) else []
+    extension: Dict[str, Any] = {
+        "version": 1,
+        "classifier": {
+            "confidence": _candidate_confidence(level_type),
+            "source": str(level_type.get("source", "unknown")),
+            "geometry": str(level_type.get("geometry", "unknown")),
+            "modifiers": _normalize_level_modifiers(level_type.get("modifiers")),
+            "candidates": candidates,
+        },
+        "target_type_requested": detection.get("target_type_requested"),
+        "target_type_used": detection.get("target_type_used"),
+    }
+    corrections = edge_corrections or {}
+    if any(corrections.values()):
+        extension["manual_edge_corrections"] = {
+            key: [[left, right] for left, right in corrections.get(key, [])]
+            for key in ("add", "remove", "warps", "walls")
+        }
+    return extension
+
+
 def _image_graph_schema_v2(
     obj: Dict[str, Any],
     *,
@@ -1154,6 +1377,8 @@ def _image_graph_schema_v2(
     width: Optional[int],
     height: Optional[int],
     level_modifiers: Sequence[str],
+    import_detection: Optional[Dict[str, Any]] = None,
+    edge_corrections: Optional[Dict[str, List[Tuple[str, str]]]] = None,
 ) -> Dict[str, Any]:
     """Upgrade a generated legacy graph to the canonical, typed v2 schema."""
 
@@ -1232,6 +1457,11 @@ def _image_graph_schema_v2(
         catalog=catalog,
     )
     payload = spec.to_dict()
+    if import_detection is not None:
+        payload.setdefault("extensions", {})["flow-solver/import"] = _import_schema_extension(
+            import_detection,
+            edge_corrections,
+        )
 
     if any(
         isinstance(node, dict)
@@ -1270,6 +1500,7 @@ def _image_grid_schema_v2(
     meta: Dict[str, str],
     terminal_placements: Sequence[Any],
     level_modifiers: Sequence[str],
+    import_detection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Encode square, hex, and circular image imports in canonical v2 form."""
 
@@ -1352,13 +1583,18 @@ def _image_grid_schema_v2(
         ),
         mechanics=tuple(sorted(mechanics)),
     )
-    return puzzle_to_spec(
+    payload = puzzle_to_spec(
         puzzle,
         template_id=template_id,
         template_parameters=parameters,
         edge_kinds=edge_kinds,
         catalog=catalog,
     ).to_dict()
+    if import_detection is not None:
+        payload.setdefault("extensions", {})["flow-solver/import"] = _import_schema_extension(
+            import_detection
+        )
+    return parse_v2_dict(payload).to_dict()
 
 
 def _apply_flow_metadata(text: str, meta_updates: Dict[str, str], *, drop_empty: bool) -> str:
@@ -1467,7 +1703,133 @@ class ImageImportReprocessFailureRequest(BaseModel):
     stage: str = Field(default="screenshot-library", min_length=1, max_length=100)
 
 
-app = FastAPI(title="Universal Flow Game Solver API", version="0.1.0")
+_RECOVERED_JOB_TASKS: set[asyncio.Task[None]] = set()
+_IMAGE_JOB_LEASE_SECONDS = 15 * 60
+
+
+def _track_recovered_job(coroutine: Any) -> None:
+    task = asyncio.create_task(coroutine)
+    _RECOVERED_JOB_TASKS.add(task)
+    task.add_done_callback(_RECOVERED_JOB_TASKS.discard)
+
+
+async def _recover_running_image_job(job_id: str) -> None:
+    """Requeue an orphaned running job after its persisted progress lease expires."""
+
+    while True:
+        try:
+            record = _read_image_job(job_id)
+            if record.get("status") != "running":
+                return
+            observed_updated_at = float(record.get("updated_at", 0))
+            delay = max(0.0, observed_updated_at + _IMAGE_JOB_LEASE_SECONDS - time.time())
+            if delay:
+                await asyncio.sleep(delay)
+            requeued = False
+
+            def requeue_if_unchanged(current: Dict[str, Any]) -> None:
+                nonlocal requeued
+                if (
+                    current.get("status") == "running"
+                    and float(current.get("updated_at", 0)) <= observed_updated_at
+                ):
+                    current["status"] = "queued"
+                    requeued = True
+
+            _update_image_job(job_id, requeue_if_unchanged)
+            if requeued:
+                await _run_image_job(job_id)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+
+
+async def _resume_queued_image_jobs() -> None:
+    base = _image_jobs_dir()
+    if not base.exists():
+        return
+    for path in base.glob("*/job.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            job_id = str(record.get("id", ""))
+            status = record.get("status")
+            if status == "queued":
+                _track_recovered_job(_run_image_job(job_id))
+            elif status == "running":
+                _track_recovered_job(_recover_running_image_job(job_id))
+        except Exception:
+            continue
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await _resume_queued_image_jobs()
+    try:
+        yield
+    finally:
+        tasks = tuple(_RECOVERED_JOB_TASKS)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+app = FastAPI(title="Universal Flow Game Solver API", version="0.1.0", lifespan=_lifespan)
+
+try:
+    _IMAGE_PIPELINE_CONCURRENCY = max(
+        1,
+        min(32, int(os.environ.get("FLOW_IMAGE_PIPELINE_CONCURRENCY", "3"))),
+    )
+except ValueError:
+    _IMAGE_PIPELINE_CONCURRENCY = 3
+_IMAGE_PIPELINE_SEMAPHORE = asyncio.Semaphore(_IMAGE_PIPELINE_CONCURRENCY)
+
+
+@asynccontextmanager
+async def _image_pipeline_permit() -> AsyncIterator[None]:
+    """Apply one process-local and one node-wide heavy-image concurrency slot."""
+
+    async with _IMAGE_PIPELINE_SEMAPHORE:
+        acquired: Optional[InterProcessFileLock] = None
+        lock_dir = _image_imports_dir().parent / ".image_pipeline.locks"
+        while acquired is None:
+            for slot in range(_IMAGE_PIPELINE_CONCURRENCY):
+                candidate = InterProcessFileLock(lock_dir / f"slot-{slot}.lock", timeout=0)
+                try:
+                    candidate.__enter__()
+                except FileLockTimeout:
+                    continue
+                acquired = candidate
+                break
+            if acquired is None:
+                await asyncio.sleep(0.05)
+        try:
+            yield
+        finally:
+            acquired.__exit__(None, None, None)
+
+
+async def _heavy_image_permit() -> AsyncIterator[None]:
+    """Bound CPU-heavy image work so interactive requests retain capacity."""
+
+    async with _image_pipeline_permit():
+        yield
+
+
+def _offload_image_endpoint(function: Any) -> Any:
+    """Run an async UploadFile endpoint on a worker thread, including CPU work."""
+
+    @wraps(function)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def run() -> Any:
+            return asyncio.run(function(*args, **kwargs))
+
+        return await asyncio.to_thread(run)
+
+    return wrapper
 
 cors_raw = os.environ.get("CORS_ORIGINS", "*")
 cors_list = [c.strip() for c in cors_raw.split(",") if c.strip()]
@@ -1479,7 +1841,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {"status": "ok", "acceleration": acceleration_capabilities()}
@@ -1487,7 +1848,10 @@ def health() -> Dict[str, Any]:
 
 @app.get("/capabilities")
 def capabilities() -> Dict[str, Any]:
-    return {"acceleration": acceleration_capabilities()}
+    return {
+        "acceleration": acceleration_capabilities(),
+        "image_pipeline_concurrency": _IMAGE_PIPELINE_CONCURRENCY,
+    }
 
 
 @app.get("/puzzles")
@@ -1915,8 +2279,20 @@ def get_puzzle(source: str, name: str) -> Dict[str, Any]:
 
 
 @app.get("/image-imports")
-def list_image_imports(limit: int = 50) -> Dict[str, Any]:
-    bounded_limit = max(1, min(limit, 1000))
+def list_image_imports(
+    limit: int = Query(default=50, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    status: str = Query(default="all"),
+    search: str = Query(default="", max_length=200),
+    order: str = Query(default="newest"),
+) -> Dict[str, Any]:
+    normalized_status = status.strip().lower()
+    if normalized_status not in {"all", "processed", "solved", "unknown", "failed"}:
+        raise HTTPException(status_code=400, detail="Unknown image-import status filter")
+    normalized_order = order.strip().lower()
+    if normalized_order not in {"newest", "oldest"}:
+        raise HTTPException(status_code=400, detail="order must be newest or oldest")
+    query = search.strip().casefold()
     records: List[Dict[str, Any]] = []
     base = _image_imports_dir()
     if base.exists():
@@ -1924,14 +2300,170 @@ def list_image_imports(limit: int = 50) -> Dict[str, Any]:
             try:
                 record = json.loads(record_path.read_text(encoding="utf-8"))
                 if isinstance(record, dict):
-                    records.append(_image_import_summary(record))
+                    summary = _image_import_summary(record)
+                    failed = summary.get("status") == "failed" or summary.get("solve_status") == "failed"
+                    solved = summary.get("solve_status") == "solved"
+                    matches_status = (
+                        normalized_status == "all"
+                        or (normalized_status == "failed" and failed)
+                        or (normalized_status == "solved" and solved)
+                        or (normalized_status == "processed" and summary.get("status") == "processed")
+                        or (normalized_status == "unknown" and not failed and not solved)
+                    )
+                    searchable = " ".join(
+                        str(summary.get(key) or "")
+                        for key in ("original_name", "generated_name", "geometry")
+                    ).casefold()
+                    if matches_status and (not query or query in searchable):
+                        records.append(summary)
             except Exception:
                 continue
     records.sort(
         key=lambda item: float(item.get("updated_at", item.get("created_at", 0))),
-        reverse=True,
+        reverse=normalized_order == "newest",
     )
-    return {"entries": records[:bounded_limit], "total": len(records)}
+    total = len(records)
+    entries = records[offset : offset + limit]
+    return {
+        "entries": entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(entries) < total,
+    }
+
+
+@app.post("/image/jobs")
+async def create_image_job(
+    background_tasks: BackgroundTasks,
+    files: List[UploadFile] = File(...),
+    options_json: str = Form("{}"),
+) -> Dict[str, Any]:
+    if not files or len(files) > 200:
+        raise HTTPException(status_code=400, detail="An image job requires 1 to 200 files")
+    try:
+        options = _normalize_image_job_options(json.loads(options_json))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid options_json: {exc}") from exc
+
+    job_id = uuid.uuid4().hex
+    job_dir = _image_job_dir(job_id)
+    items: List[Dict[str, Any]] = []
+    total_bytes = 0
+    try:
+        job_dir.mkdir(parents=True, exist_ok=False)
+        for index, upload in enumerate(files):
+            data = await upload.read()
+            total_bytes += len(data)
+            if len(data) > 50 * 1024 * 1024 or total_bytes > 250 * 1024 * 1024:
+                raise ValueError("Image job exceeds the 50 MB/file or 250 MB total limit")
+            suffix = Path(upload.filename or "image").suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+                suffix = ".bin"
+            stored_name = f"{index:04d}{suffix}"
+            (job_dir / stored_name).write_bytes(data)
+            items.append(
+                {
+                    "index": index,
+                    "original_name": Path(upload.filename or f"image-{index}").name,
+                    "content_type": upload.content_type or "application/octet-stream",
+                    "byte_size": len(data),
+                    "stored_name": stored_name,
+                    "status": "queued",
+                }
+            )
+        created_at = time.time()
+        record = {
+            "id": job_id,
+            "status": "queued",
+            "created_at": created_at,
+            "updated_at": created_at,
+            "total": len(items),
+            "completed": 0,
+            "failed": 0,
+            "options": options,
+            "items": items,
+        }
+        _write_image_job(job_id, record)
+    except Exception as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"Could not create image job: {exc}") from exc
+
+    background_tasks.add_task(_run_image_job, job_id)
+    return record
+
+
+@app.get("/image/jobs")
+def list_image_jobs(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    jobs: List[Dict[str, Any]] = []
+    base = _image_jobs_dir()
+    if base.exists():
+        for path in base.glob("*/job.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(record, dict):
+                    summary = {key: value for key, value in record.items() if key not in {"items", "options"}}
+                    jobs.append(summary)
+            except Exception:
+                continue
+    jobs.sort(key=lambda item: float(item.get("updated_at", 0)), reverse=True)
+    return {
+        "entries": jobs[offset : offset + limit],
+        "total": len(jobs),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < len(jobs),
+    }
+
+
+@app.get("/image/jobs/{job_id}")
+def get_image_job(job_id: str) -> Dict[str, Any]:
+    return _read_image_job(job_id)
+
+
+@app.get("/image/jobs/{job_id}/items/{item_index}/image")
+def get_image_job_source(job_id: str, item_index: int) -> FileResponse:
+    record = _read_image_job(job_id)
+    items = record.get("items") if isinstance(record.get("items"), list) else []
+    if item_index < 0 or item_index >= len(items) or not isinstance(items[item_index], dict):
+        raise HTTPException(status_code=404, detail="Image job item not found")
+    item = items[item_index]
+    stored_name = str(item.get("stored_name", ""))
+    if not stored_name or Path(stored_name).name != stored_name:
+        raise HTTPException(status_code=500, detail="Stored image job item is invalid")
+    source_path = _image_job_dir(job_id) / stored_name
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="Image job source is missing")
+    return FileResponse(
+        source_path,
+        media_type=str(item.get("content_type") or "application/octet-stream"),
+        filename=str(item.get("original_name") or stored_name),
+    )
+
+
+@app.post("/image/jobs/{job_id}/retry")
+def retry_image_job(job_id: str, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    def requeue(record: Dict[str, Any]) -> None:
+        if record.get("status") not in {"completed", "failed", "interrupted"}:
+            raise HTTPException(status_code=409, detail="Image job is already queued or running")
+        items = record.get("items") if isinstance(record.get("items"), list) else []
+        for item in items:
+            if isinstance(item, dict) and item.get("status") == "failed":
+                item["status"] = "queued"
+                item.pop("error", None)
+        record["completed"] = sum(
+            isinstance(item, dict) and item.get("status") == "processed" for item in items
+        )
+        record["failed"] = 0
+        record["status"] = "queued"
+        record.pop("finished_at", None)
+
+    record = _update_image_job(job_id, requeue)
+    background_tasks.add_task(_run_image_job, job_id)
+    return record
 
 
 @app.post("/image-imports/failed")
@@ -1968,11 +2500,12 @@ def bulk_delete_image_imports(request: ImageImportBulkDeleteRequest) -> Dict[str
     deleted: List[str] = []
     missing: List[str] = []
     for import_id, record_dir in record_dirs:
-        if not (record_dir / "record.json").exists():
-            missing.append(import_id)
-            continue
-        shutil.rmtree(record_dir)
-        deleted.append(import_id)
+        with _locked_import(import_id):
+            if not (record_dir / "record.json").exists():
+                missing.append(import_id)
+                continue
+            shutil.rmtree(record_dir)
+            deleted.append(import_id)
     return {"deleted": deleted, "missing": missing}
 
 
@@ -2009,13 +2542,15 @@ def get_image_import(import_id: str) -> Dict[str, Any]:
 @app.delete("/image-imports/{import_id}")
 def delete_image_import(import_id: str) -> Dict[str, Any]:
     record_dir = _image_import_dir(import_id)
-    if not (record_dir / "record.json").exists():
-        raise HTTPException(status_code=404, detail="Image import not found")
-    shutil.rmtree(record_dir)
+    with _locked_import(import_id):
+        if not (record_dir / "record.json").exists():
+            raise HTTPException(status_code=404, detail="Image import not found")
+        shutil.rmtree(record_dir)
     return {"deleted": True, "id": import_id}
 
 
 @app.post("/image/crop/auto")
+@_offload_image_endpoint
 async def image_auto_crop(
     file: UploadFile = File(...),
     crop_x: Optional[int] = Form(None),
@@ -2025,6 +2560,7 @@ async def image_auto_crop(
     threshold: int = Form(230),
     invert: bool = Form(False),
     padding: int = Form(6),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
@@ -2079,6 +2615,7 @@ async def image_auto_crop(
 
 
 @app.post("/image/classify")
+@_offload_image_endpoint
 async def image_classify(
     file: UploadFile = File(...),
     crop_x: Optional[int] = Form(None),
@@ -2090,6 +2627,7 @@ async def image_classify(
     invert: bool = Form(False),
     perspective: bool = Form(False),
     level_hint: Optional[str] = Form(None),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
@@ -2139,6 +2677,7 @@ async def image_classify(
 
 
 @app.post("/image/grid/detect")
+@_offload_image_endpoint
 async def image_grid_detect(
     file: UploadFile = File(...),
     target_type: str = Form("square"),
@@ -2150,6 +2689,7 @@ async def image_grid_detect(
     line_threshold: float = Form(0.6),
     invert: bool = Form(False),
     perspective: bool = Form(False),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
@@ -2246,6 +2786,7 @@ async def image_grid_detect(
 
 
 @app.post("/image/terminals/detect")
+@_offload_image_endpoint
 async def image_terminals_detect(
     file: UploadFile = File(...),
     target_type: str = Form("square"),
@@ -2262,6 +2803,7 @@ async def image_terminals_detect(
     cluster_threshold: float = Form(60.0),
     bg_threshold: float = Form(40.0),
     perspective: bool = Form(False),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)
@@ -2340,6 +2882,7 @@ async def image_terminals_detect(
 
 
 @app.post("/image/generate")
+@_offload_image_endpoint
 async def image_generate(
     file: UploadFile = File(...),
     replace_import_id: Optional[str] = Form(None),
@@ -2368,6 +2911,7 @@ async def image_generate(
     cluster_threshold: float = Form(60.0),
     bg_threshold: float = Form(40.0),
     perspective: bool = Form(False),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     if output_schema_version not in {1, 2}:
@@ -2756,6 +3300,7 @@ async def image_generate(
                     meta=meta,
                     terminal_placements=placements,
                     level_modifiers=level_modifiers,
+                    import_detection=detection_info,
                 )
                 output_text = json.dumps(output_obj, indent=2)
                 name = str(Path(name).with_suffix(".json"))
@@ -3093,6 +3638,8 @@ async def image_generate(
                     width=canonical_width,
                     height=canonical_height,
                     level_modifiers=level_modifiers,
+                    import_detection=detection_info,
+                    edge_corrections=manual_edge_overrides,
                 )
             except Exception as exc:
                 raise HTTPException(
@@ -3112,6 +3659,7 @@ async def image_generate(
 
 
 @app.post("/image/ocr")
+@_offload_image_endpoint
 async def image_ocr(
     file: UploadFile = File(...),
     crop_x: Optional[int] = Form(None),
@@ -3119,6 +3667,7 @@ async def image_ocr(
     crop_width: Optional[int] = Form(None),
     crop_height: Optional[int] = Form(None),
     perspective: bool = Form(False),
+    _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
     data = await file.read()
     image = load_image(data)

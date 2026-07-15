@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Box,
@@ -54,21 +54,9 @@ function entryTimestamp(entry: ImageImportEntry): number {
   return entry.updated_at ?? entry.created_at;
 }
 
-function matchesStatus(entry: ImageImportEntry, filter: StatusFilter): boolean {
-  switch (filter) {
-    case "solved":
-      return entry.solve_status === "solved";
-    case "failed":
-      return entry.status === "failed" || entry.solve_status === "failed";
-    case "unknown":
-      return entry.status !== "failed" && entry.solve_status !== "solved" && entry.solve_status !== "failed";
-    default:
-      return true;
-  }
-}
-
 export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchiveProps) {
   const [entries, setEntries] = useState<ImageImportEntry[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState<"delete" | null>(null);
@@ -89,9 +77,16 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listImageImports(1000);
-      setEntries(data);
-      const availableIds = new Set(data.map((entry) => entry.id));
+      const data = await listImageImports({
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+        status: statusFilter,
+        search,
+        order: sortOrder
+      });
+      setEntries(data.entries);
+      setTotal(data.total);
+      const availableIds = new Set(data.entries.map((entry) => entry.id));
       setSelectedIds((current) => new Set([...current].filter((id) => availableIds.has(id))));
       setError(null);
     } catch (err) {
@@ -99,40 +94,26 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, search, sortOrder, statusFilter]);
 
   useEffect(() => {
-    void refresh();
+    const timer = window.setTimeout(() => void refresh(), 250);
+    return () => window.clearTimeout(timer);
   }, [refresh]);
 
-  const filtered = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
-    const matched = entries.filter((entry) => {
-      const matchesQuery =
-        !query ||
-        entry.original_name.toLocaleLowerCase().includes(query) ||
-        entry.generated_name.toLocaleLowerCase().includes(query) ||
-        (entry.geometry ?? "").toLocaleLowerCase().includes(query);
-      return matchesQuery && matchesStatus(entry, statusFilter);
-    });
-    matched.sort((a, b) =>
-      sortOrder === "newest"
-        ? entryTimestamp(b) - entryTimestamp(a)
-        : entryTimestamp(a) - entryTimestamp(b)
-    );
-    return matched;
-  }, [search, statusFilter, sortOrder, entries]);
+  const filtered = entries;
+  const paged = entries;
 
   const allFilteredSelected =
     filtered.length > 0 && filtered.every((entry) => selectedIds.has(entry.id));
   const someFilteredSelected = filtered.some((entry) => selectedIds.has(entry.id));
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
-  const paged = useMemo(
-    () => filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-    [filtered, currentPage]
-  );
+
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
 
   useEffect(() => {
     setPage(1);
@@ -260,6 +241,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
       const result = await bulkDeleteImageImports(ids);
       const removed = new Set([...result.deleted, ...result.missing]);
       setEntries((current) => current.filter((entry) => !removed.has(entry.id)));
+      setTotal((current) => Math.max(0, current - removed.size));
       setSelectedIds(new Set());
       setError(null);
     } catch (err) {
@@ -317,6 +299,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
     try {
       await deleteImageImport(entry.id);
       setEntries((current) => current.filter((item) => item.id !== entry.id));
+      setTotal((current) => Math.max(0, current - 1));
       setSelectedIds((current) => {
         const next = new Set(current);
         next.delete(entry.id);
@@ -341,7 +324,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
           Previous
         </Button>
         <Typography variant="caption" color="text.secondary">
-          Page {currentPage} of {pageCount} · {filtered.length} screenshots
+          Page {currentPage} of {pageCount} · {total} screenshots
         </Typography>
         <Button
           size="small"
@@ -412,7 +395,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
               disabled={!filtered.length || bulkBusy !== null}
             />
           }
-          label={`Select all matching (${filtered.length})`}
+          label={`Select page (${filtered.length})`}
         />
         {selectedIds.size > 0 && (
           <Chip label={`${selectedIds.size} selected`} size="small" color="primary" />
@@ -450,12 +433,12 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
         </Button>
       </Box>
       {error && <Alert severity="error">{error}</Alert>}
-      {!loading && entries.length === 0 && (
+      {!loading && total === 0 && statusFilter === "all" && !search.trim() && (
         <Alert severity="info">
           Uploaded screenshots will appear here after you import one on the Screenshot page.
         </Alert>
       )}
-      {!loading && entries.length > 0 && filtered.length === 0 && (
+      {!loading && total === 0 && (statusFilter !== "all" || Boolean(search.trim())) && (
         <Alert severity="info">No screenshots match the current filters.</Alert>
       )}
       {filtered.length > 0 && (

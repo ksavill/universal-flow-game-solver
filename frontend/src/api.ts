@@ -55,6 +55,10 @@ export type SolveResponse = {
     tiles: Record<string, string[]>;
     terminal_colors?: Record<string, string>;
     schema_version?: number;
+    topology?: {
+      template?: { id?: string; parameters?: Record<string, unknown> } | null;
+      data?: Record<string, unknown>;
+    };
     display?: Record<string, unknown>;
     catalog?: Record<string, unknown>;
   };
@@ -200,6 +204,27 @@ export type ImageImportRecord = ImageImportEntry & {
     solve_ms?: number | null;
     solver?: string | null;
     error?: string | null;
+  }>;
+};
+
+export type ImageJob = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "interrupted";
+  created_at: number;
+  updated_at: number;
+  total: number;
+  completed: number;
+  failed: number;
+  items: Array<{
+    index: number;
+    original_name: string;
+    status: "queued" | "processed" | "failed";
+    import_id?: string;
+    generated_name?: string;
+    solve_status?: "solved" | "failed";
+    solve_ms?: number;
+    solve_error?: string;
+    error?: string;
   }>;
 };
 
@@ -352,9 +377,29 @@ export async function deletePuzzle(source: string, name: string): Promise<{ dele
   return res.json() as Promise<{ deleted: boolean; path: string }>;
 }
 
-export async function listImageImports(limit = 50): Promise<ImageImportEntry[]> {
-  const data = await apiRequest<{ entries: ImageImportEntry[] }>(`/image-imports?limit=${limit}`);
-  return data.entries;
+export type ImageImportPage = {
+  entries: ImageImportEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+};
+
+export async function listImageImports(params: {
+  limit?: number;
+  offset?: number;
+  status?: "all" | "processed" | "solved" | "unknown" | "failed";
+  search?: string;
+  order?: "newest" | "oldest";
+} = {}): Promise<ImageImportPage> {
+  const query = new URLSearchParams({
+    limit: String(params.limit ?? 50),
+    offset: String(params.offset ?? 0),
+    status: params.status ?? "all",
+    search: params.search ?? "",
+    order: params.order ?? "newest"
+  });
+  return apiRequest<ImageImportPage>(`/image-imports?${query.toString()}`);
 }
 
 export async function archiveImageImportFailure(params: {
@@ -367,6 +412,39 @@ export async function archiveImageImportFailure(params: {
   form.append("error", params.error);
   form.append("stage", params.stage ?? "processing");
   return imageRequest<ImageImportEntry>("/image-imports/failed", form);
+}
+
+export async function createImageJob(
+  files: File[],
+  options: Record<string, unknown>
+): Promise<ImageJob> {
+  const form = new FormData();
+  files.forEach((file) => form.append("files", file));
+  form.append("options_json", JSON.stringify(options));
+  return imageRequest<ImageJob>("/image/jobs", form);
+}
+
+export async function getImageJob(jobId: string): Promise<ImageJob> {
+  return apiRequest<ImageJob>(`/image/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function fetchImageJobItemFile(
+  jobId: string,
+  itemIndex: number,
+  originalName: string
+): Promise<File> {
+  const path = `/image/jobs/${encodeURIComponent(jobId)}/items/${itemIndex}/image`;
+  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    const message = (detail as { detail?: string }).detail ?? response.statusText;
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  return new File([blob], originalName, {
+    type: blob.type || "application/octet-stream",
+    lastModified: Date.now()
+  });
 }
 
 export async function getImageImport(importId: string): Promise<ImageImportRecord> {

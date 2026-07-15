@@ -122,7 +122,7 @@ process; Z3 remains the fallback (`FLOW_DISABLE_PYSAT=1` forces it).
 flowchart TB
     IN[Puzzle] --> SV["Structural validation<br/>terminal pairs, connectivity,<br/>bipartite endpoint balance, ..."]
     SV -->|invalid| ERR[PuzzleValidationError<br/>stable error codes]
-    SV --> PRE["Preprocessing<br/>per-color reachability pruning<br/>(foreign terminals removed)"]
+    SV --> PRE["Cached topology preprocessing<br/>reachability + bridge/articulation<br/>separator-capacity pruning"]
     PRE --> ENC["Edge model<br/>x(v,c): channel v has color c<br/>y(e,c): edge e selected by color c<br/>degree 1 at terminals, 2 inside,<br/>bridge channel exclusivity,<br/>full coverage per physical cell"]
     ENC --> ENGINE{python-sat<br/>available?}
     ENGINE -->|yes| SAT["CNF + native SAT engine<br/>(worker process)"]
@@ -141,18 +141,21 @@ Key properties:
 
 - **One deadline** covers validation, preprocessing, model build, every
   incremental check, extraction, and uniqueness.
-- Degree constraints alone admit closed loops, so connectivity is enforced
-  **lazily**: each candidate is component-checked and stray cycles are removed
-  with exact cut-set clauses. This keeps the initial model far smaller than an
-  all-pairs reachability encoding.
+- Degree constraints alone admit closed loops, so each candidate is still
+  component-checked and stray cycles are removed with exact cut-set clauses.
+  Bridge/articulation preprocessing normally prevents those candidates on the
+  representative corpus while lazy cuts remain the correctness backstop.
+- Topology-only incident maps and separators are cached by a deterministic
+  SHA-256 hash, allowing batches with different terminals to reuse the work.
 - Every returned solution is re-verified by an independent validator before it
   leaves the core — encoding or extraction bugs surface as errors, not wrong
   answers.
 - Renderers must draw `path_edges`, never "all edges whose endpoints share a
   color".
 
-Current single-node baseline (`scripts/benchmark_solver.py`): 5x5 ≈ 42 ms,
-8x8 ≈ 16 ms, 10x10 ≈ 43 ms, 15x15 with 16 colors ≈ 405 ms median.
+Current single-node development medians (`scripts/benchmark_solver.py`) are
+approximately 7.5 ms (5×5), 54.7 ms (8×8), 129.8 ms (10×10), and 866.2 ms
+(15×15). CI compares ratios against the committed machine-specific baseline.
 
 ## Screenshot detection pipeline
 
@@ -237,15 +240,18 @@ thumbnails, batch results, and the archive's inline solutions:
 
 ```mermaid
 flowchart TB
-    G[graph payload] --> LAT{"all nodes on integer lattice<br/>AND all non-warp edges are<br/>unit axis-aligned steps?"}
-    LAT -->|yes| GAME["Game-style board<br/>cell squares, fat rounded pipes,<br/>tinted covered cells, big terminals,<br/>solid full-length walls,<br/>warp stubs at the border,<br/>bridge cross glyphs"]
-    LAT -->|no| FALL["Node/edge fallback<br/>hex, circle, free-form regions"]
+    G[graph payload] --> HEX{"declared/inferred<br/>odd-r hex topology?"}
+    HEX -->|yes| HGAME["Game-style hex board<br/>hex cells, pipes, tints, terminals"]
+    HEX -->|no| LAT{"integer lattice +<br/>unit axis steps?"}
+    LAT -->|yes| GAME["Game-style square board<br/>cells, pipes, walls, warp stubs,<br/>bridge cross glyphs"]
+    LAT -->|no| FALL["Node/edge fallback<br/>circle and free-form regions"]
+    HGAME --> SOLQ
     GAME & FALL --> SOLQ{solution present?}
     SOLQ -->|yes| OVER["overlay path_edges + node_color"]
 ```
 
-Graph-theoretic views (static graph, Plotly 2D/3D) remain available as
-advanced modes in the solve view.
+A lightweight static graph view remains available beside the game board. The
+unused Plotly 2D/3D dependency was removed from the production bundle.
 
 ## Storage and regression safety
 
@@ -257,18 +263,21 @@ puzzles/                       curated library (.flow / .json), organized kind/s
 puzzles/templates/crop/        saved crop templates (+ preview.png)
 data/image_imports/<id>/       source.<ext>  original screenshot bytes (immutable)
                                record.json   detection result, solve result, runs[]
+data/image_jobs/<id>/          durable batch sources + recoverable job.json
 tests/golden/puzzle_baseline.json   golden outcomes for every library puzzle
+tests/golden/benchmark_baseline.json stored performance/model-size corpus
 ```
 
 `scripts/validate_puzzles.py` re-solves every library puzzle (and with
 `--include-imports` every archived generation), re-verifies each solution
 independently, and diffs stable outcomes against the golden baseline —
-regressions exit nonzero. `scripts/benchmark_solver.py` tracks solve-time
-drift. Together they are the release gate:
+regressions exit nonzero. `scripts/benchmark_solver.py` checks solve-time and
+model-size drift. Together with the production frontend build they are the
+release gate:
 
 ```mermaid
 flowchart LR
-    CHANGE[solver / parser / pipeline change] --> T["pytest tests/ (116 tests)"]
+    CHANGE[solver / parser / pipeline change] --> T["pytest tests/"]
     T --> VP["validate_puzzles.py<br/>baseline diff, exit 2 on regression"]
     VP --> BM["benchmark_solver.py<br/>median / p95 solve times"]
     BM --> SHIP[ship]
@@ -278,12 +287,8 @@ flowchart LR
 
 | Layer | Mechanism |
 | --- | --- |
-| Frontend batch import | bounded pool, 3 screenshots in flight |
+| Frontend batch import | durable `/image/jobs`; browser polling survives reconnects |
 | FastAPI sync endpoints | threadpool workers |
 | SAT solving | separate worker process (python-sat) or GIL-released ctypes (Z3) |
-| Image ops | OpenCV/PIL/NumPy release the GIL internally |
-| Archive record updates | atomic tmp-file rename + per-import `threading.Lock` |
-
-The per-import locks are in-process; moving to multiple uvicorn workers
-requires cross-process file locking first (tracked in
-[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)).
+| Image ops | node-wide advisory slots, default 3; admitted work is offloaded from the event loop |
+| Archive record updates | atomic rename + in-process lock + cross-process advisory file lock |

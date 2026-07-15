@@ -252,7 +252,73 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Write complete machine-readable results to this path",
     )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        help="Compare median time and model size with a stored benchmark JSON",
+    )
+    parser.add_argument(
+        "--max-drift",
+        type=float,
+        default=2.0,
+        help="Maximum allowed median/model-size multiplier versus --baseline (default: 2.0)",
+    )
     return parser
+
+
+def _model_size(record: dict[str, Any]) -> int | None:
+    stats = record.get("solver_stats") if isinstance(record.get("solver_stats"), dict) else {}
+    node_variables = stats.get("node_color_vars")
+    edge_variables = stats.get("edge_color_vars")
+    if isinstance(node_variables, int) and isinstance(edge_variables, int):
+        return node_variables + edge_variables
+    return None
+
+
+def _baseline_regressions(
+    records: list[dict[str, Any]],
+    baseline_path: Path,
+    *,
+    max_drift: float,
+) -> list[str]:
+    if not baseline_path.is_absolute():
+        baseline_path = REPOSITORY_ROOT / baseline_path
+    if not baseline_path.is_file():
+        return [f"Benchmark baseline does not exist: {_display_path(baseline_path)}"]
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    expected = {
+        str(item.get("puzzle")): item
+        for item in baseline.get("records", [])
+        if isinstance(item, dict) and item.get("puzzle")
+    }
+    regressions: list[str] = []
+    for record in records:
+        puzzle = str(record.get("puzzle"))
+        previous = expected.get(puzzle)
+        if previous is None:
+            regressions.append(f"{puzzle}: missing from benchmark baseline")
+            continue
+        if record.get("status") != previous.get("status"):
+            regressions.append(
+                f"{puzzle}: status changed from {previous.get('status')} to {record.get('status')}"
+            )
+            continue
+        current_median = record.get("wall", {}).get("median_ms")
+        baseline_median = previous.get("wall", {}).get("median_ms")
+        if isinstance(current_median, (int, float)) and isinstance(baseline_median, (int, float)):
+            if current_median > baseline_median * max_drift:
+                regressions.append(
+                    f"{puzzle}: median {current_median:.1f}ms exceeds "
+                    f"{max_drift:.2f}x baseline {baseline_median:.1f}ms"
+                )
+        current_size = _model_size(record)
+        baseline_size = _model_size(previous)
+        if current_size is not None and baseline_size is not None and current_size > baseline_size * max_drift:
+            regressions.append(
+                f"{puzzle}: model size {current_size} exceeds "
+                f"{max_drift:.2f}x baseline {baseline_size}"
+            )
+    return regressions
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -263,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--warmup cannot be negative")
     if args.timeout_ms <= 0:
         raise SystemExit("--timeout-ms must be positive")
+    if args.max_drift <= 1.0:
+        raise SystemExit("--max-drift must be greater than 1")
 
     inputs = args.puzzles or list(DEFAULT_CORPUS)
     paths = _expand_inputs(inputs)
@@ -299,6 +367,18 @@ def main(argv: list[str] | None = None) -> int:
         output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"Wrote JSON results: {_display_path(output)}")
 
+    regressions: list[str] = []
+    if args.baseline is not None:
+        regressions = _baseline_regressions(records, args.baseline, max_drift=args.max_drift)
+        if regressions:
+            print(f"{len(regressions)} benchmark regression(s):", file=sys.stderr)
+            for regression in regressions:
+                print(f"  ! {regression}", file=sys.stderr)
+        else:
+            print("Benchmark baseline check passed.")
+
+    if regressions:
+        return 2
     return 0 if all(record["status"] == "solved" for record in records) else 1
 
 

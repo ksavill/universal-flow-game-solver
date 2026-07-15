@@ -585,6 +585,100 @@ def build_figure8_topology() -> TopologySpec:
     )
 
 
+# Region centroids and planar-dual edges verified from the second linked-loop
+# Shapes reference level (IMG_3246). Region ids intentionally retain detector
+# gaps: they make comparisons with the archived level exact and reviewable.
+_LINKED_LOOPS_2X2_NODES: Tuple[Tuple[int, float, float], ...] = (
+    (0, 620.5, -115.0), (1, 481.0, -217.0), (2, 760.0, -217.0),
+    (3, 620.5, -303.5), (4, 900.5, -450.0), (5, 340.5, -450.5),
+    (6, 491.0, -448.5), (7, 750.5, -448.5), (9, 448.5, -647.5),
+    (10, 792.5, -648.0), (11, 282.0, -706.5), (12, 959.0, -706.5),
+    (13, 620.5, -779.5), (14, 460.0, -810.5), (15, 781.0, -811.0),
+    (16, 312.5, -878.0), (17, 928.5, -878.0), (18, 163.5, -994.0),
+    (19, 1077.5, -994.5), (21, 512.5, -967.5), (22, 728.5, -967.5),
+    (23, 386.5, -1030.5), (24, 854.5, -1030.5), (25, 620.5, -1083.5),
+    (28, 487.5, -1176.0), (29, 753.5, -1176.0), (30, 107.5, -1190.5),
+    (31, 1133.5, -1190.5), (32, 324.5, -1232.5), (33, 916.5, -1232.5),
+    (34, 621.0, -1292.0), (35, 1130.0, -1355.5), (36, 111.0, -1355.5),
+    (37, 398.5, -1372.5), (38, 842.5, -1372.5),
+)
+_LINKED_LOOPS_2X2_EDGES: Tuple[Tuple[int, int], ...] = (
+    (0, 1), (0, 2), (1, 3), (1, 5), (2, 3), (2, 4), (3, 6), (3, 7),
+    (4, 7), (4, 12), (5, 6), (5, 11), (6, 9), (7, 10), (9, 11),
+    (9, 14), (10, 12), (10, 15), (11, 16), (12, 17), (13, 14),
+    (13, 15), (14, 16), (14, 21), (15, 17), (15, 22), (16, 18),
+    (16, 23), (17, 19), (17, 24), (18, 30), (19, 31), (21, 23),
+    (21, 25), (22, 24), (22, 25), (23, 28), (24, 29), (25, 28),
+    (25, 29), (28, 32), (28, 34), (29, 33), (29, 34), (30, 32),
+    (30, 36), (31, 33), (31, 35), (32, 37), (33, 38), (34, 37),
+    (34, 38), (35, 38), (36, 37),
+)
+
+
+def build_linked_loops_2x2_topology() -> TopologySpec:
+    """Build the verified 35-cell linked-loop Shapes board from IMG_3246."""
+
+    center_x = 620.5
+    center_y = -780.0
+    scale = 200.0
+    nodes = [
+        TopologyNode(
+            id=f"loops2:region:{index:03d}",
+            pos=((x - center_x) / scale, (y - center_y) / scale, 0.0),
+            data={"source_region": index},
+        )
+        for index, x, y in _LINKED_LOOPS_2X2_NODES
+    ]
+    edges = [
+        (f"loops2:region:{left:03d}", f"loops2:region:{right:03d}")
+        for left, right in _LINKED_LOOPS_2X2_EDGES
+    ]
+    return _make_spec(
+        template="linked_loops_2x2",
+        family="linked_tracks",
+        nodes=nodes,
+        edges=edges,
+        parameters={"variant": "2x2", "source_fixture": "IMG_3246.PNG"},
+    )
+
+
+def build_selective_warp_grid_topology(
+    *,
+    width: int = 9,
+    height: int = 9,
+    horizontal_rows: Tuple[int, ...] = (1, 2, 3, 5, 6, 7),
+    vertical_columns: Tuple[int, ...] = (1, 2, 3, 5, 6, 7),
+) -> TopologySpec:
+    """Grid plus the selective paired boundary ports verified in IMG_4064/4065."""
+
+    base = build_grid_topology(width=width, height=height)
+    rows = tuple(sorted({int(value) for value in horizontal_rows}))
+    columns = tuple(sorted({int(value) for value in vertical_columns}))
+    if any(value < 0 or value >= height for value in rows):
+        raise ValueError("Horizontal warp row is outside the grid")
+    if any(value < 0 or value >= width for value in columns):
+        raise ValueError("Vertical warp column is outside the grid")
+    warp_edges = [
+        (f"0,{row}", f"{width - 1},{row}") for row in rows
+    ] + [
+        (f"{column},0", f"{column},{height - 1}") for column in columns
+    ]
+    return _make_spec(
+        template="selective_warp_grid",
+        family="warped_grid",
+        nodes=base.nodes,
+        edges=(*base.edges, *warp_edges),
+        parameters={
+            "width": int(width),
+            "height": int(height),
+            "horizontal_rows": rows,
+            "vertical_columns": columns,
+            "warp_edges": tuple(warp_edges),
+            "source_fixtures": ("IMG_4064", "IMG_4065"),
+        },
+    )
+
+
 _TEMPLATES: Tuple[TopologyTemplate, ...] = (
     TopologyTemplate(
         name="grid",
@@ -627,6 +721,20 @@ _TEMPLATES: Tuple[TopologyTemplate, ...] = (
         builder=build_figure8_topology,
         aliases=("figure8_track", "linked_loop_1x2"),
     ),
+    TopologyTemplate(
+        name="linked_loops_2x2",
+        family="linked_tracks",
+        description="Verified 35-cell linked-loop Shapes board",
+        builder=build_linked_loops_2x2_topology,
+        aliases=("linked_loop_2x2", "img_3246"),
+    ),
+    TopologyTemplate(
+        name="selective_warp_grid",
+        family="warped_grid",
+        description="Grid with declared paired boundary warp ports",
+        builder=build_selective_warp_grid_topology,
+        aliases=("warps_9x9", "img_4064", "img_4065"),
+    ),
 )
 
 TOPOLOGY_REGISTRY: Mapping[str, TopologyTemplate] = {
@@ -666,8 +774,10 @@ __all__ = [
     "build_figure8_topology",
     "build_grid_topology",
     "build_hex_topology",
+    "build_linked_loops_2x2_topology",
     "build_radial_star_topology",
     "build_ring_topology",
+    "build_selective_warp_grid_topology",
     "build_topology",
     "get_topology_template",
     "topology_names",

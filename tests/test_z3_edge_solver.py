@@ -152,6 +152,42 @@ A+A
         self.assertEqual(sum(len(path) for path in result.paths.values()), 64)
         self.assertLess(result.stats["total_ms"], 5_000)
 
+    def test_topology_preprocessing_is_reused_by_hash(self) -> None:
+        puzzle = graph_puzzle(
+            ["cache-s", "cache-a", "cache-b", "cache-t"],
+            [
+                ("cache-s", "cache-a"),
+                ("cache-a", "cache-t"),
+                ("cache-s", "cache-b"),
+                ("cache-b", "cache-t"),
+            ],
+            {"A": ("cache-s", "cache-t")},
+            fill=False,
+        )
+
+        first = solve_with_z3(puzzle, timeout_ms=2_000)
+        second = solve_with_z3(puzzle, timeout_ms=2_000)
+
+        self.assertEqual(first.stats["topology_schema_hash"], second.stats["topology_schema_hash"])
+        self.assertEqual(len(second.stats["topology_schema_hash"]), 64)
+        self.assertTrue(second.stats["topology_cache_hit"])
+
+    def test_articulation_capacity_rejects_two_required_colors(self) -> None:
+        puzzle = graph_puzzle(
+            ["a-left", "b-left", "separator", "a-right", "b-right"],
+            [
+                ("a-left", "separator"),
+                ("b-left", "separator"),
+                ("separator", "a-right"),
+                ("separator", "b-right"),
+            ],
+            {"A": ("a-left", "a-right"), "B": ("b-left", "b-right")},
+            fill=False,
+        )
+
+        with self.assertRaisesRegex(PuzzleUnsolvableError, "required by both"):
+            solve_with_z3(puzzle, timeout_ms=2_000)
+
 
 class Z3EdgeSolverUniquenessTests(unittest.TestCase):
     def test_two_diamond_routes_are_non_unique(self) -> None:
@@ -186,7 +222,10 @@ class Z3EdgeSolverUniquenessTests(unittest.TestCase):
         result = check_uniqueness_with_z3(puzzle, timeout_ms=2_000)
 
         self.assertTrue(result.unique)
-        self.assertGreaterEqual(result.stats["connectivity_cuts"], 1)
+        self.assertGreaterEqual(
+            result.stats["connectivity_cuts"] + result.stats["bridge_pruned_assignments"],
+            1,
+        )
         self.assertEqual(result.paths["A"], ["s", "t"])
 
     def test_regular_solve_leaves_uniqueness_unchecked(self) -> None:

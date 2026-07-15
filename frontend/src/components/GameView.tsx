@@ -160,6 +160,7 @@ export function GameView({
         edges: [] as RenderEdge[],
         barriers: [] as RenderBarrier[],
         gridMode: false,
+        hexMode: false,
         width: compact ? 220 : 320,
         height: compact ? 140 : height,
         scale: 24
@@ -174,6 +175,25 @@ export function GameView({
     const spanY = Math.max(0.001, maxY - minY);
 
     const onLattice = baseNodes.every((node) => nearInteger(node.x) && nearInteger(node.y));
+    const explicitHex = graph.topology?.template?.id === "hex_grid";
+    const inferredHex =
+      baseNodes.length > 1 &&
+      baseNodes.some((node) => {
+        const match = node.id.match(/^(-?\d+),(-?\d+)$/);
+        return Boolean(match && Math.abs(Number(match[2])) % 2 === 1);
+      }) &&
+      baseNodes.every((node) => {
+        const match = node.id.match(/^(-?\d+),(-?\d+)$/);
+        if (!match) return false;
+        const column = Number(match[1]);
+        const row = Number(match[2]);
+        return (
+          Math.abs(node.x - (column + (Math.abs(row) % 2 ? 0.5 : 0))) < LATTICE_EPS &&
+          Math.abs(node.y + row * (Math.sqrt(3) / 2)) < LATTICE_EPS
+        );
+      });
+    const hexMode = explicitHex || inferredHex;
+    const boardLayout = onLattice || hexMode;
 
     const padding = compact ? 12 : 18;
     const maxWidth = compact ? 320 : 700;
@@ -184,18 +204,18 @@ export function GameView({
     // squares fit inside the canvas (node coords are cell centers).
     const gridSpanX = spanX + 1;
     const gridSpanY = spanY + 1;
-    const fitScale = onLattice
+    const fitScale = boardLayout
       ? Math.min(availableHeight / gridSpanY, availableWidth / gridSpanX)
       : Math.min(availableHeight / spanY, availableWidth / spanX);
     // Free-form imports use screenshot-pixel coordinates rather than grid units.
     // Let those graphs scale below a normal cell size so the canvas never grows
     // thousands of pixels tall. An explicit cell size is also capped to the fit.
     const scale = clamp(Math.min(cellSize ?? fitScale, fitScale), 0.001, 96);
-    const contentWidth = (onLattice ? gridSpanX : spanX) * scale;
-    const contentHeight = (onLattice ? gridSpanY : spanY) * scale;
+    const contentWidth = (boardLayout ? gridSpanX : spanX) * scale;
+    const contentHeight = (boardLayout ? gridSpanY : spanY) * scale;
     const width = Math.max(140, Math.min(maxWidth, contentWidth + padding * 2));
-    const extraX = onLattice ? scale / 2 : 0;
-    const extraY = onLattice ? scale / 2 : 0;
+    const extraX = boardLayout ? scale / 2 : 0;
+    const extraY = boardLayout ? scale / 2 : 0;
     const offsetX = (width - contentWidth) / 2 + extraX;
     const offsetY = (viewHeight - contentHeight) / 2 + extraY;
 
@@ -290,9 +310,9 @@ export function GameView({
       };
     });
 
-    // Render as a Flow-style board only when every cell sits on an integer
-    // lattice and every non-warp connection is a unit-length axis step —
-    // hex, circle, and free-form graphs keep the node/edge fallback.
+    // Square boards require an integer lattice and unit axis steps. Hex boards
+    // use their declared/inferred odd-r layout; circle and free-form graphs
+    // retain the node/edge fallback.
     const axisAligned = edges.every((edge) => {
       if (edge.warpLike) {
         return true;
@@ -304,12 +324,13 @@ export function GameView({
         (Math.abs(dy - 1) < LATTICE_EPS && dx < LATTICE_EPS)
       );
     });
-    const gridMode = onLattice && axisAligned && edges.length > 0;
+    const gridMode = !hexMode && onLattice && axisAligned && edges.length > 0;
+    const gameBoardMode = gridMode || hexMode;
 
     const tileMap = new Map<string, RenderTile>();
-    if (gridMode) {
+    if (gameBoardMode) {
       for (const node of nodes) {
-        const key = `${Math.round(node.x)}:${Math.round(node.y)}`;
+        const key = hexMode ? node.id : `${Math.round(node.x)}:${Math.round(node.y)}`;
         const isBridge = node.kind === "bridge_h" || node.kind === "bridge_v";
         const existing = tileMap.get(key);
         if (existing) {
@@ -333,6 +354,7 @@ export function GameView({
       bridges,
       barriers,
       gridMode,
+      hexMode,
       width,
       height: viewHeight,
       scale
@@ -349,23 +371,23 @@ export function GameView({
     adjacencyKinds
   ]);
 
-  const gridMode = rendered.gridMode;
+  const boardMode = rendered.gridMode || rendered.hexMode;
   const nodeRadius = clamp(rendered.scale * 0.12, compact ? 2.5 : 3, compact ? 6 : 9);
-  const terminalRadius = gridMode
+  const terminalRadius = boardMode
     ? clamp(rendered.scale * 0.32, compact ? 4 : 6, 30)
     : nodeRadius * 1.55;
   const baseEdgeWidth = clamp(rendered.scale * 0.06, 1, compact ? 1.8 : 2.2);
-  const solutionEdgeWidth = gridMode
+  const solutionEdgeWidth = boardMode
     ? clamp(rendered.scale * 0.3, compact ? 3.5 : 5, 26)
     : clamp(rendered.scale * 0.2, compact ? 2.5 : 3.2, compact ? 5 : 8);
   const warpStubLength = clamp(rendered.scale * 0.34, compact ? 6 : 8, compact ? 8 : 13);
   const warpPortalRadius = clamp(rendered.scale * 0.075, compact ? 2.2 : 2.8, compact ? 3.2 : 4.2);
   // Walls span the full shared cell boundary so they read as solid walls, the
   // way the game draws them; the fallback view keeps a shorter tick.
-  const barrierHalfLength = gridMode
+  const barrierHalfLength = boardMode
     ? rendered.scale / 2
     : clamp(rendered.scale * 0.24, compact ? 4 : 5, compact ? 7 : 10);
-  const barrierWidth = gridMode
+  const barrierWidth = boardMode
     ? clamp(rendered.scale * 0.13, 2.5, 8)
     : clamp(rendered.scale * 0.09, compact ? 2 : 2.5, compact ? 3 : 4);
 
@@ -382,11 +404,27 @@ export function GameView({
           minWidth: rendered.width
         }}
       >
-        {gridMode &&
+        {boardMode &&
           rendered.tiles.map((tile) => {
             const half = rendered.scale / 2;
             const highlight =
               showSolution && tile.solutionColor ? colorToHex[tile.solutionColor] ?? null : null;
+            if (rendered.hexMode) {
+              const radius = rendered.scale / Math.sqrt(3);
+              const points = Array.from({ length: 6 }, (_value, index) => {
+                const angle = (Math.PI / 180) * (30 + index * 60);
+                return `${tile.sx + radius * Math.cos(angle)},${tile.sy + radius * Math.sin(angle)}`;
+              }).join(" ");
+              return (
+                <polygon
+                  key={`tile-${tile.key}`}
+                  points={points}
+                  fill={highlight ? `${highlight}2b` : "rgba(255,255,255,0.02)"}
+                  stroke="rgba(255,255,255,0.16)"
+                  strokeWidth={1}
+                />
+              );
+            }
             return (
               <rect
                 key={`tile-${tile.key}`}
@@ -403,7 +441,7 @@ export function GameView({
 
         {rendered.edges.map((edge) => {
           if (!edge.warpLike) {
-            if (gridMode) {
+            if (boardMode) {
               return null;
             }
             return (
@@ -581,16 +619,16 @@ export function GameView({
                 y2={barrier.cy + offsetY}
                 stroke="rgba(15,15,26,0.98)"
                 strokeWidth={barrierWidth + 3}
-                strokeLinecap={gridMode ? "butt" : "round"}
+                strokeLinecap={boardMode ? "butt" : "round"}
               />
               <line
                 x1={barrier.cx - offsetX}
                 y1={barrier.cy - offsetY}
                 x2={barrier.cx + offsetX}
                 y2={barrier.cy + offsetY}
-                stroke={gridMode ? "#e8ecf4" : "#ff9dad"}
+                stroke={boardMode ? "#e8ecf4" : "#ff9dad"}
                 strokeWidth={barrierWidth}
-                strokeLinecap={gridMode ? "butt" : "round"}
+                strokeLinecap={boardMode ? "butt" : "round"}
               />
             </g>
           );
@@ -602,7 +640,7 @@ export function GameView({
           }
           const terminal = node.terminalColor ? colorToHex[node.terminalColor] ?? "#ff5252" : null;
           const solved = node.solutionColor ? colorToHex[node.solutionColor] ?? "#ff5252" : null;
-          if (gridMode && !terminal) {
+          if (boardMode && !terminal) {
             // The game leaves non-terminal cells empty; pipes and cell tints
             // already show solved coverage.
             return null;

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   AppBar,
   Box,
@@ -43,6 +43,29 @@ A...B
 B...A
 `;
 
+const SOLVE_DRAFT_KEY = "flow-solver.solve-draft.v1";
+
+function clearSolveDraft() {
+  try {
+    window.localStorage.removeItem(SOLVE_DRAFT_KEY);
+  } catch {
+    // Storage can be unavailable in private/restricted browser contexts.
+  }
+}
+
+function loadSolveDraft(): { name: string; text: string; tab: "import" | "new" | "library" } | null {
+  try {
+    const raw = window.localStorage.getItem(SOLVE_DRAFT_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as { name?: unknown; text?: unknown; tab?: unknown };
+    if (typeof value.name !== "string" || typeof value.text !== "string" || !value.text.trim()) return null;
+    const tab = value.tab === "new" || value.tab === "library" ? value.tab : "import";
+    return { name: value.name, text: value.text, tab };
+  } catch {
+    return null;
+  }
+}
+
 function ViewFallback() {
   return (
     <Box sx={{ py: 8, display: "flex", justifyContent: "center" }}>
@@ -53,10 +76,11 @@ function ViewFallback() {
 
 export default function App() {
   type PrimaryView = "import" | "new" | "library";
-  const [tab, setTab] = useState<PrimaryView>("import");
-  const [view, setView] = useState<PrimaryView | "solve" | "docs">("import");
-  const [puzzleName, setPuzzleName] = useState("puzzle.flow");
-  const [puzzleText, setPuzzleText] = useState(DEFAULT_TEXT);
+  const [restoredDraft] = useState(loadSolveDraft);
+  const [tab, setTab] = useState<PrimaryView>(restoredDraft?.tab ?? "import");
+  const [view, setView] = useState<PrimaryView | "solve" | "docs">(restoredDraft ? "solve" : "import");
+  const [puzzleName, setPuzzleName] = useState(restoredDraft?.name ?? "puzzle.flow");
+  const [puzzleText, setPuzzleText] = useState(restoredDraft?.text ?? DEFAULT_TEXT);
   const [solveRequestId, setSolveRequestId] = useState(0);
   const [reprocessRequest, setReprocessRequest] = useState<{
     token: number;
@@ -64,6 +88,18 @@ export default function App() {
   } | null>(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+
+  useEffect(() => {
+    if (view !== "solve") return;
+    try {
+      window.localStorage.setItem(
+        SOLVE_DRAFT_KEY,
+        JSON.stringify({ name: puzzleName, text: puzzleText, tab, savedAt: Date.now() })
+      );
+    } catch {
+      // Storage can be unavailable in private/restricted browser contexts.
+    }
+  }, [puzzleName, puzzleText, tab, view]);
 
   const handleLoadPuzzle = (name: string, text: string, opts?: { autoSolve?: boolean }) => {
     setPuzzleName(name);
@@ -75,6 +111,7 @@ export default function App() {
   };
 
   const handleTabChange = (_: unknown, value: PrimaryView) => {
+    if (view === "solve") clearSolveDraft();
     setTab(value);
     setView(value);
   };
@@ -156,7 +193,10 @@ export default function App() {
             aria-label="Documentation"
             color={view === "docs" ? "primary" : "inherit"}
             startIcon={<MenuBookOutlined />}
-            onClick={() => setView("docs")}
+            onClick={() => {
+              if (view === "solve") clearSolveDraft();
+              setView("docs");
+            }}
             sx={{ ml: 0.5, whiteSpace: "nowrap", flexShrink: 0 }}
           >
             Docs
@@ -198,7 +238,10 @@ export default function App() {
               onPuzzleNameChange={setPuzzleName}
               onPuzzleTextChange={setPuzzleText}
               autoSolveToken={solveRequestId}
-              onBack={() => setView(tab)}
+              onBack={() => {
+                clearSolveDraft();
+                setView(tab);
+              }}
               backLabel={`Back to ${viewLabel[tab]}`}
             />
           )}
