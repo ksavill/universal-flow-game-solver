@@ -53,10 +53,10 @@ and restore checks.
 
 ## Using the UI
 
-The React UI centers on three destinations: **Screenshot**, **Create**, and
-**Library**. Single-image and durable background batch import are modes of the
-Screenshot page. On phones these stay reachable from a persistent bottom
-navigation bar.
+The React UI centers on four destinations: **Screenshot**, **Create**,
+**Library**, and **Flagged**. Single-image and durable background batch import
+are modes of the Screenshot page. On phones these stay reachable from a
+persistent bottom navigation bar.
 
 ### Import Screenshot
 
@@ -64,7 +64,14 @@ This is the default starting point. Choose a screenshot from Photos or Files, cr
 
 The screenshot may be portrait, landscape, square, letterboxed, or ultrawide and may use any practical resolution. Auto-crop and the detectors normalize against the recovered puzzle bounds, provided the complete board remains visible and has enough pixels to distinguish its cell boundaries.
 
-Every completed or failed processing run is archived under `data/image_imports/`. The **Uploaded screenshots** section in Library can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
+Every completed or failed processing run is archived under `data/image_imports/`. The **Uploaded screenshots** section in Library can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. A rebuildable SQLite summary index keeps archive filtering and pagination fast while `record.json` remains authoritative. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
+
+Any archived screenshot can be **flagged for review**, with an optional note,
+from the batch results, Uploaded screenshots, or its Solve View. Incomplete
+terminal detection and archived solve failures are flagged automatically. The
+dedicated **Flagged** destination shows the retained input image,
+processing/solve errors, completeness evidence, and stored solution together.
+Unflag an entry when follow-up is complete.
 
 ### New Puzzle Tab
 
@@ -90,9 +97,9 @@ Process multiple puzzle images at once:
 1. **Select images** — add one or more screenshots
 2. **Choose a crop template** — reusable presets for specific devices/screenshots
 3. **Configure the pipeline**:
-   - **OCR**: detect level name from the image
+   - **OCR**: detect the level name and advertised `flows: 0/N` count
    - **Grid**: auto-detect grid dimensions
-   - **Terminals**: auto-detect colored dot positions and preserve their sampled screenshot colors in the builder, solver, archive, and saved puzzle
+   - **Terminals**: auto-detect colored and high-contrast neutral/gray dot positions, preserve their sampled screenshot colors, and compare detected pairs with the OCR flow count
 4. **Start background batch** — persists sources and work under
    `data/image_jobs/`; the browser may disconnect and resume status later
 5. **Review and save** — edit names, check for duplicates, and save to library
@@ -209,16 +216,20 @@ The UI can extract puzzles from screenshots:
 1. **Upload an image** (e.g., a Flow Free screenshot)
 2. **Crop** to the puzzle area (or use auto-crop / saved templates)
 3. **Run the pipeline**:
-   - **OCR** detects level names/numbers (requires Tesseract)
+   - **OCR** detects level names/numbers and the advertised flow count (requires Tesseract)
    - **Grid detection** finds row/column lines
-   - **Terminal detection** locates colored dots and assigns letters
+   - **Terminal detection** locates colored and neutral/gray dots, retains near-miss diagnostics, assigns letters, and reports pair completeness
    - **Warp detection** recovers the real lattice inside the one-cell shadow border, ignores duplicated shadow terminals, and emits only open opposite-edge gates
    - **Region topology** derives cells and adjacencies directly from non-rectangular shaped boards
    - **Bridge detection** recognizes legacy crosses and the official double-rail/double-arch glyph, then creates independent horizontal and vertical channels
 4. **Review the result** and open it directly in the solver, or apply it to the manual builder for corrections
 5. **Save** the generated puzzle to the searchable library
 
-Completed and failed processing attempts retain their source screenshot in the import archive. Failed entries include the pipeline stage and error so future detector improvements can be tested against the original sample.
+Completed and failed processing attempts retain their source screenshot in the
+import archive. Failed entries include the pipeline stage and error so future
+detector improvements can be tested against the original sample. When OCR
+provides an expected flow count, an incomplete exact generated artifact is
+flagged and cannot be recorded as solved until it is reviewed or corrected.
 
 ### OCR Setup (Optional)
 
@@ -370,10 +381,12 @@ Release-quality sample puzzles live under `puzzles/`, organized by geometry and 
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /image-imports?limit=100&offset=0` | Paginated samples; supports status/search/order filters |
+| `GET /image-imports?limit=100&offset=0` | Paginated samples; supports status/search/order and `flagged=true\|false` filters |
 | `GET /image-imports/{id}` | Read a sample, its latest result, and prior run summaries |
 | `GET /image-imports/{id}/image` | Read the retained source screenshot |
 | `POST /image-imports/{id}/failure` | Record an in-place reprocessing failure |
+| `POST /image-imports/{id}/flag` | Flag a sample for review; accepts an optional JSON `reason` |
+| `DELETE /image-imports/{id}/flag` | Clear a sample's review flag and note |
 | `POST /image-imports/bulk-delete` | Delete selected screenshot samples |
 | `DELETE /image-imports/{id}` | Delete one screenshot sample |
 
@@ -463,3 +476,20 @@ Highlights, each diagrammed in the architecture doc:
   library (and optionally the archive) against a golden baseline, and
   `scripts/benchmark_solver.py` fails CI on material solve-time or model-size
   drift.
+
+For source-image regression testing, `reference_screenshot_corpus/` is the
+persistent local set. It can hold up to 500 SHA-256-unique screenshots and
+balances selection across geometry, modifiers, grid sizes, and historical
+outcomes:
+
+```bash
+python scripts/build_reference_corpus.py --limit 500
+uv run --with httpx python scripts/replay_reference_corpus.py --jobs 3
+```
+
+The replay runs every selected screenshot through image generation and solving
+and reports generated-puzzle, terminal-completeness, solve-outcome, and
+failure-reason differences from its reviewed baseline. Recorded mode preserves
+the original processing choices; `--mode auto` also tests current automatic
+classification. This corpus is included in mutable-data backups but
+deliberately is not required by CI.

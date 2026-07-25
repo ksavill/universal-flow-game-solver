@@ -16,6 +16,7 @@ from flow_solver.solver import (
     solve_with_z3,
     validate_solution,
 )
+from flow_solver.solver.pysat_solver import _sat_worker
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +244,22 @@ class Z3EdgeSolverUniquenessTests(unittest.TestCase):
 
 
 class Z3EdgeSolverValidationAndDeadlineTests(unittest.TestCase):
+    def test_timed_out_pysat_worker_ignores_closed_result_pipe(self) -> None:
+        class ClosedPipe:
+            closed = False
+
+            def send(self, _payload: object) -> None:
+                raise BrokenPipeError("parent timed out")
+
+            def close(self) -> None:
+                self.closed = True
+
+        connection = ClosedPipe()
+
+        _sat_worker("glucose42", [[1]], [], connection)
+
+        self.assertTrue(connection.closed)
+
     def test_missing_optional_pysat_runtime_falls_back_to_z3(self) -> None:
         puzzle = graph_puzzle(
             ["s", "t"],

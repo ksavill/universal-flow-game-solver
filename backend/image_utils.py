@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 import math
+import re
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from PIL import Image, ImageStat
@@ -567,6 +568,45 @@ def _regular_line_spacing(values: List[float]) -> Optional[float]:
     return median_gap if consistent >= max(3, int(math.ceil(len(gaps) * 0.65))) else None
 
 
+def _extend_lattice_to_frame(
+    values: List[float],
+    *,
+    spacing: float,
+    extent: int,
+) -> List[float]:
+    """Recover board lines hidden near one edge using the other axis' pitch.
+
+    Long rectangular boards can have several consecutive horizontal or
+    vertical lines interrupted by terminals and bridge glyphs. Hough then
+    returns a perfectly regular suffix of the lattice. Only extend a regular
+    run and only while its inferred lines remain inside the cropped board.
+    """
+
+    positions = sorted(float(value) for value in values)
+    if len(positions) < 4 or spacing <= 1.0 or extent <= 0:
+        return positions
+    tolerance = max(2.5, spacing * 0.16)
+    if any(
+        abs((right - left) - spacing) > tolerance
+        for left, right in zip(positions, positions[1:])
+    ):
+        return positions
+
+    lower_limit = -spacing * 0.22
+    upper_limit = float(extent) + spacing * 0.22
+    while len(positions) < 33:
+        candidate = positions[0] - spacing
+        if candidate < lower_limit:
+            break
+        positions.insert(0, candidate)
+    while len(positions) < 33:
+        candidate = positions[-1] + spacing
+        if candidate > upper_limit:
+            break
+        positions.append(candidate)
+    return positions
+
+
 def _select_lattice_by_spacing(values: List[float], *, spacing: float) -> List[float]:
     """Select the strongest regular subset using cell pitch from the other axis."""
 
@@ -686,6 +726,31 @@ def _detect_grid_hough_positions(
 
     v_clusters = _infer_regular_lattice(v_clusters, extent=width)
     h_clusters = _infer_regular_lattice(h_clusters, extent=height)
+    # If one axis spans the crop and establishes a reliable square-cell pitch,
+    # use it to recover a regular run missing at the edge of the other axis.
+    # Requiring a near-full anchor axis prevents an internal lattice on a
+    # free-form/warp board from being expanded to the whole image.
+    v_spacing = _regular_line_spacing(v_clusters)
+    h_spacing = _regular_line_spacing(h_clusters)
+    x_coverage = (v_clusters[-1] - v_clusters[0]) / float(max(1, width))
+    y_coverage = (h_clusters[-1] - h_clusters[0]) / float(max(1, height))
+    if (
+        v_spacing is not None
+        and h_spacing is not None
+        and abs(v_spacing - h_spacing) <= max(3.0, v_spacing * 0.18)
+    ):
+        if x_coverage >= 0.90 and 0.50 <= y_coverage < 0.75:
+            h_clusters = _extend_lattice_to_frame(
+                h_clusters,
+                spacing=v_spacing,
+                extent=height,
+            )
+        elif y_coverage >= 0.90 and 0.50 <= x_coverage < 0.75:
+            v_clusters = _extend_lattice_to_frame(
+                v_clusters,
+                spacing=h_spacing,
+                extent=width,
+            )
     v_gaps = [right - left for left, right in zip(v_clusters, v_clusters[1:])]
     h_gaps = [bottom - top for top, bottom in zip(h_clusters, h_clusters[1:])]
     if v_gaps and h_gaps:
@@ -1181,6 +1246,118 @@ def _sample_region_color(
     return color, _saturation(color), _brightness(color)
 
 
+def parse_expected_flow_count(text: str) -> Optional[int]:
+    """Extract the puzzle's advertised flow count from OCR text."""
+
+    normalized = " ".join(str(text or "").split())
+    patterns = (
+        r"\bflows?\s*[:=]?\s*\d+\s*[/|]\s*(\d{1,2})\b",
+        r"\bflows?\s*[:=]\s*(\d{1,2})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized, re.IGNORECASE)
+        if match:
+            count = int(match.group(1))
+            if 1 <= count <= 26:
+                return count
+    return None
+
+
+def _terminal_pixel_decision(
+    color: Tuple[float, float, float],
+    *,
+    bg_color: Tuple[float, float, float],
+    sat_threshold: float,
+    brightness_min: float,
+    brightness_max: float,
+    bg_threshold: float,
+) -> Dict[str, Any]:
+    """Apply one terminal-color policy across rectangular, circular, and graph boards."""
+
+    saturation = _saturation(color)
+    brightness = _brightness(color)
+    background_brightness = _brightness(bg_color)
+    distance_bg = _color_distance(color, bg_color)
+    effective_sat_threshold = max(
+        sat_threshold,
+        45.0 if background_brightness < 90.0 else sat_threshold,
+    )
+    neutral_brightness_min = max(brightness_min, background_brightness + 25.0, 140.0)
+    neutral_distance = max(bg_threshold * 1.5, bg_threshold + 20.0)
+
+    colorful = (
+        saturation >= effective_sat_threshold
+        and brightness_min <= brightness <= brightness_max
+        and distance_bg >= bg_threshold
+    )
+    # Low-saturation endpoints must be tested against the *effective* colorful
+    # threshold. Previously dark boards raised the colorful cutoff to 45 while
+    # the neutral branch remained below the user cutoff (normally 30), leaving
+    # a blind interval that included the game's gray dots.
+    neutral = (
+        saturation < effective_sat_threshold
+        and brightness >= neutral_brightness_min
+        and brightness <= 255.0
+        and brightness >= background_brightness + 35.0
+        and distance_bg >= neutral_distance
+    )
+    accepted = colorful or neutral
+
+    reasons: List[str] = []
+    if distance_bg < bg_threshold:
+        reasons.append("too_close_to_background")
+    if brightness < brightness_min:
+        reasons.append("below_brightness_min")
+    if saturation < effective_sat_threshold and brightness < neutral_brightness_min:
+        reasons.append("neutral_too_dark")
+    if saturation >= effective_sat_threshold and brightness > brightness_max:
+        reasons.append("colorful_too_bright")
+    if saturation < effective_sat_threshold and distance_bg < neutral_distance:
+        reasons.append("neutral_contrast_too_low")
+    if not reasons and not accepted:
+        reasons.append("outside_terminal_profile")
+
+    near_miss = (
+        not accepted
+        and distance_bg >= max(bg_threshold, neutral_distance * 0.75)
+        and brightness >= max(brightness_min, background_brightness + 25.0)
+        and brightness <= 255.0
+        and saturation < effective_sat_threshold + 15.0
+    )
+    return {
+        "accepted": accepted,
+        "kind": "colorful" if colorful else ("neutral" if neutral else "rejected"),
+        "near_miss": near_miss,
+        "saturation": saturation,
+        "brightness": brightness,
+        "distance_bg": distance_bg,
+        "effective_sat_threshold": effective_sat_threshold,
+        "neutral_brightness_min": neutral_brightness_min,
+        "neutral_distance": neutral_distance,
+        "rejection_reasons": reasons,
+    }
+
+
+def _terminal_diagnostic(
+    candidate: TerminalCandidate,
+    decision: Dict[str, Any],
+    *,
+    node_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "color": [round(float(value), 2) for value in candidate.color],
+        "saturation": round(float(candidate.saturation), 2),
+        "brightness": round(float(candidate.brightness), 2),
+        "distance_bg": round(float(decision.get("distance_bg", 0.0)), 2),
+        "rejection_reasons": list(decision.get("rejection_reasons", [])),
+    }
+    if node_id is None:
+        item.update(row=candidate.row, col=candidate.col)
+    else:
+        item["node_id"] = node_id
+    return item
+
+
 def _cluster_candidates(candidates: List[TerminalCandidate], threshold: float) -> List[Dict[str, Any]]:
     clusters: List[Dict[str, Any]] = []
     for cand in candidates:
@@ -1213,6 +1390,8 @@ def detect_terminals(
     margin_ratio: float,
     cluster_threshold: float,
     bg_threshold: float = 40.0,
+    expected_pairs: Optional[int] = None,
+    enforce_square_parity: bool = False,
 ) -> Tuple[List[TerminalPlacement], Dict[str, Any]]:
     width, height = image.size
     if rows <= 0 or cols <= 0 or width == 0 or height == 0:
@@ -1254,20 +1433,9 @@ def detect_terminals(
         (border_stat.mean[1] + border_stat2.mean[1] + border_stat3.mean[1] + border_stat4.mean[1]) / 4.0,
         (border_stat.mean[2] + border_stat2.mean[2] + border_stat3.mean[2] + border_stat4.mean[2]) / 4.0,
     )
-    bg_brightness = _brightness(bg_color)
-    # Dark game themes often tint empty cells and barrier-adjacent cells blue.
-    # Their weak chroma used to pass the permissive default saturation cutoff
-    # and create large fake terminal clusters. Real dots on these themes are
-    # substantially more saturated, including their darker red/green colors.
-    effective_sat_threshold = max(sat_threshold, 45.0 if bg_brightness < 90.0 else sat_threshold)
-    neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    # Neutral endpoints include pure white dots. Keep the user-facing ceiling
-    # for colorful pixels, but allow the full RGB range for high-contrast
-    # achromatic terminals on a dark board.
-    neutral_brightness_max = 255.0
-    neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
-
     candidates: List[TerminalCandidate] = []
+    near_candidates: List[Tuple[TerminalCandidate, Dict[str, Any]]] = []
+    classifier_info: Optional[Dict[str, Any]] = None
     for row in range(rows):
         for col in range(cols):
             x0 = int(col * cell_w + margin_x)
@@ -1279,23 +1447,96 @@ def detect_terminals(
 
             region = image.crop((x0, y0, x1, y1))
             color, sat, bright = _sample_region_color(region)
-            dist_bg = _color_distance(color, bg_color)
-            is_colorful = (
-                sat >= effective_sat_threshold
-                and brightness_min <= bright <= brightness_max
-                and dist_bg >= bg_threshold
+            decision = _terminal_pixel_decision(
+                color,
+                bg_color=bg_color,
+                sat_threshold=sat_threshold,
+                brightness_min=brightness_min,
+                brightness_max=brightness_max,
+                bg_threshold=bg_threshold,
             )
-            is_neutral = (
-                sat < sat_threshold
-                and bright >= neutral_brightness_min
-                and bright <= neutral_brightness_max
-                and bright >= bg_brightness + 35.0
-                and dist_bg >= neutral_dist
+            classifier_info = decision
+            candidate = TerminalCandidate(
+                row=row,
+                col=col,
+                color=color,
+                saturation=sat,
+                brightness=bright,
             )
-            if is_colorful or is_neutral:
-                candidates.append(
-                    TerminalCandidate(row=row, col=col, color=color, saturation=sat, brightness=bright)
-                )
+            if decision["accepted"]:
+                candidates.append(candidate)
+            elif decision["near_miss"]:
+                near_candidates.append((candidate, decision))
+
+    recovered_pairs: List[Dict[str, Any]] = []
+    if near_candidates:
+        initial_clusters = _cluster_candidates(candidates, cluster_threshold)
+        detected_pairs = sum(1 for cluster in initial_clusters if len(cluster["members"]) >= 2)
+        recovery_clusters = _cluster_candidates(
+            [candidate for candidate, _decision in near_candidates],
+            min(28.0, max(12.0, cluster_threshold * 0.45)),
+        )
+        pair_clusters = [
+            cluster
+            for cluster in recovery_clusters
+            if len(cluster.get("members", [])) == 2
+        ]
+        pair_clusters.sort(
+            key=lambda cluster: sum(
+                _color_distance(member.color, bg_color) for member in cluster["members"]
+            ),
+            reverse=True,
+        )
+
+        selected: List[Tuple[Dict[str, Any], str]] = []
+        missing_pairs = (
+            max(0, int(expected_pairs) - detected_pairs)
+            if expected_pairs is not None
+            else 0
+        )
+        if missing_pairs:
+            selected.extend((cluster, "expected_flow_count") for cluster in pair_clusters[:missing_pairs])
+
+        if enforce_square_parity and not selected:
+            target_delta = (rows * cols + 1) // 2 - (rows * cols) // 2
+
+            def parity_delta(members: List[TerminalCandidate]) -> int:
+                sides = [(member.row + member.col) % 2 for member in members]
+                if sides[0] != sides[1]:
+                    return 0
+                return 1 if sides[0] == 0 else -1
+
+            current_delta = sum(
+                parity_delta(list(cluster["members"])[:2])
+                for cluster in initial_clusters
+                if len(cluster.get("members", [])) >= 2
+            )
+            for cluster in pair_clusters:
+                if current_delta + parity_delta(cluster["members"]) == target_delta:
+                    selected.append((cluster, "square_parity"))
+                    break
+
+        promoted_locations: Set[Tuple[int, int]] = set()
+        for cluster, method in selected:
+            members = list(cluster["members"])
+            candidates.extend(members)
+            promoted_locations.update((member.row, member.col) for member in members)
+            recovered_pairs.append(
+                {
+                    "method": method,
+                    "color": [round(float(value), 2) for value in cluster["color"]],
+                    "cells": [
+                        {"row": member.row, "col": member.col}
+                        for member in members
+                    ],
+                }
+            )
+        if promoted_locations:
+            near_candidates = [
+                item
+                for item in near_candidates
+                if (item[0].row, item[0].col) not in promoted_locations
+            ]
 
     clusters = _cluster_candidates(candidates, cluster_threshold)
     if clusters:
@@ -1348,7 +1589,15 @@ def detect_terminals(
         "candidates": len(candidates),
         "warnings": warnings,
         "background_color": [round(c, 2) for c in bg_color],
-        "effective_sat_threshold": round(float(effective_sat_threshold), 2),
+        "effective_sat_threshold": round(
+            float((classifier_info or {}).get("effective_sat_threshold", sat_threshold)),
+            2,
+        ),
+        "near_misses": [
+            _terminal_diagnostic(candidate, decision)
+            for candidate, decision in near_candidates[:32]
+        ],
+        "recovered_pairs": recovered_pairs,
         "sampling_geometry": {
             "source": geometry_source,
             "left": board_left,
@@ -1372,6 +1621,7 @@ def detect_circle_terminals(
     cluster_threshold: float,
     bg_threshold: float = 40.0,
     circle_grid: Optional[CircleGridDetection] = None,
+    expected_pairs: Optional[int] = None,
 ) -> Tuple[List[TerminalPlacement], Dict[str, Any]]:
     width, height = image.size
     if rings <= 0 or sectors <= 0 or width <= 0 or height <= 0:
@@ -1438,12 +1688,9 @@ def detect_circle_terminals(
         (border_stat.mean[1] + border_stat2.mean[1] + border_stat3.mean[1] + border_stat4.mean[1]) / 4.0,
         (border_stat.mean[2] + border_stat2.mean[2] + border_stat3.mean[2] + border_stat4.mean[2]) / 4.0,
     )
-    bg_brightness = _brightness(bg_color)
-    neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    neutral_brightness_max = 255.0
-    neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
-
     candidates: List[TerminalCandidate] = []
+    near_candidates: List[Tuple[TerminalCandidate, Dict[str, Any]]] = []
+    classifier_info: Optional[Dict[str, Any]] = None
     sector_step = 360.0 / float(max(1, sectors))
     for row in range(rings):
         r0 = float(ring_bounds[row])
@@ -1467,25 +1714,60 @@ def detect_circle_terminals(
                 continue
             region = image.crop((x0, y0, x1, y1))
             color, sat, bright = _sample_region_color(region, sample_max_dim=max(12, sample_radius * 2))
-            dist_bg = _color_distance(color, bg_color)
-            is_colorful = sat >= sat_threshold and brightness_min <= bright <= brightness_max and dist_bg >= bg_threshold
-            is_neutral = (
-                sat < sat_threshold
-                and bright >= neutral_brightness_min
-                and bright <= neutral_brightness_max
-                and bright >= bg_brightness + 35.0
-                and dist_bg >= neutral_dist
+            decision = _terminal_pixel_decision(
+                color,
+                bg_color=bg_color,
+                sat_threshold=sat_threshold,
+                brightness_min=brightness_min,
+                brightness_max=brightness_max,
+                bg_threshold=bg_threshold,
             )
-            if is_colorful or is_neutral:
-                candidates.append(
-                    TerminalCandidate(
-                        row=row,
-                        col=col,
-                        color=color,
-                        saturation=sat,
-                        brightness=bright,
-                    )
-                )
+            classifier_info = decision
+            candidate = TerminalCandidate(
+                row=row,
+                col=col,
+                color=color,
+                saturation=sat,
+                brightness=bright,
+            )
+            if decision["accepted"]:
+                candidates.append(candidate)
+            elif decision["near_miss"]:
+                near_candidates.append((candidate, decision))
+
+    recovered_pairs: List[Dict[str, Any]] = []
+    if expected_pairs is not None and near_candidates:
+        current_pairs = sum(
+            1
+            for cluster in _cluster_candidates(candidates, cluster_threshold)
+            if len(cluster.get("members", [])) >= 2
+        )
+        missing_pairs = max(0, int(expected_pairs) - current_pairs)
+        recovery_clusters = _cluster_candidates(
+            [candidate for candidate, _decision in near_candidates],
+            min(28.0, max(12.0, cluster_threshold * 0.45)),
+        )
+        pair_clusters = [
+            cluster for cluster in recovery_clusters if len(cluster.get("members", [])) == 2
+        ]
+        promoted_locations: Set[Tuple[int, int]] = set()
+        for cluster in pair_clusters[:missing_pairs]:
+            members = list(cluster["members"])
+            candidates.extend(members)
+            promoted_locations.update((member.row, member.col) for member in members)
+            recovered_pairs.append(
+                {
+                    "method": "expected_flow_count",
+                    "color": [round(float(value), 2) for value in cluster["color"]],
+                    "cells": [{"row": member.row, "col": member.col} for member in members],
+                }
+            )
+        if promoted_locations:
+            near_candidates = [
+                item
+                for item in near_candidates
+                if (item[0].row, item[0].col) not in promoted_locations
+            ]
 
     clusters = _cluster_candidates(candidates, cluster_threshold)
     if clusters:
@@ -1547,6 +1829,15 @@ def detect_circle_terminals(
         "candidates": len(candidates),
         "warnings": warnings,
         "background_color": [round(c, 2) for c in bg_color],
+        "effective_sat_threshold": round(
+            float((classifier_info or {}).get("effective_sat_threshold", sat_threshold)),
+            2,
+        ),
+        "near_misses": [
+            _terminal_diagnostic(candidate, decision)
+            for candidate, decision in near_candidates[:32]
+        ],
+        "recovered_pairs": recovered_pairs,
         "circle_detection": circle_info,
     }
     return placements, info
@@ -1672,6 +1963,7 @@ def detect_terminals_on_nodes(
     margin_ratio: float,
     cluster_threshold: float,
     bg_threshold: float = 40.0,
+    expected_pairs: Optional[int] = None,
 ) -> Tuple[List[TerminalNodePlacement], Dict[str, Any]]:
     width, height = image.size
     projected, proj_info = _project_nodes_to_pixels(image, nodes=nodes, margin_ratio=margin_ratio)
@@ -1695,9 +1987,6 @@ def detect_terminals_on_nodes(
         (border_stat.mean[2] + border_stat2.mean[2] + border_stat3.mean[2] + border_stat4.mean[2]) / 4.0,
     )
     bg_brightness = _brightness(bg_color)
-    neutral_brightness_min = max(brightness_min, bg_brightness + 25.0, 140.0)
-    neutral_brightness_max = 255.0
-    neutral_dist = max(bg_threshold * 1.5, bg_threshold + 20.0)
 
     points = list(projected.values())
     nn_dists: List[float] = []
@@ -1726,6 +2015,8 @@ def detect_terminals_on_nodes(
     )
 
     candidates: List[Dict[str, Any]] = []
+    near_candidates: List[Dict[str, Any]] = []
+    classifier_info: Optional[Dict[str, Any]] = None
     for node_id, (px, py) in projected.items():
         x0 = max(0, int(px) - sample_radius)
         y0 = max(0, int(py) - sample_radius)
@@ -1735,28 +2026,64 @@ def detect_terminals_on_nodes(
             continue
         region = image.crop((x0, y0, x1, y1))
         color, sat, bright = _sample_region_color(region, sample_max_dim=max(12, sample_radius * 2))
-        dist_bg = _color_distance(color, bg_color)
-        is_colorful = sat >= sat_threshold and brightness_min <= bright <= brightness_max and dist_bg >= bg_threshold
-        is_neutral = (
-            sat < sat_threshold
-            and bright >= neutral_brightness_min
-            and bright <= neutral_brightness_max
-            and bright >= bg_brightness + 35.0
-            and dist_bg >= neutral_dist
+        decision = _terminal_pixel_decision(
+            color,
+            bg_color=bg_color,
+            sat_threshold=sat_threshold,
+            brightness_min=brightness_min,
+            brightness_max=brightness_max,
+            bg_threshold=bg_threshold,
         )
-        if not (is_colorful or is_neutral):
-            continue
+        classifier_info = decision
+        dist_bg = float(decision["distance_bg"])
         score = sat * 1.1 + dist_bg * 0.75 + max(0.0, bright - bg_brightness) * 0.2
-        candidates.append(
-            {
-                "node_id": node_id,
-                "color": color,
-                "saturation": sat,
-                "brightness": bright,
-                "distance_bg": dist_bg,
-                "score": score,
-            }
+        candidate = {
+            "node_id": node_id,
+            "color": color,
+            "saturation": sat,
+            "brightness": bright,
+            "distance_bg": dist_bg,
+            "score": score,
+        }
+        if decision["accepted"]:
+            candidates.append(candidate)
+        elif decision["near_miss"]:
+            candidate["rejection_reasons"] = list(decision["rejection_reasons"])
+            near_candidates.append(candidate)
+
+    recovered_pairs: List[Dict[str, Any]] = []
+    if expected_pairs is not None and near_candidates:
+        current_pairs = sum(
+            1
+            for cluster in _cluster_node_candidates(candidates, cluster_threshold)
+            if len(cluster.get("members", [])) >= 2
         )
+        missing_pairs = max(0, int(expected_pairs) - current_pairs)
+        recovery_clusters = _cluster_node_candidates(
+            near_candidates,
+            min(28.0, max(12.0, cluster_threshold * 0.45)),
+        )
+        pair_clusters = [
+            cluster for cluster in recovery_clusters if len(cluster.get("members", [])) == 2
+        ]
+        promoted_nodes: Set[str] = set()
+        for cluster in pair_clusters[:missing_pairs]:
+            members = list(cluster["members"])
+            candidates.extend(members)
+            promoted_nodes.update(str(member["node_id"]) for member in members)
+            recovered_pairs.append(
+                {
+                    "method": "expected_flow_count",
+                    "color": [round(float(value), 2) for value in cluster["color"]],
+                    "nodes": [str(member["node_id"]) for member in members],
+                }
+            )
+        if promoted_nodes:
+            near_candidates = [
+                candidate
+                for candidate in near_candidates
+                if str(candidate["node_id"]) not in promoted_nodes
+            ]
 
     clusters = _cluster_node_candidates(candidates, cluster_threshold)
     if clusters:
@@ -1815,6 +2142,22 @@ def detect_terminals_on_nodes(
         ],
         "warnings": warnings,
         "background_color": [round(c, 2) for c in bg_color],
+        "effective_sat_threshold": round(
+            float((classifier_info or {}).get("effective_sat_threshold", sat_threshold)),
+            2,
+        ),
+        "near_misses": [
+            {
+                "node_id": str(candidate["node_id"]),
+                "color": [round(float(value), 2) for value in candidate["color"]],
+                "saturation": round(float(candidate["saturation"]), 2),
+                "brightness": round(float(candidate["brightness"]), 2),
+                "distance_bg": round(float(candidate["distance_bg"]), 2),
+                "rejection_reasons": list(candidate.get("rejection_reasons", [])),
+            }
+            for candidate in near_candidates[:32]
+        ],
+        "recovered_pairs": recovered_pairs,
         "projection": proj_info,
     }
     return placements, info
@@ -1831,6 +2174,440 @@ def build_graph_terminals_from_node_placements(
         if len(node_ids) >= 2:
             out[letter] = node_ids[:2]
     return out
+
+
+def prune_nonterminal_region_leaves(
+    nodes: Dict[str, Dict[str, Any]],
+    edges: List[Tuple[str, str]],
+    *,
+    terminal_nodes: Iterable[str],
+    protected_nodes: Iterable[str] = (),
+) -> Tuple[Dict[str, Dict[str, Any]], List[Tuple[str, str]], List[str]]:
+    """Drop one pass of impossible nonterminal leaf regions.
+
+    A fill-every-cell Flow puzzle can only use a degree-zero/one cell as a
+    terminal. Thick crossing borders occasionally leave enclosed cavities that
+    region extraction attaches to the real board with one spurious adjacency.
+    Remove those artifacts after terminal detection, without recursively
+    peeling valid corridors or touching manual edge-correction endpoints.
+    """
+
+    protected = {str(node_id) for node_id in terminal_nodes}
+    protected.update(str(node_id) for node_id in protected_nodes)
+    degrees = {str(node_id): 0 for node_id in nodes}
+    normalized_edges: List[Tuple[str, str]] = []
+    for raw_left, raw_right in edges:
+        left = str(raw_left)
+        right = str(raw_right)
+        if left not in degrees or right not in degrees or left == right:
+            continue
+        normalized_edges.append((left, right))
+        degrees[left] += 1
+        degrees[right] += 1
+
+    removed = sorted(
+        node_id
+        for node_id, degree in degrees.items()
+        if degree <= 1 and node_id not in protected
+    )
+    if not removed:
+        return dict(nodes), normalized_edges, []
+
+    removed_set = set(removed)
+    kept_nodes = {
+        str(node_id): node
+        for node_id, node in nodes.items()
+        if str(node_id) not in removed_set
+    }
+    kept_edges = [
+        (left, right)
+        for left, right in normalized_edges
+        if left not in removed_set and right not in removed_set
+    ]
+    return kept_nodes, kept_edges, removed
+
+
+def repair_nonterminal_region_leaves(
+    nodes: Dict[str, Dict[str, Any]],
+    edges: List[Tuple[str, str]],
+    *,
+    terminal_nodes: Iterable[str],
+    protected_nodes: Iterable[str] = (),
+) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """Reconnect aligned leaf cells across an occluded Shapes-board seam.
+
+    Overlapping loop boards draw one track over another with a thick outline.
+    Region extraction sees the cells immediately before the overpass as
+    nonterminal leaves. Their continuation is identified by collinearity and
+    the board's median neighbor pitch; the added edge is a typed seam.
+    """
+
+    protected = {str(node_id) for node_id in terminal_nodes}
+    protected.update(str(node_id) for node_id in protected_nodes)
+    positions: Dict[str, Tuple[float, float]] = {}
+    for node_id, node in nodes.items():
+        data = node.get("data") if isinstance(node, dict) else None
+        center = data.get("pixel_center") if isinstance(data, dict) else None
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            continue
+        try:
+            positions[str(node_id)] = (float(center[0]), float(center[1]))
+        except (TypeError, ValueError):
+            continue
+    if len(positions) != len(nodes):
+        return list(edges), []
+
+    neighbors: Dict[str, Set[str]] = {str(node_id): set() for node_id in nodes}
+    edge_set: Set[Tuple[str, str]] = set()
+    lengths: List[float] = []
+    for raw_left, raw_right in edges:
+        left = str(raw_left)
+        right = str(raw_right)
+        if left not in neighbors or right not in neighbors or left == right:
+            continue
+        edge = (left, right) if left < right else (right, left)
+        if edge in edge_set:
+            continue
+        edge_set.add(edge)
+        neighbors[left].add(right)
+        neighbors[right].add(left)
+        lx, ly = positions[left]
+        rx, ry = positions[right]
+        lengths.append(math.hypot(lx - rx, ly - ry))
+    if not lengths:
+        return sorted(edge_set), []
+    pitch = sorted(lengths)[len(lengths) // 2]
+    if pitch <= 1.0:
+        return sorted(edge_set), []
+
+    repaired: List[Tuple[str, str]] = []
+    claimed_targets: Set[str] = set()
+    leaves = sorted(
+        node_id
+        for node_id, adjacent in neighbors.items()
+        if len(adjacent) == 1 and node_id not in protected
+    )
+    for leaf in leaves:
+        neighbor = next(iter(neighbors[leaf]))
+        leaf_x, leaf_y = positions[leaf]
+        neighbor_x, neighbor_y = positions[neighbor]
+        direction_x = leaf_x - neighbor_x
+        direction_y = leaf_y - neighbor_y
+        direction_length = math.hypot(direction_x, direction_y)
+        if not 0.55 * pitch <= direction_length <= 1.65 * pitch:
+            continue
+        direction_x /= direction_length
+        direction_y /= direction_length
+
+        candidates: List[Tuple[float, str]] = []
+        for candidate, (candidate_x, candidate_y) in positions.items():
+            if (
+                candidate in {leaf, neighbor}
+                or candidate in neighbors[leaf]
+                or candidate in claimed_targets
+                or len(neighbors[candidate]) >= 6
+            ):
+                continue
+            offset_x = candidate_x - leaf_x
+            offset_y = candidate_y - leaf_y
+            distance = math.hypot(offset_x, offset_y)
+            if not 0.55 * pitch <= distance <= 1.45 * pitch:
+                continue
+            forward = (offset_x * direction_x + offset_y * direction_y) / max(1e-6, distance)
+            lateral = abs(offset_x * direction_y - offset_y * direction_x)
+            if forward < 0.965 or lateral > max(5.0, pitch * 0.18):
+                continue
+            score = lateral + abs(distance - pitch) * 0.2
+            candidates.append((score, candidate))
+        if not candidates:
+            continue
+        target = min(candidates)[1]
+        edge = (leaf, target) if leaf < target else (target, leaf)
+        edge_set.add(edge)
+        neighbors[leaf].add(target)
+        neighbors[target].add(leaf)
+        claimed_targets.add(target)
+        repaired.append(edge)
+
+    return sorted(edge_set), sorted(repaired)
+
+
+def build_region_crossovers(
+    nodes: Dict[str, Dict[str, Any]],
+    repaired_seams: Iterable[Tuple[str, str]],
+) -> List[Dict[str, Any]]:
+    """Describe image-grounded over/under crossings for repaired region seams.
+
+    A repaired seam joins the two cells hidden on opposite sides of a Shapes
+    overpass.  The edge itself is the under-channel continuation; the crossing
+    track runs perpendicular to it in the screenshot.  Keeping this semantic
+    record separate from solver-inferred seams prevents topology repairs from
+    being mistaken for visible bridges.
+    """
+
+    positions: Dict[str, Tuple[float, float]] = {}
+    for raw_node_id, node in nodes.items():
+        data = node.get("data") if isinstance(node, dict) else None
+        center = data.get("pixel_center") if isinstance(data, dict) else None
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            pos = node.get("pos") if isinstance(node, dict) else None
+            center = pos if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None
+        if center is None:
+            continue
+        try:
+            positions[str(raw_node_id)] = (float(center[0]), float(center[1]))
+        except (TypeError, ValueError):
+            continue
+
+    crossovers: List[Dict[str, Any]] = []
+    normalized_seams = sorted(
+        {
+            (str(left), str(right))
+            if str(left) < str(right)
+            else (str(right), str(left))
+            for left, right in repaired_seams
+            if str(left) != str(right)
+        }
+    )
+    for index, (left, right) in enumerate(normalized_seams):
+        if left not in positions or right not in positions:
+            continue
+        left_x, left_y = positions[left]
+        right_x, right_y = positions[right]
+        dx = right_x - left_x
+        dy = right_y - left_y
+        magnitude = math.hypot(dx, dy)
+        if magnitude <= 1e-6:
+            continue
+        under_vector = [dx / magnitude, dy / magnitude]
+        crossovers.append(
+            {
+                "id": f"crossover-{index + 1:02d}",
+                "under": [left, right],
+                "center": [(left_x + right_x) / 2.0, (left_y + right_y) / 2.0],
+                "under_vector": under_vector,
+                "over_vector": [-under_vector[1], under_vector[0]],
+                "source": "aligned-occluded-region-leaves",
+            }
+        )
+    return crossovers
+
+
+def build_region_crossover_channels(
+    nodes: Dict[str, Dict[str, Any]],
+    edges: Iterable[Tuple[str, str]],
+    repaired_seams: Iterable[Tuple[str, str]],
+) -> Tuple[
+    Dict[str, Dict[str, Any]],
+    List[Tuple[str, str]],
+    Dict[str, List[str]],
+    List[Dict[str, Any]],
+    List[Tuple[str, str]],
+    Set[Tuple[str, str]],
+    Set[str],
+]:
+    """Split repaired overlap seams into independent surface/under channels.
+
+    The visible cell at a Shapes crossover is a physical tile with two routing
+    channels.  The original node remains the surface channel.  A colocated
+    under-channel is connected only to the approaching cell and the straight
+    continuation on the far side, so a path below the crossover cannot turn
+    onto any of the surface cell's neighbors.
+    """
+
+    def canonical(left: str, right: str) -> Tuple[str, str]:
+        return (left, right) if left < right else (right, left)
+
+    positions: Dict[str, Tuple[float, float]] = {}
+    for raw_node_id, node in nodes.items():
+        data = node.get("data") if isinstance(node, dict) else None
+        center = data.get("pixel_center") if isinstance(data, dict) else None
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            pos = node.get("pos") if isinstance(node, dict) else None
+            center = pos if isinstance(pos, (list, tuple)) and len(pos) >= 2 else None
+        if center is None:
+            continue
+        try:
+            positions[str(raw_node_id)] = (float(center[0]), float(center[1]))
+        except (TypeError, ValueError):
+            continue
+
+    normalized_edges = {
+        canonical(str(left), str(right))
+        for left, right in edges
+        if str(left) != str(right)
+        and str(left) in nodes
+        and str(right) in nodes
+    }
+    normalized_seams = sorted(
+        {
+            canonical(str(left), str(right))
+            for left, right in repaired_seams
+            if str(left) != str(right)
+            and str(left) in nodes
+            and str(right) in nodes
+        }
+    )
+    seam_set = set(normalized_seams)
+    local_neighbors: Dict[str, Set[str]] = {str(node_id): set() for node_id in nodes}
+    for left, right in normalized_edges - seam_set:
+        local_neighbors[left].add(right)
+        local_neighbors[right].add(left)
+
+    split_nodes = {
+        str(node_id): {
+            **dict(node),
+            "data": dict(node.get("data", {}))
+            if isinstance(node, dict) and isinstance(node.get("data"), dict)
+            else {},
+        }
+        for node_id, node in nodes.items()
+    }
+    split_edges = set(normalized_edges)
+    tiles: Dict[str, List[str]] = {
+        str(node_id): [str(node_id)] for node_id in nodes
+    }
+    crossovers: List[Dict[str, Any]] = []
+    rewritten_seams: List[Tuple[str, str]] = []
+    forbidden_candidate_edges: Set[Tuple[str, str]] = set()
+    under_channel_ids: Set[str] = set()
+    claimed_landings: Set[str] = set()
+
+    for left, right in normalized_seams:
+        if left not in positions or right not in positions:
+            continue
+        # The repaired leaf is the approach and the higher-degree endpoint is
+        # the visible crossover cell.  Deterministic tie-breaking preserves
+        # stable imports when the screenshot produces equal degrees.
+        endpoint_ranking = sorted(
+            (left, right),
+            key=lambda node_id: (
+                len(local_neighbors.get(node_id, set())),
+                node_id,
+            ),
+        )
+        approach = endpoint_ranking[0]
+        landing = endpoint_ranking[-1]
+        if (
+            landing in claimed_landings
+            or len(local_neighbors.get(landing, set()))
+            < 2
+        ):
+            continue
+
+        approach_x, approach_y = positions[approach]
+        landing_x, landing_y = positions[landing]
+        direction_x = landing_x - approach_x
+        direction_y = landing_y - approach_y
+        direction_length = math.hypot(direction_x, direction_y)
+        if direction_length <= 1e-6:
+            continue
+        direction_x /= direction_length
+        direction_y /= direction_length
+
+        continuation_candidates: List[Tuple[float, float, str]] = []
+        for candidate in sorted(local_neighbors.get(landing, set())):
+            if candidate not in positions:
+                continue
+            candidate_x, candidate_y = positions[candidate]
+            offset_x = candidate_x - landing_x
+            offset_y = candidate_y - landing_y
+            distance = math.hypot(offset_x, offset_y)
+            if distance <= 1e-6:
+                continue
+            alignment = (
+                offset_x * direction_x + offset_y * direction_y
+            ) / distance
+            if alignment < 0.87:
+                continue
+            continuation_candidates.append(
+                (-alignment, abs(distance - direction_length), candidate)
+            )
+        if not continuation_candidates:
+            continue
+        continuation = min(continuation_candidates)[2]
+        surface_neighbors = sorted(
+            local_neighbors.get(landing, set()) - {continuation}
+        )
+        if not surface_neighbors:
+            continue
+
+        base_under_id = f"{landing}:under"
+        under_id = base_under_id
+        suffix = 2
+        while under_id in split_nodes:
+            under_id = f"{base_under_id}:{suffix}"
+            suffix += 1
+
+        surface_node = split_nodes[landing]
+        surface_data = dict(surface_node.get("data", {}))
+        surface_data.update({"tile": landing, "layer": "surface"})
+        surface_node["data"] = surface_data
+
+        under_data = dict(surface_data)
+        under_data.pop("polygon", None)
+        under_data.update(
+            {
+                "tile": landing,
+                "layer": "under",
+                "surface_channel": landing,
+            }
+        )
+        split_nodes[under_id] = {
+            **dict(surface_node),
+            "kind": "crossover_under",
+            "data": under_data,
+        }
+        tiles[landing] = [landing, under_id]
+        under_channel_ids.add(under_id)
+        claimed_landings.add(landing)
+
+        split_edges.discard(canonical(approach, landing))
+        split_edges.discard(canonical(landing, continuation))
+        under_entry = canonical(approach, under_id)
+        under_exit = canonical(under_id, continuation)
+        split_edges.add(under_entry)
+        split_edges.add(under_exit)
+        rewritten_seams.append(under_entry)
+
+        crossover_id = f"crossover-{len(crossovers) + 1:02d}"
+        surface_data["crossover_id"] = crossover_id
+        under_data["crossover_id"] = crossover_id
+        crossovers.append(
+            {
+                "id": crossover_id,
+                "under": [under_entry[0], under_entry[1]],
+                "under_path": [approach, under_id, continuation],
+                "surface_channel": landing,
+                "under_channel": under_id,
+                "continuation": continuation,
+                "surface_neighbors": surface_neighbors,
+                "center": [landing_x, landing_y],
+                "under_vector": [direction_x, direction_y],
+                "over_vector": [-direction_y, direction_x],
+                "source": "aligned-occluded-region-leaves",
+            }
+        )
+
+        # Inferred seams must never reconnect the isolated layers or shortcut
+        # one of the two straight under-channel legs.
+        for surface_node_id in [landing, *surface_neighbors]:
+            forbidden_candidate_edges.add(canonical(approach, surface_node_id))
+            forbidden_candidate_edges.add(
+                canonical(continuation, surface_node_id)
+            )
+            forbidden_candidate_edges.add(canonical(under_id, surface_node_id))
+        forbidden_candidate_edges.add(canonical(approach, continuation))
+
+    return (
+        split_nodes,
+        sorted(split_edges),
+        tiles,
+        crossovers,
+        sorted(set(rewritten_seams)),
+        forbidden_candidate_edges,
+        under_channel_ids,
+    )
 
 
 def _hint_tokens(text: str) -> List[str]:
@@ -2092,6 +2869,24 @@ def classify_level_type(
                     and len(approx) >= 7
                     and extent <= 0.88
                 )
+                # Shapes/warp boards often have a rounded octagonal or lobed
+                # silhouette. Their nearly equal radii make radial_spread look
+                # circle-like even though the enclosed cells form an irregular
+                # region graph. A compact, non-frame outline is the stable
+                # discriminator shared by those production screenshots.
+                compact_region_outline = (
+                    not bool(chosen_meta.get("touches_frame", 0.0))
+                    and len(approx) >= 7
+                    and extent <= 0.70
+                )
+                stacked_loop_outline = (
+                    grid is None
+                    and not bool(chosen_meta.get("touches_frame", 0.0))
+                    and len(approx) >= 7
+                    and aspect_ratio >= 1.28
+                    and radial_spread >= 0.14
+                    and area / float(max(1, h * w)) <= 0.92
+                )
                 looks_like_freeform_cells = (
                     (
                         grid is None
@@ -2107,15 +2902,18 @@ def classify_level_type(
                             and extent <= 0.78
                         )
                         or strong_irregular_outline
+                        or compact_region_outline
+                        or stacked_loop_outline
                     )
                     and not strong_template_hint
                     and 0.04 <= area / float(max(1, h * w)) <= 0.92
                     and len(approx) >= 5
-                    and extent <= 0.88
+                    and (extent <= 0.88 or stacked_loop_outline)
                     and not (
                         circularity >= 0.72
                         and radial_spread <= 0.14
                         and len(approx) <= 10
+                        and not compact_region_outline
                     )
                 )
                 if looks_like_freeform_cells:
@@ -2233,7 +3031,11 @@ def classify_level_type(
                 "sectors": int(direct_circle_grid.sectors),
                 "contour_circularity": round(contour_circularity, 4),
             }
-            if direct_circle_grid.rings >= 2 and contour_circularity >= 0.84:
+            if (
+                direct_circle_grid.rings >= 2
+                and direct_circle_grid.sectors >= 6
+                and contour_circularity >= 0.84
+            ):
                 scores["circle"] += 0.72
                 scores["hex"] -= 0.08
                 scores["square"] -= 0.05
@@ -3184,7 +3986,11 @@ def detect_region_topology(
         }
 
     preferred_hex_edges: Optional[Set[Tuple[str, str]]] = None
-    if prefer_hex and len(nodes_obj) >= 4:
+    regular_hex_lattice = False
+    regular_hex_pitch: Optional[float] = None
+    regular_hex_axis_phase: Optional[float] = None
+    regular_hex_angle_p90: Optional[float] = None
+    if len(nodes_obj) >= 12:
         centers = {
             node_id: (
                 float(node["data"]["pixel_center"][0]),
@@ -3203,20 +4009,120 @@ def detect_region_topology(
         pitch = float(np.median(np.asarray(nearest_distances, dtype=np.float32)))
         if pitch > 1.0:
             candidate_hex_edges: Set[Tuple[str, str]] = set()
+            candidate_angles: List[float] = []
+            candidate_lengths: List[float] = []
             center_items = sorted(centers.items())
             for index, (left_id, left_center) in enumerate(center_items):
                 for right_id, right_center in center_items[index + 1 :]:
-                    if math.hypot(
-                        left_center[0] - right_center[0],
-                        left_center[1] - right_center[1],
-                    ) <= pitch * 1.22:
+                    dx = right_center[0] - left_center[0]
+                    dy = right_center[1] - left_center[1]
+                    distance = math.hypot(dx, dy)
+                    if pitch * 0.80 <= distance <= pitch * 1.22:
                         candidate_hex_edges.add((left_id, right_id))
+                        candidate_lengths.append(distance)
+                        candidate_angles.append(math.degrees(math.atan2(dy, dx)) % 180.0)
             candidate_degrees = {node_id: 0 for node_id in nodes_obj}
             for left_id, right_id in candidate_hex_edges:
                 candidate_degrees[left_id] += 1
                 candidate_degrees[right_id] += 1
-            if candidate_hex_edges and max(candidate_degrees.values(), default=0) <= 6:
+            # A regular hex lattice has three neighbor-axis families separated
+            # by 60 degrees.  Requiring all three rejects square grids and
+            # arbitrary Shapes graphs that merely happen to have degree <= 6.
+            best_phase: Optional[float] = None
+            best_residuals: List[float] = []
+            best_residual_score = float("inf")
+            for phase_step in range(240):
+                phase = phase_step * 0.25
+                residuals = [
+                    min(
+                        abs(angle - axis)
+                        for axis in (
+                            phase - 180.0,
+                            phase - 120.0,
+                            phase - 60.0,
+                            phase,
+                            phase + 60.0,
+                            phase + 120.0,
+                            phase + 180.0,
+                            phase + 240.0,
+                        )
+                    )
+                    for angle in candidate_angles
+                ]
+                score = (
+                    float(np.percentile(np.asarray(residuals), 90.0))
+                    if residuals
+                    else float("inf")
+                )
+                if score < best_residual_score:
+                    best_residual_score = score
+                    best_phase = phase
+                    best_residuals = residuals
+
+            direction_counts = [0, 0, 0]
+            if best_phase is not None:
+                for angle in candidate_angles:
+                    family = min(
+                        range(3),
+                        key=lambda index: min(
+                            abs(angle - (best_phase + index * 60.0 + wrap * 180.0))
+                            for wrap in (-1, 0, 1)
+                        ),
+                    )
+                    direction_counts[family] += 1
+
+            connected_nodes: Set[str] = set()
+            if candidate_hex_edges:
+                candidate_neighbors: Dict[str, Set[str]] = {
+                    node_id: set() for node_id in nodes_obj
+                }
+                for left_id, right_id in candidate_hex_edges:
+                    candidate_neighbors[left_id].add(right_id)
+                    candidate_neighbors[right_id].add(left_id)
+                pending = [next(iter(nodes_obj))]
+                while pending:
+                    current = pending.pop()
+                    if current in connected_nodes:
+                        continue
+                    connected_nodes.add(current)
+                    pending.extend(candidate_neighbors[current] - connected_nodes)
+
+            minimum_direction_edges = max(2, int(round(len(candidate_hex_edges) * 0.08)))
+            length_spread = (
+                float(np.percentile(np.asarray(candidate_lengths), 90.0))
+                / max(1e-6, float(np.percentile(np.asarray(candidate_lengths), 10.0)))
+                if candidate_lengths
+                else float("inf")
+            )
+            if (
+                candidate_hex_edges
+                and max(candidate_degrees.values(), default=0) <= 6
+                and len(connected_nodes) == len(nodes_obj)
+                and best_residual_score <= 9.0
+                and min(direction_counts, default=0) >= minimum_direction_edges
+                and length_spread <= 1.18
+            ):
                 preferred_hex_edges = candidate_hex_edges
+                regular_hex_lattice = True
+                regular_hex_pitch = pitch
+                regular_hex_axis_phase = best_phase
+                regular_hex_angle_p90 = best_residual_score
+                # Region contours contain antialiasing notches and split shared
+                # sides into different segment counts.  Ideal lattice polygons
+                # share one consistent side per neighbor and therefore do not
+                # render internal sides as false barrier walls.
+                vertex_phase = math.radians(float(best_phase) - 30.0)
+                radius = pitch / math.sqrt(3.0)
+                for node_id, (center_x, center_y) in centers.items():
+                    polygon = [
+                        [
+                            round(center_x + radius * math.cos(vertex_phase + index * math.pi / 3.0), 2),
+                            round(center_y + radius * math.sin(vertex_phase + index * math.pi / 3.0), 2),
+                        ]
+                        for index in range(6)
+                    ]
+                    nodes_obj[node_id]["data"]["polygon"] = polygon
+                    nodes_obj[node_id]["data"]["polygon_source"] = "regular-hex-lattice"
 
     if adjacency_gap is None:
         # The regions are separated by the *processed* barrier, whose width is
@@ -3359,6 +4265,14 @@ def detect_region_topology(
                 gap, edge_set, selected_nodes = previous_viable
 
     dropped_regions = sorted(set(nodes_obj) - selected_nodes)
+    dropped_region_details = {
+        node_id: {
+            "pixel_center": list(nodes_obj[node_id].get("data", {}).get("pixel_center", [])),
+            "pixel_area": nodes_obj[node_id].get("data", {}).get("pixel_area"),
+            "component_degree": sum(1 for edge in edge_set if node_id in edge),
+        }
+        for node_id in dropped_regions
+    }
     if dropped_regions:
         for node_id in dropped_regions:
             nodes_obj.pop(node_id, None)
@@ -3367,7 +4281,7 @@ def detect_region_topology(
         }
 
     geometric_hex_repair = False
-    if prefer_hex and len(nodes_obj) >= 4:
+    if prefer_hex and not regular_hex_lattice and len(nodes_obj) >= 4:
         centers = {
             node_id: (
                 float(node["data"]["pixel_center"][0]),
@@ -3417,10 +4331,16 @@ def detect_region_topology(
     for u, v in edges:
         degrees[u] += 1
         degrees[v] += 1
-    suspicious = [node_id for node_id, degree in degrees.items() if degree > 4]
+    maximum_expected_degree = 6 if regular_hex_lattice or prefer_hex else 4
+    suspicious = [
+        node_id
+        for node_id, degree in degrees.items()
+        if degree > maximum_expected_degree
+    ]
     if suspicious:
         warnings.append(
-            f"{len(suspicious)} detected regions have degree greater than four; review corner contacts."
+            f"{len(suspicious)} detected regions have degree greater than "
+            f"{maximum_expected_degree}; review corner contacts."
         )
 
     info = {
@@ -3432,8 +4352,26 @@ def detect_region_topology(
         "removed_terminal_blobs": removed_terminal_blobs,
         "adjacency_search": search_attempts,
         "dropped_enclosed_regions": dropped_regions,
+        "dropped_region_details": dropped_region_details,
         "max_degree": max(degrees.values(), default=0),
         "geometric_hex_repair": geometric_hex_repair,
+        "regular_hex_lattice": regular_hex_lattice,
+        "hex_pitch": (
+            round(float(regular_hex_pitch), 3)
+            if regular_hex_pitch is not None
+            else None
+        ),
+        "hex_axis_phase": (
+            round(float(regular_hex_axis_phase), 3)
+            if regular_hex_axis_phase is not None
+            else None
+        ),
+        "hex_angle_p90": (
+            round(float(regular_hex_angle_p90), 3)
+            if regular_hex_angle_p90 is not None
+            else None
+        ),
+        "polygon_regularized": regular_hex_lattice,
         "warnings": warnings,
     }
     return nodes_obj, edges, info

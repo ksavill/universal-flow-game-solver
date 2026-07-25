@@ -220,6 +220,73 @@ def test_image_import_listing_filters_and_paginates_server_side(tmp_path: Path, 
     assert len(first.json()["entries"]) == 2
     assert second.json()["has_more"] is False
     assert len(second.json()["entries"]) == 1
+    index_path = tmp_path / ".imports.sqlite3"
+    assert index_path.is_file()
+
+    original_read_text = Path.read_text
+
+    def reject_archive_rescan(path: Path, *args, **kwargs):
+        if path.name == "record.json" and path.parent.parent == tmp_path / "imports":
+            raise AssertionError("indexed listing reopened an archive record")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_archive_rescan)
+    indexed = client.get("/image-imports?limit=2&offset=0&status=failed&search=filter&order=oldest")
+    assert indexed.status_code == 200, indexed.text
+    assert indexed.json()["total"] == 3
+    index_path.unlink()
+    assert not index_path.exists()
+
+
+def test_image_import_can_be_flagged_listed_and_unflagged(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FLOW_IMAGE_IMPORTS_DIR", str(tmp_path / "imports"))
+    client = TestClient(app)
+    source = _png_bytes()
+    first = client.post(
+        "/image-imports/failed",
+        files={"file": ("needs-review.png", source, "image/png")},
+        data={"error": "wrong topology", "stage": "test"},
+    ).json()
+    second = client.post(
+        "/image-imports/failed",
+        files={"file": ("leave-alone.png", source, "image/png")},
+        data={"error": "fixture", "stage": "test"},
+    ).json()
+
+    flagged = client.post(
+        f"/image-imports/{first['id']}/flag",
+        json={"reason": "The generated graph omitted the lower bridge."},
+    )
+
+    assert flagged.status_code == 200, flagged.text
+    assert flagged.json()["flagged"] is True
+    assert flagged.json()["flag_reason"] == "The generated graph omitted the lower bridge."
+    assert isinstance(flagged.json()["flagged_at"], float)
+    record = client.get(f"/image-imports/{first['id']}").json()
+    assert record["flagged"] is True
+    assert record["flag_reason"] == "The generated graph omitted the lower bridge."
+
+    reprocessed = client.post(
+        f"/image-imports/{first['id']}/failure",
+        json={"error": "still wrong after retry", "stage": "review-test"},
+    )
+    assert reprocessed.status_code == 200, reprocessed.text
+    assert reprocessed.json()["flagged"] is True
+    assert reprocessed.json()["flag_reason"] == "The generated graph omitted the lower bridge."
+
+    queue = client.get("/image-imports?flagged=true&limit=1000")
+    assert queue.status_code == 200, queue.text
+    assert queue.json()["total"] == 1
+    assert [entry["id"] for entry in queue.json()["entries"]] == [first["id"]]
+    unflagged_queue = client.get("/image-imports?flagged=false&limit=1000").json()
+    assert [entry["id"] for entry in unflagged_queue["entries"]] == [second["id"]]
+
+    cleared = client.delete(f"/image-imports/{first['id']}/flag")
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["flagged"] is False
+    assert "flagged_at" not in cleared.json()
+    assert "flag_reason" not in cleared.json()
+    assert client.get("/image-imports?flagged=true").json()["total"] == 0
 
 
 def test_server_side_image_job_survives_request_and_reports_results(tmp_path: Path, monkeypatch) -> None:

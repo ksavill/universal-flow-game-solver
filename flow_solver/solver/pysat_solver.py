@@ -30,6 +30,15 @@ def _sat_worker(
 ) -> None:
     """Run a native SAT engine behind a killable process boundary."""
 
+    def send_result(payload: tuple[bool | None, list[int] | None, str | None]) -> None:
+        try:
+            connection.send(payload)
+        except (BrokenPipeError, EOFError, OSError):
+            # A timed-out parent intentionally closes the pipe before
+            # terminating this worker.  The result is no longer observable,
+            # so do not emit a misleading child-process traceback.
+            pass
+
     try:
         from pysat.solvers import Solver
 
@@ -37,9 +46,9 @@ def _sat_worker(
             if phase_hints:
                 solver.set_phases(phase_hints)
             status = bool(solver.solve())
-            connection.send((status, solver.get_model() if status else None, None))
+            send_result((status, solver.get_model() if status else None, None))
     except BaseException as exc:  # pragma: no cover - child process diagnostics
-        connection.send((None, None, f"{type(exc).__name__}: {exc}"))
+        send_result((None, None, f"{type(exc).__name__}: {exc}"))
     finally:
         connection.close()
 

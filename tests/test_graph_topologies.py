@@ -11,7 +11,11 @@ from backend.app import app
 from backend.image_utils import (
     build_graph_json,
     build_graph_terminals_from_node_placements,
+    build_region_crossover_channels,
+    build_region_crossovers,
     detect_terminals_on_nodes,
+    prune_nonterminal_region_leaves,
+    repair_nonterminal_region_leaves,
 )
 
 
@@ -59,6 +63,126 @@ class GraphTopologyTests(unittest.TestCase):
             terminals = obj.get("terminals", {})
             self.assertIn("A", terminals)
             self.assertEqual(len(terminals["A"]), 2)
+
+    def test_prunes_only_the_first_pass_of_nonterminal_region_leaves(self) -> None:
+        nodes = {node_id: {"pos": [index, 0, 0]} for index, node_id in enumerate("abcdef")}
+        edges = [
+            ("a", "d"),
+            ("b", "c"),
+            ("c", "d"),
+            ("d", "e"),
+            ("e", "f"),
+            ("f", "d"),
+        ]
+
+        kept_nodes, kept_edges, removed = prune_nonterminal_region_leaves(
+            nodes,
+            edges,
+            terminal_nodes={"a"},
+        )
+
+        self.assertEqual(removed, ["b"])
+        self.assertEqual(set(kept_nodes), {"a", "c", "d", "e", "f"})
+        self.assertNotIn(("b", "c"), kept_edges)
+        # a is a terminal leaf and c becomes a leaf only after the one-pass
+        # cleanup, so neither may be recursively peeled.
+        self.assertIn("a", kept_nodes)
+        self.assertIn("c", kept_nodes)
+
+    def test_repairs_aligned_nonterminal_leaf_as_a_seam(self) -> None:
+        nodes = {
+            "terminal": {"data": {"pixel_center": [0.0, 0.0]}},
+            "leaf": {"data": {"pixel_center": [10.0, 0.0]}},
+            "continuation": {"data": {"pixel_center": [20.0, 0.0]}},
+            "upper": {"data": {"pixel_center": [20.0, 10.0]}},
+            "right": {"data": {"pixel_center": [30.0, 0.0]}},
+        }
+        edges = [
+            ("terminal", "leaf"),
+            ("continuation", "upper"),
+            ("continuation", "right"),
+            ("upper", "right"),
+        ]
+
+        repaired_edges, seams = repair_nonterminal_region_leaves(
+            nodes,
+            edges,
+            terminal_nodes={"terminal"},
+        )
+
+        self.assertEqual(seams, [("continuation", "leaf")])
+        self.assertIn(("continuation", "leaf"), repaired_edges)
+
+    def test_repaired_region_seam_becomes_an_explicit_crossover(self) -> None:
+        nodes = {
+            "left": {"data": {"pixel_center": [10.0, 20.0]}},
+            "right": {"data": {"pixel_center": [30.0, 20.0]}},
+        }
+
+        crossovers = build_region_crossovers(nodes, [("right", "left")])
+
+        self.assertEqual(len(crossovers), 1)
+        self.assertEqual(crossovers[0]["id"], "crossover-01")
+        self.assertEqual(crossovers[0]["under"], ["left", "right"])
+        self.assertEqual(crossovers[0]["center"], [20.0, 20.0])
+        self.assertEqual(crossovers[0]["under_vector"], [1.0, 0.0])
+        self.assertEqual(crossovers[0]["over_vector"], [-0.0, 1.0])
+
+    def test_crossover_under_channel_cannot_turn_onto_surface(self) -> None:
+        nodes = {
+            "start": {"data": {"pixel_center": [-10.0, 0.0]}},
+            "approach": {"data": {"pixel_center": [0.0, 0.0]}},
+            "surface": {
+                "data": {
+                    "pixel_center": [10.0, 0.0],
+                    "polygon": [[8.0, -2.0], [12.0, -2.0], [12.0, 2.0], [8.0, 2.0]],
+                }
+            },
+            "continuation": {"data": {"pixel_center": [20.0, 0.0]}},
+            "upper": {"data": {"pixel_center": [10.0, -10.0]}},
+            "lower": {"data": {"pixel_center": [10.0, 10.0]}},
+        }
+        edges = [
+            ("start", "approach"),
+            ("approach", "surface"),
+            ("surface", "continuation"),
+            ("surface", "upper"),
+            ("surface", "lower"),
+        ]
+
+        (
+            split_nodes,
+            split_edges,
+            tiles,
+            crossovers,
+            rewritten_seams,
+            forbidden,
+            under_channels,
+        ) = build_region_crossover_channels(
+            nodes,
+            edges,
+            [("approach", "surface")],
+        )
+
+        self.assertEqual(len(crossovers), 1)
+        under = crossovers[0]["under_channel"]
+        self.assertEqual(under, "surface:under")
+        self.assertEqual(tiles["surface"], ["surface", under])
+        self.assertEqual(crossovers[0]["under_path"], ["approach", under, "continuation"])
+        self.assertEqual(set(under_channels), {under})
+        self.assertNotIn("polygon", split_nodes[under]["data"])
+
+        neighbors = {node_id: set() for node_id in split_nodes}
+        for left, right in split_edges:
+            neighbors[left].add(right)
+            neighbors[right].add(left)
+        self.assertEqual(neighbors[under], {"approach", "continuation"})
+        self.assertEqual(neighbors["surface"], {"upper", "lower"})
+        self.assertNotIn(("approach", "surface"), split_edges)
+        self.assertNotIn(("continuation", "surface"), split_edges)
+        self.assertEqual(rewritten_seams, [("approach", under)])
+        self.assertIn(("approach", "surface"), forbidden)
+        self.assertIn(("continuation", "surface"), forbidden)
 
     def test_image_generate_cube_target_emits_topology_graph(self) -> None:
         image = Image.new("RGB", (120, 120), color=(255, 255, 255))
@@ -185,6 +309,41 @@ class GraphTopologyTests(unittest.TestCase):
 
         self.assertIn("A", terminals, msg=f"missing white terminals; info={info}")
         self.assertEqual(set(terminals["A"]), set(chosen_ids))
+
+    def test_detects_low_saturation_gray_terminals_on_dark_topology(self) -> None:
+        obj = build_graph_json(
+            layout="cube",
+            width=2,
+            height=2,
+            nodes=2,
+            meta={"source": "unit-test"},
+        )
+        nodes = obj["space"]["nodes"]
+        projected = self._project_nodes(nodes, width=360, height=360, margin_ratio=0.15)
+        chosen_ids = list(nodes)[:2]
+
+        image = Image.new("RGB", (360, 360), color=(10, 10, 18))
+        draw = ImageDraw.Draw(image)
+        for node_id in chosen_ids:
+            x, y = projected[node_id]
+            draw.ellipse((x - 14, y - 14, x + 14, y + 14), fill=(159, 159, 189))
+
+        placements, info = detect_terminals_on_nodes(
+            image,
+            nodes=nodes,
+            sat_threshold=30.0,
+            brightness_min=30.0,
+            brightness_max=230.0,
+            margin_ratio=0.15,
+            cluster_threshold=60.0,
+            bg_threshold=40.0,
+            expected_pairs=1,
+        )
+        terminals = build_graph_terminals_from_node_placements(placements)
+
+        self.assertIn("A", terminals, msg=f"missing gray terminals; info={info}")
+        self.assertEqual(set(terminals["A"]), set(chosen_ids))
+        self.assertEqual(info["recovered_pairs"], [])
 
 
 if __name__ == "__main__":

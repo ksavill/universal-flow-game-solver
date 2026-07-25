@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 from backend.app import app
-from backend.image_utils import classify_level_type, detect_bridge_cells, detect_grid
+from backend.image_utils import (
+    _extend_lattice_to_frame,
+    classify_level_type,
+    detect_bridge_cells,
+    detect_grid,
+)
 
 
 def _bridge_grid_image() -> Image.Image:
@@ -65,6 +70,18 @@ def test_detects_bridge_marker_without_confusing_grid_lines() -> None:
     )
     assert level_type.geometry == "square"
     assert level_type.modifiers == ("bridges",)
+
+
+def test_extends_regular_partial_axis_to_the_board_frame() -> None:
+    recovered = _extend_lattice_to_frame(
+        [466.0, 578.0, 690.0, 802.0, 914.0, 1026.0, 1138.0, 1250.0, 1362.0, 1474.0],
+        spacing=112.0,
+        extent=1497,
+    )
+
+    assert len(recovered) == 14
+    assert recovered[0] == 18.0
+    assert recovered[-1] == 1474.0
 
 
 def test_detects_official_double_rail_bridge_glyph() -> None:

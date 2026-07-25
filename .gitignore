@@ -16,6 +16,10 @@ data/image_imports/
 data/image_jobs/
 data/.image_pipeline.locks/
 data/.image_imports.locks/
+data/.image_imports.sqlite3*
+reference_screenshot_corpus/manifest.json
+reference_screenshot_corpus/screenshots/
+reference_screenshot_corpus/results/
 backups/
 
 

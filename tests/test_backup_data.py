@@ -15,17 +15,21 @@ def test_backup_contains_mutable_data_and_integrity_manifest(
     puzzles = tmp_path / "puzzles"
     imports = tmp_path / "data" / "image_imports"
     jobs = tmp_path / "data" / "image_jobs"
+    corpus = tmp_path / "reference_screenshot_corpus"
     puzzles.mkdir(parents=True)
     imports.mkdir(parents=True)
     jobs.mkdir(parents=True)
+    (corpus / "screenshots").mkdir(parents=True)
     puzzle_bytes = b"A.A\n"
     (puzzles / "sample.flow").write_bytes(puzzle_bytes)
     (imports / "record.json").write_text('{"status":"processed"}', encoding="utf-8")
     (jobs / "job.json").write_text('{"status":"queued"}', encoding="utf-8")
+    (corpus / "manifest.json").write_text('{"selected":1}', encoding="utf-8")
+    (corpus / "screenshots" / "reference.png").write_bytes(b"reference")
     output = tmp_path / "backups"
 
     monkeypatch.setattr(backup_data, "ROOT", tmp_path)
-    monkeypatch.setattr(backup_data, "BACKUP_SOURCES", (puzzles, imports, jobs))
+    monkeypatch.setattr(backup_data, "BACKUP_SOURCES", (puzzles, imports, jobs, corpus))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -40,6 +44,8 @@ def test_backup_contains_mutable_data_and_integrity_manifest(
             "puzzles/sample.flow",
             "data/image_imports/record.json",
             "data/image_jobs/job.json",
+            "reference_screenshot_corpus/manifest.json",
+            "reference_screenshot_corpus/screenshots/reference.png",
             "BACKUP_MANIFEST.json",
         } <= set(archive.namelist())
         manifest = json.loads(archive.read("BACKUP_MANIFEST.json"))

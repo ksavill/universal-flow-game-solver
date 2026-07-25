@@ -4,6 +4,10 @@ __pycache__
 *.pyc
 out
 puzzles
+data
+backups
+reference_screenshot_corpus
+tests
 frontend/node_modules
 frontend/dist
 frontend/.vite

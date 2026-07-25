@@ -23,6 +23,7 @@ import {
   DeleteOutline,
   ExpandLess,
   ExpandMore,
+  Flag,
   Refresh,
   Replay,
   SaveOutlined
@@ -37,24 +38,37 @@ import {
   savePuzzle,
   SolveResponse
 } from "../api";
-import { GameView } from "./GameView";
+import {
+  BoardVisualization,
+  BoardViewMode,
+  BoardViewToggle
+} from "./BoardVisualization";
+import { FlagReviewControl } from "./FlagReviewControl";
 
 type ScreenshotArchiveProps = {
-  onOpenResult: (name: string, text: string) => void;
+  onOpenResult: (name: string, text: string, importId: string) => void;
   onReprocess?: (entries: ImageImportEntry[]) => void;
+  flaggedOnly?: boolean;
 };
 
 type StatusFilter = "all" | "solved" | "unknown" | "failed";
 type SortOrder = "newest" | "oldest";
 type SolveCacheEntry = SolveResponse | "loading" | "error";
 
-const PAGE_SIZE = 100;
+// Game-like previews contain substantially more SVG geometry than the graph
+// thumbnails. Keep archive pages bounded so the default game view stays
+// responsive even when solution overlays are expanded.
+const PAGE_SIZE = 24;
 
 function entryTimestamp(entry: ImageImportEntry): number {
   return entry.updated_at ?? entry.created_at;
 }
 
-export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchiveProps) {
+export function ScreenshotArchive({
+  onOpenResult,
+  onReprocess,
+  flaggedOnly = false
+}: ScreenshotArchiveProps) {
   const [entries, setEntries] = useState<ImageImportEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -67,6 +81,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
   const [page, setPage] = useState(1);
   const [saveNotes, setSaveNotes] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [showSolutions, setShowSolutions] = useState(true);
+  const [boardViewMode, setBoardViewMode] = useState<BoardViewMode>("game");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [solveCache, setSolveCache] = useState<Record<string, SolveCacheEntry>>({});
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null);
@@ -81,6 +96,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
         status: statusFilter,
+        flagged: flaggedOnly ? true : undefined,
         search,
         order: sortOrder
       });
@@ -94,7 +110,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
     } finally {
       setLoading(false);
     }
-  }, [page, search, sortOrder, statusFilter]);
+  }, [flaggedOnly, page, search, sortOrder, statusFilter]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refresh(), 250);
@@ -139,7 +155,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
   }, [showSolutions, paged]);
 
   // Fetch solve results for expanded rows that aren't cached yet, a few at a
-  // time so a 100-row page doesn't fire 100 concurrent requests.
+  // time so a full page doesn't fire all solve requests concurrently.
   useEffect(() => {
     const targets = paged.filter(
       (entry) =>
@@ -258,7 +274,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
       if (!record.result) {
         throw new Error(record.error ?? "This import failed before a puzzle was generated.");
       }
-      onOpenResult(record.result.name, record.result.text);
+      onOpenResult(record.result.name, record.result.text, entry.id);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to open processed screenshot.");
@@ -340,8 +356,9 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
     <Stack spacing={1.5}>
       <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
         <Typography variant="body2" color="text.secondary">
-          Every uploaded screenshot is retained once and can be reprocessed through the current
-          pipeline at any time.
+          {flaggedOnly
+            ? "These screenshots were explicitly marked for follow-up. Review the input, stored errors, and any generated solution before unflagging them."
+            : "Every uploaded screenshot is retained once and can be reprocessed through the current pipeline at any time."}
         </Typography>
         <Button
           size="small"
@@ -401,6 +418,7 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
           <Chip label={`${selectedIds.size} selected`} size="small" color="primary" />
         )}
         <Box flexGrow={1} />
+        <BoardViewToggle value={boardViewMode} onChange={setBoardViewMode} />
         <FormControlLabel
           control={
             <Switch
@@ -435,7 +453,9 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
       {error && <Alert severity="error">{error}</Alert>}
       {!loading && total === 0 && statusFilter === "all" && !search.trim() && (
         <Alert severity="info">
-          Uploaded screenshots will appear here after you import one on the Screenshot page.
+          {flaggedOnly
+            ? "Nothing is flagged for review."
+            : "Uploaded screenshots will appear here after you import one on the Screenshot page."}
         </Alert>
       )}
       {!loading && total === 0 && (statusFilter !== "all" || Boolean(search.trim())) && (
@@ -521,10 +541,24 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
                     {entry.solve_status === "failed" && (
                       <Chip label="Solve failed" size="small" color="warning" />
                     )}
+                    {entry.flagged && (
+                      <Chip icon={<Flag />} label="Flagged" size="small" color="warning" />
+                    )}
                     {(entry.run_count ?? 1) > 1 && (
                       <Chip label={`${entry.run_count} runs`} size="small" variant="outlined" />
                     )}
                   </Box>
+                  {entry.flag_reason && (
+                    <Typography
+                      variant="caption"
+                      color="warning.main"
+                      display="block"
+                      mt={0.5}
+                      title={entry.flag_reason}
+                    >
+                      Review note: {entry.flag_reason}
+                    </Typography>
+                  )}
                   {(entry.error || entry.solve_error) && (
                     <Typography
                       variant="caption"
@@ -553,6 +587,21 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
                   spacing={0.5}
                   sx={{ gridColumn: { xs: "1 / -1", sm: "auto" }, justifyContent: "flex-end" }}
                 >
+                  <FlagReviewControl
+                    importId={entry.id}
+                    initialFlagged={entry.flagged}
+                    initialReason={entry.flag_reason}
+                    onChanged={(updated) => {
+                      if (flaggedOnly && !updated.flagged) {
+                        setEntries((current) => current.filter((item) => item.id !== entry.id));
+                        setTotal((current) => Math.max(0, current - 1));
+                        return;
+                      }
+                      setEntries((current) =>
+                        current.map((item) => (item.id === entry.id ? { ...item, ...updated } : item))
+                      );
+                    }}
+                  />
                   {solved && (
                     <IconButton
                       size="small"
@@ -609,8 +658,9 @@ export function ScreenshotArchive({ onOpenResult, onReprocess }: ScreenshotArchi
                           The stored solution could not be loaded — open the result to re-solve it.
                         </Typography>
                       ) : (
-                        <GameView
+                        <BoardVisualization
                           graph={solve.graph}
+                          mode={boardViewMode}
                           nodeColor={solve.node_color}
                           pathEdges={solve.path_edges}
                           paths={solve.paths}

@@ -58,19 +58,40 @@ import {
   renamePuzzle,
   SolveResponse
 } from "../api";
-import { GameView } from "../components/GameView";
+import {
+  BoardVisualization,
+  BoardViewMode,
+  BoardViewToggle
+} from "../components/BoardVisualization";
 import { ScreenshotArchive } from "../components/ScreenshotArchive";
+import type { LibrarySection } from "../routes";
 
 const entryKey = (entry: PuzzleEntry) => `${entry.source}:${entry.rel_path}:${entry.mtime ?? 0}`;
 
 type LibraryViewProps = {
-  onLoadPuzzle: (name: string, text: string, opts?: { autoSolve?: boolean }) => void;
+  onLoadPuzzle: (
+    name: string,
+    text: string,
+    opts?: {
+      autoSolve?: boolean;
+      importId?: string | null;
+      source?: "examples" | "user";
+      relPath?: string;
+    }
+  ) => void;
+  section: LibrarySection;
+  onSectionChange: (section: LibrarySection) => void;
   onImportScreenshot?: () => void;
   onReprocessImports?: (entries: ImageImportEntry[]) => void;
 };
 
-export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImports }: LibraryViewProps) {
-  const [section, setSection] = useState<"puzzles" | "screenshots">("puzzles");
+export function LibraryView({
+  onLoadPuzzle,
+  section,
+  onSectionChange,
+  onImportScreenshot,
+  onReprocessImports
+}: LibraryViewProps) {
   const [entries, setEntries] = useState<PuzzleEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +99,7 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
   const [sizeFilter, setSizeFilter] = useState<string>("all");
   const [search, setSearch] = useState<string>("");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [boardViewMode, setBoardViewMode] = useState<BoardViewMode>("game");
   const [page, setPage] = useState(1);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -209,7 +231,11 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
   async function handleLoad(entry: PuzzleEntry, opts?: { autoSolve?: boolean }) {
     try {
       const data = await getPuzzle(entry.source, entry.rel_path);
-      onLoadPuzzle(data.name, data.text, opts);
+      onLoadPuzzle(data.name, data.text, {
+        ...opts,
+        source: entry.source,
+        relPath: entry.rel_path
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load puzzle.");
     }
@@ -335,7 +361,7 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
       <Card>
         <Tabs
           value={section}
-          onChange={(_event, value) => value && setSection(value)}
+          onChange={(_event, value) => value && onSectionChange(value)}
           variant="fullWidth"
         >
           <Tab value="puzzles" label="Puzzles" />
@@ -347,7 +373,9 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
         <Card>
           <CardContent>
             <ScreenshotArchive
-              onOpenResult={(name, text) => onLoadPuzzle(name, text)}
+              onOpenResult={(name, text, importId) =>
+                onLoadPuzzle(name, text, { importId })
+              }
               onReprocess={onReprocessImports}
             />
           </CardContent>
@@ -394,6 +422,9 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
             </MenuItem>
           ))}
         </Select>
+            {effectiveViewMode === "grid" && (
+              <BoardViewToggle value={boardViewMode} onChange={setBoardViewMode} />
+            )}
             {!isMobile && (
               <ToggleButtonGroup
                 exclusive
@@ -549,7 +580,7 @@ export function LibraryView({ onLoadPuzzle, onImportScreenshot, onReprocessImpor
                       }}
                     >
                       {graph ? (
-                        <GameView graph={graph} compact />
+                        <BoardVisualization graph={graph} mode={boardViewMode} compact />
                       ) : (
                         <Box
                           sx={{

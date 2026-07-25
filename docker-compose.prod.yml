@@ -5,14 +5,14 @@ services:
       dockerfile: backend/Dockerfile
     command: >-
       uvicorn backend.app:app --host 0.0.0.0 --port 8000
-      --workers ${API_WORKERS:-2}
+      --workers ${API_WORKERS:-1}
     expose:
       - "8000"
     restart: unless-stopped
     environment:
       RELOAD: "0"
       CORS_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost}
-      FLOW_IMAGE_PIPELINE_CONCURRENCY: ${FLOW_IMAGE_PIPELINE_CONCURRENCY:-3}
+      FLOW_IMAGE_PIPELINE_CONCURRENCY: ${FLOW_IMAGE_PIPELINE_CONCURRENCY:-2}
     volumes:
       - ./puzzles:/app/puzzles
       - ./data:/app/data
@@ -35,4 +35,3 @@ services:
     depends_on:
       api:
         condition: service_healthy
-

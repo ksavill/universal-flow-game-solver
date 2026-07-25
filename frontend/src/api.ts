@@ -1,6 +1,6 @@
 export type PuzzleEntry = {
   name: string;
-  source: string;
+  source: "examples" | "user";
   rel_path: string;
   kind: string;
   type_label: string;
@@ -53,6 +53,7 @@ export type SolveResponse = {
     }>;
     terminals: Record<string, [string, string]>;
     tiles: Record<string, string[]>;
+    meta?: Record<string, unknown>;
     terminal_colors?: Record<string, string>;
     schema_version?: number;
     topology?: {
@@ -148,10 +149,24 @@ export type ImageGenerateResponse = {
   metadata: Record<string, string>;
   import_id?: string;
   archived_at?: number;
+  review_flagged?: boolean;
+  flag_reason?: string;
   detection: {
     grid?: { rows: number; cols: number; vertical_lines?: number; horizontal_lines?: number };
     terminals?: Array<{ row?: number; col?: number; node_id?: string; letter: string; color?: number[] }>;
     terminal_info?: Record<string, unknown>;
+    terminal_completeness?: {
+      status: "verified" | "plausible" | "incomplete" | "uncertain" | "not_applicable";
+      expected_pairs?: number | null;
+      detected_pairs: number;
+      detected_endpoints: number;
+      pairing_complete: boolean;
+      confidence: number;
+      near_miss_count: number;
+      recovered_pair_count: number;
+      review_required: boolean;
+      reason: string;
+    };
     warnings?: string[];
     perspective?: Record<string, unknown> | null;
     level_type?: LevelType;
@@ -166,6 +181,9 @@ export type ImageImportEntry = {
   id: string;
   created_at: number;
   updated_at?: number;
+  flagged: boolean;
+  flagged_at?: number;
+  flag_reason?: string;
   status: "processed" | "failed";
   original_name: string;
   content_type: string;
@@ -389,6 +407,7 @@ export async function listImageImports(params: {
   limit?: number;
   offset?: number;
   status?: "all" | "processed" | "solved" | "unknown" | "failed";
+  flagged?: boolean;
   search?: string;
   order?: "newest" | "oldest";
 } = {}): Promise<ImageImportPage> {
@@ -399,6 +418,9 @@ export async function listImageImports(params: {
     search: params.search ?? "",
     order: params.order ?? "newest"
   });
+  if (params.flagged !== undefined) {
+    query.set("flagged", String(params.flagged));
+  }
   return apiRequest<ImageImportPage>(`/image-imports?${query.toString()}`);
 }
 
@@ -449,6 +471,32 @@ export async function fetchImageJobItemFile(
 
 export async function getImageImport(importId: string): Promise<ImageImportRecord> {
   return apiRequest<ImageImportRecord>(`/image-imports/${encodeURIComponent(importId)}`);
+}
+
+export async function flagImageImport(
+  importId: string,
+  reason?: string
+): Promise<ImageImportEntry> {
+  return apiRequest<ImageImportEntry>(
+    `/image-imports/${encodeURIComponent(importId)}/flag`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason: reason?.trim() || null })
+    }
+  );
+}
+
+export async function unflagImageImport(importId: string): Promise<ImageImportEntry> {
+  const res = await fetch(
+    `${API_URL}/image-imports/${encodeURIComponent(importId)}/flag`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    const message = (detail as { detail?: string }).detail ?? res.statusText;
+    throw new Error(message);
+  }
+  return res.json() as Promise<ImageImportEntry>;
 }
 
 export function imageImportImageUrl(importId: string) {
@@ -657,6 +705,7 @@ export async function imageGenerate(params: {
   graphNodes?: number;
   autoTerminals?: boolean;
   autoClassify?: boolean;
+  expectedFlowCount?: number | null;
   levelType?: LevelType | null;
   edgeOverrides?: {
     add?: Array<[string, string]>;
@@ -701,6 +750,9 @@ export async function imageGenerate(params: {
   }
   if (params.autoClassify !== undefined) {
     form.append("auto_classify", String(params.autoClassify));
+  }
+  if (params.expectedFlowCount !== undefined && params.expectedFlowCount !== null) {
+    form.append("expected_flow_count", String(params.expectedFlowCount));
   }
   if (params.levelType) {
     form.append("level_type_json", JSON.stringify(params.levelType));
@@ -754,7 +806,7 @@ export async function imageOcr(params: {
   file: File;
   crop?: { x: number; y: number; width: number; height: number } | null;
   perspective?: boolean;
-}): Promise<{ text: string; suggested_name?: string; message?: string }> {
+}): Promise<{ text: string; suggested_name?: string; expected_flow_count?: number | null; message?: string }> {
   const form = new FormData();
   form.append("file", params.file);
   if (params.perspective !== undefined) {
@@ -766,7 +818,12 @@ export async function imageOcr(params: {
     form.append("crop_width", String(params.crop.width));
     form.append("crop_height", String(params.crop.height));
   }
-  return imageRequest<{ text: string; suggested_name?: string; message?: string }>("/image/ocr", form);
+  return imageRequest<{
+    text: string;
+    suggested_name?: string;
+    expected_flow_count?: number | null;
+    message?: string;
+  }>("/image/ocr", form);
 }
 
 export async function listCropTemplates(): Promise<CropTemplate[]> {

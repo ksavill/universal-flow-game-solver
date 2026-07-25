@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -37,6 +38,7 @@ from flow_solver.topologies import build_grid_topology, build_hex_topology, buil
 from flow_solver.validation import validate_puzzle
 from backend.acceleration import acceleration_capabilities
 from backend.file_lock import FileLockTimeout, InterProcessFileLock
+from backend.region_seams import infer_bounded_region_seams
 from backend.image_utils import (
     CropBox,
     apply_crop,
@@ -46,6 +48,7 @@ from backend.image_utils import (
     build_flow_text,
     build_graph_json,
     build_grid,
+    build_region_crossover_channels,
     classify_level_type,
     detect_bridge_cells,
     detect_circle_grid,
@@ -57,6 +60,9 @@ from backend.image_utils import (
     detect_warp_edges,
     detect_terminals,
     load_image,
+    parse_expected_flow_count,
+    prune_nonterminal_region_leaves,
+    repair_nonterminal_region_leaves,
 )
 
 MAX_TIMEOUT_MS = 1_000_000
@@ -146,7 +152,9 @@ def _read_image_import(import_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Stored image import is unreadable") from exc
     if not isinstance(record, dict):
         raise HTTPException(status_code=500, detail="Stored image import is invalid")
-    return _restore_archived_terminal_colors(record)
+    record = _restore_archived_terminal_colors(record)
+    record["flagged"] = bool(record.get("flagged", False))
+    return record
 
 
 def _image_import_summary(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,6 +163,9 @@ def _image_import_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in record.items()
         if key not in {"image_file", "processing", "result", "solve", "runs"}
     }
+    # Legacy archive records predate the review queue. Expose an explicit false
+    # value so API clients do not need to distinguish old and new records.
+    summary["flagged"] = bool(record.get("flagged", False))
     solve = record.get("solve") if isinstance(record.get("solve"), dict) else None
     if solve is not None:
         summary["solve_status"] = solve.get("status")
@@ -166,6 +177,233 @@ def _image_import_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     runs = record.get("runs") if isinstance(record.get("runs"), list) else []
     summary["run_count"] = len(runs) + 1
     return summary
+
+
+_IMAGE_IMPORT_INDEX_SCHEMA_VERSION = "1"
+_IMAGE_IMPORT_INDEX_INIT_LOCK = threading.Lock()
+_IMAGE_IMPORT_INDEX_INITIALIZED: set[str] = set()
+
+
+def _image_import_index_path() -> Path:
+    configured = os.environ.get("FLOW_IMAGE_IMPORT_INDEX_PATH", "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.is_absolute() else _repo_root() / path
+    imports_dir = _image_imports_dir()
+    return imports_dir.parent / f".{imports_dir.name}.sqlite3"
+
+
+def _image_import_index_connect(path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(path, timeout=30.0)
+    connection.execute("PRAGMA busy_timeout=30000")
+    return connection
+
+
+@contextmanager
+def _image_import_index_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Commit/rollback and explicitly close the short-lived index connection."""
+
+    connection = _image_import_index_connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def _ensure_image_import_index_schema() -> Path:
+    path = _image_import_index_path()
+    key = str(path.absolute())
+    if key in _IMAGE_IMPORT_INDEX_INITIALIZED:
+        return path
+    with _IMAGE_IMPORT_INDEX_INIT_LOCK:
+        if key in _IMAGE_IMPORT_INDEX_INITIALIZED:
+            return path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _image_import_index_connection(path) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS image_import_index (
+                    id TEXT PRIMARY KEY,
+                    record_status TEXT NOT NULL,
+                    solve_status TEXT,
+                    failed INTEGER NOT NULL,
+                    solved INTEGER NOT NULL,
+                    flagged INTEGER NOT NULL,
+                    searchable TEXT NOT NULL,
+                    sort_time REAL NOT NULL,
+                    summary_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_image_import_sort
+                    ON image_import_index(sort_time);
+                CREATE INDEX IF NOT EXISTS idx_image_import_status
+                    ON image_import_index(record_status, solve_status, failed, solved);
+                CREATE INDEX IF NOT EXISTS idx_image_import_flagged
+                    ON image_import_index(flagged, sort_time);
+                CREATE TABLE IF NOT EXISTS image_import_index_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
+        _IMAGE_IMPORT_INDEX_INITIALIZED.add(key)
+    return path
+
+
+def _image_import_index_row(record: Dict[str, Any]) -> Tuple[Any, ...]:
+    summary = _image_import_summary(record)
+    failed = summary.get("status") == "failed" or summary.get("solve_status") == "failed"
+    solved = summary.get("solve_status") == "solved"
+    searchable = " ".join(
+        str(summary.get(key) or "")
+        for key in ("original_name", "generated_name", "geometry", "flag_reason")
+    ).casefold()
+    return (
+        str(summary.get("id") or ""),
+        str(summary.get("status") or ""),
+        str(summary.get("solve_status")) if summary.get("solve_status") is not None else None,
+        int(failed),
+        int(solved),
+        int(bool(summary.get("flagged", False))),
+        searchable,
+        float(summary.get("updated_at", summary.get("created_at", 0)) or 0),
+        json.dumps(summary, separators=(",", ":"), sort_keys=True),
+    )
+
+
+_IMAGE_IMPORT_INDEX_UPSERT = """
+    INSERT INTO image_import_index (
+        id, record_status, solve_status, failed, solved, flagged,
+        searchable, sort_time, summary_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        record_status=excluded.record_status,
+        solve_status=excluded.solve_status,
+        failed=excluded.failed,
+        solved=excluded.solved,
+        flagged=excluded.flagged,
+        searchable=excluded.searchable,
+        sort_time=excluded.sort_time,
+        summary_json=excluded.summary_json
+"""
+
+
+def _upsert_image_import_index(record: Dict[str, Any]) -> None:
+    path = _ensure_image_import_index_schema()
+    with _image_import_index_connection(path) as connection:
+        connection.execute(_IMAGE_IMPORT_INDEX_UPSERT, _image_import_index_row(record))
+
+
+def _delete_image_import_index(import_ids: Sequence[str]) -> None:
+    if not import_ids:
+        return
+    path = _ensure_image_import_index_schema()
+    with _image_import_index_connection(path) as connection:
+        connection.executemany(
+            "DELETE FROM image_import_index WHERE id = ?",
+            ((str(import_id),) for import_id in import_ids),
+        )
+
+
+def _invalidate_image_import_index_backfill() -> None:
+    path = _image_import_index_path()
+    if not path.exists():
+        return
+    try:
+        with _image_import_index_connection(path) as connection:
+            connection.execute(
+                "DELETE FROM image_import_index_meta WHERE key = 'archive_backfill'"
+            )
+    except Exception:
+        pass
+
+
+def _backfill_image_import_index() -> Path:
+    path = _ensure_image_import_index_schema()
+    with _image_import_index_connection(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        marker = connection.execute(
+            "SELECT value FROM image_import_index_meta WHERE key = 'archive_backfill'"
+        ).fetchone()
+        if marker and marker[0] == _IMAGE_IMPORT_INDEX_SCHEMA_VERSION:
+            connection.commit()
+            return path
+
+        rows: List[Tuple[Any, ...]] = []
+        base = _image_imports_dir()
+        if base.exists():
+            for record_path in base.glob("*/record.json"):
+                try:
+                    record = json.loads(record_path.read_text(encoding="utf-8"))
+                    if isinstance(record, dict):
+                        rows.append(_image_import_index_row(record))
+                except Exception:
+                    continue
+        connection.execute("DELETE FROM image_import_index")
+        if rows:
+            connection.executemany(_IMAGE_IMPORT_INDEX_UPSERT, rows)
+        connection.execute(
+            """
+            INSERT INTO image_import_index_meta(key, value)
+            VALUES ('archive_backfill', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (_IMAGE_IMPORT_INDEX_SCHEMA_VERSION,),
+        )
+        connection.commit()
+    return path
+
+
+def _query_image_import_index(
+    *,
+    limit: int,
+    offset: int,
+    status: str,
+    flagged: Optional[bool],
+    query: str,
+    order: str,
+) -> Tuple[List[Dict[str, Any]], int]:
+    path = _backfill_image_import_index()
+    conditions: List[str] = []
+    parameters: List[Any] = []
+    if status == "processed":
+        conditions.append("record_status = ?")
+        parameters.append("processed")
+    elif status == "solved":
+        conditions.append("solved = 1")
+    elif status == "failed":
+        conditions.append("failed = 1")
+    elif status == "unknown":
+        conditions.append("failed = 0 AND solved = 0")
+    if flagged is not None:
+        conditions.append("flagged = ?")
+        parameters.append(int(flagged))
+    if query:
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append("searchable LIKE ? ESCAPE '\\'")
+        parameters.append(f"%{escaped_query}%")
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    direction = "DESC" if order == "newest" else "ASC"
+    with _image_import_index_connection(path) as connection:
+        total = int(
+            connection.execute(
+                f"SELECT COUNT(*) FROM image_import_index{where}",
+                parameters,
+            ).fetchone()[0]
+        )
+        rows = connection.execute(
+            f"""
+            SELECT summary_json
+            FROM image_import_index
+            {where}
+            ORDER BY sort_time {direction}, id {direction}
+            LIMIT ? OFFSET ?
+            """,
+            [*parameters, limit, offset],
+        ).fetchall()
+    entries = [json.loads(row[0]) for row in rows]
+    return entries, total
 
 
 def _image_import_run_summary(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,6 +458,86 @@ def _write_image_import_record(import_id: str, record: Dict[str, Any]) -> None:
     temporary_record = record_path.with_suffix(".json.tmp")
     temporary_record.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
     temporary_record.replace(record_path)
+    try:
+        _upsert_image_import_index(record)
+    except Exception:
+        # The JSON record remains authoritative. A missing/corrupt index can be
+        # rebuilt without losing an import update.
+        _invalidate_image_import_index_backfill()
+
+
+def _set_image_import_flag(
+    import_id: str,
+    *,
+    flagged: bool,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Persist or clear the human/agent review marker on an archived import."""
+
+    with _locked_import(import_id):
+        record = _read_image_import(import_id)
+        updated_at = time.time()
+        record["flagged"] = flagged
+        record["updated_at"] = updated_at
+        if flagged:
+            record["flagged_at"] = updated_at
+            normalized_reason = (reason or "").strip()
+            if normalized_reason:
+                record["flag_reason"] = normalized_reason
+        else:
+            record.pop("flagged_at", None)
+            record.pop("flag_reason", None)
+        _write_image_import_record(import_id, record)
+        return record
+
+
+def _auto_flag_image_import(import_id: str, *, reason: str) -> Dict[str, Any]:
+    """Add an automated review reason without discarding a human reason."""
+
+    normalized_reason = reason.strip()[:1000]
+    with _locked_import(import_id):
+        record = _read_image_import(import_id)
+        existing = str(record.get("flag_reason") or "").strip()
+        if existing and normalized_reason and normalized_reason not in existing:
+            combined_reason = f"{existing}; {normalized_reason}"
+        else:
+            combined_reason = existing or normalized_reason
+        updated_at = time.time()
+        record["flagged"] = True
+        record["flagged_at"] = record.get("flagged_at") or updated_at
+        record["updated_at"] = updated_at
+        if combined_reason:
+            record["flag_reason"] = combined_reason[:2000]
+        _write_image_import_record(import_id, record)
+        return record
+
+
+def _archived_generation_completeness_error(
+    import_id: str,
+    *,
+    name: str,
+    text: str,
+) -> Optional[str]:
+    """Return a blocking review message only for the archive's exact generated text."""
+
+    record = _read_image_import(import_id)
+    generated = record.get("result") if isinstance(record.get("result"), dict) else {}
+    if generated.get("name") != name or generated.get("text") != text:
+        return None
+    detection = generated.get("detection") if isinstance(generated.get("detection"), dict) else {}
+    completeness = (
+        detection.get("terminal_completeness")
+        if isinstance(detection.get("terminal_completeness"), dict)
+        else {}
+    )
+    if completeness.get("status") != "incomplete":
+        return None
+    detected = completeness.get("detected_pairs")
+    expected = completeness.get("expected_pairs")
+    return (
+        "Terminal detection is incomplete "
+        f"(detected {detected} of {expected} expected flow pairs); review the screenshot before solving."
+    )
 
 
 def _replace_image_import(
@@ -364,6 +682,7 @@ def _store_image_import(
         "grid": grid,
         "terminal_count": len(terminals),
         "processing": processing,
+        "flagged": False,
     }
     if result is not None:
         record["result"] = result
@@ -376,6 +695,10 @@ def _store_image_import(
         temporary_record = record_dir / "record.json.tmp"
         temporary_record.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
         temporary_record.replace(record_dir / "record.json")
+        try:
+            _upsert_image_import_index(record)
+        except Exception:
+            _invalidate_image_import_index_backfill()
     except Exception:
         shutil.rmtree(record_dir, ignore_errors=True)
         raise
@@ -391,6 +714,7 @@ _IMAGE_JOB_OPTION_DEFAULTS: Dict[str, Any] = {
     "output_schema_version": 2,
     "auto_terminals": True,
     "auto_classify": True,
+    "expected_flow_count": None,
     "level_type_json": None,
     "edge_overrides_json": None,
     "metadata_json": None,
@@ -421,6 +745,10 @@ def _normalize_image_job_options(raw: Any) -> Dict[str, Any]:
     for key in ("level_type_json", "edge_overrides_json", "metadata_json"):
         if options[key] is not None and not isinstance(options[key], str):
             options[key] = json.dumps(options[key], separators=(",", ":"))
+    if options["expected_flow_count"] is not None:
+        options["expected_flow_count"] = int(options["expected_flow_count"])
+        if not 1 <= options["expected_flow_count"] <= 26:
+            raise ValueError("expected_flow_count must be between 1 and 26")
     return options
 
 
@@ -838,7 +1166,13 @@ def _graph_payload(puzzle: Puzzle) -> Dict[str, Any]:
         )
     edges = [[u, v] for u, v in puzzle.graph.edges()]
     terminals = {c: [a, b] for c, (a, b) in puzzle.terminals.items()}
-    payload = {"nodes": nodes, "edges": edges, "terminals": terminals, "tiles": puzzle.tiles}
+    payload = {
+        "nodes": nodes,
+        "edges": edges,
+        "terminals": terminals,
+        "tiles": puzzle.tiles,
+        "meta": dict(puzzle.meta),
+    }
     terminal_colors = {
         key: value
         for key, value in _terminal_color_map_from_meta(puzzle.meta).items()
@@ -1100,6 +1434,71 @@ def _maybe_perspective(image: Image.Image, enabled: bool) -> Tuple[Image.Image, 
     if not enabled:
         return image, None
     return auto_perspective(image)
+
+
+def _ocr_image_text(image: Image.Image) -> Tuple[str, Optional[str]]:
+    """Run optional OCR without making image generation depend on Tesseract."""
+
+    try:
+        import pytesseract  # type: ignore
+    except Exception:
+        return "", "pytesseract not installed"
+
+    tesseract_cmd = os.environ.get("TESSERACT_CMD")
+    if tesseract_cmd:
+        try:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+        except Exception:
+            pass
+    try:
+        text = pytesseract.image_to_string(image)
+    except Exception as exc:
+        return "", f"OCR failed: {exc}"
+    return " ".join(str(text).split()), None
+
+
+def _terminal_completeness_payload(
+    terminal_info: Dict[str, Any],
+    *,
+    detected_endpoints: int,
+    expected_pairs: Optional[int],
+) -> Dict[str, Any]:
+    detected_pairs = detected_endpoints // 2
+    pairing_complete = detected_endpoints > 0 and detected_endpoints % 2 == 0
+    near_misses = terminal_info.get("near_misses")
+    near_miss_count = len(near_misses) if isinstance(near_misses, list) else 0
+    recovered = terminal_info.get("recovered_pairs")
+    recovered_count = len(recovered) if isinstance(recovered, list) else 0
+
+    if expected_pairs is not None and detected_pairs != expected_pairs:
+        status = "incomplete"
+        confidence = 0.1
+        reason = f"Detected {detected_pairs} of {expected_pairs} expected flow pairs."
+    elif expected_pairs is not None and pairing_complete:
+        status = "verified"
+        confidence = 0.98 if not recovered_count else 0.92
+        reason = f"Detected all {expected_pairs} expected flow pairs."
+    elif pairing_complete:
+        status = "plausible"
+        confidence = 0.82 if not near_miss_count else 0.68
+        reason = "All detected terminal colors are paired; no advertised flow count was available."
+    else:
+        status = "uncertain"
+        confidence = 0.2
+        reason = "Terminal detection did not produce complete endpoint pairs."
+
+    return {
+        "status": status,
+        "expected_pairs": expected_pairs,
+        "detected_pairs": detected_pairs,
+        "detected_endpoints": detected_endpoints,
+        "pairing_complete": pairing_complete,
+        "confidence": confidence,
+        "near_miss_count": near_miss_count,
+        "recovered_pair_count": recovered_count,
+        "review_required": status in {"incomplete", "uncertain"},
+        "reason": reason,
+    }
 
 
 def _normalize_level_geometry(raw: str, *, default: str = "square") -> str:
@@ -1386,6 +1785,13 @@ def _image_graph_schema_v2(
     nodes = space.get("nodes") if isinstance(space.get("nodes"), dict) else {}
     base_edges = _parse_edge_pairs(space.get("edges"), field="space.edges")
     warps = _parse_edge_pairs(space.get("warps"), field="space.warps")
+    seams = _parse_edge_pairs(space.get("seams"), field="space.seams")
+    raw_crossovers = space.get("crossovers")
+    crossovers = (
+        [dict(item) for item in raw_crossovers if isinstance(item, dict)]
+        if isinstance(raw_crossovers, list)
+        else []
+    )
     walls = _parse_edge_pairs(space.get("walls"), field="space.walls")
     overrides = space.get("edge_overrides") if isinstance(space.get("edge_overrides"), dict) else {}
     additions = _parse_edge_pairs(overrides.get("add"), field="space.edge_overrides.add")
@@ -1410,6 +1816,7 @@ def _image_graph_schema_v2(
         for pair in additions
     })
     edge_kinds.update({edge_key(pair): "warp" for pair in warps})
+    edge_kinds.update({edge_key(pair): "seam" for pair in seams})
     wall_keys = {edge_key(pair) for pair in walls}
     blocked_edges = {
         edge_key(pair): ("custom" if edge_key(pair) not in wall_keys else "local")
@@ -1430,6 +1837,8 @@ def _image_graph_schema_v2(
 
     mechanics = set(str(item) for item in level_modifiers if str(item))
     mechanics.update(kind for kind in edge_kinds.values() if kind != "local")
+    if crossovers:
+        mechanics.add("crossovers")
     if blocked_edges:
         mechanics.add("walls")
     if graph_layout == "regions":
@@ -1457,6 +1866,79 @@ def _image_graph_schema_v2(
         catalog=catalog,
     )
     payload = spec.to_dict()
+    if crossovers:
+        crossover_by_edge: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        normalized_crossovers: List[Dict[str, Any]] = []
+        for index, item in enumerate(crossovers):
+            try:
+                pair = _parse_edge_pairs([item.get("under")], field="space.crossovers.under")[0]
+            except (IndexError, ValueError):
+                continue
+            key = edge_key(pair)
+            crossover_id = str(item.get("id") or f"crossover-{index + 1:02d}")
+            normalized = {
+                "id": crossover_id,
+                "under": [key[0], key[1]],
+                "under_path": [
+                    str(node_id) for node_id in item.get("under_path", [])
+                ]
+                if isinstance(item.get("under_path"), list)
+                else [],
+                "surface_channel": (
+                    str(item["surface_channel"])
+                    if item.get("surface_channel") is not None
+                    else None
+                ),
+                "under_channel": (
+                    str(item["under_channel"])
+                    if item.get("under_channel") is not None
+                    else None
+                ),
+                "continuation": (
+                    str(item["continuation"])
+                    if item.get("continuation") is not None
+                    else None
+                ),
+                "surface_neighbors": [
+                    str(node_id) for node_id in item.get("surface_neighbors", [])
+                ]
+                if isinstance(item.get("surface_neighbors"), list)
+                else [],
+                "center": item.get("center"),
+                "under_vector": item.get("under_vector"),
+                "over_vector": item.get("over_vector"),
+                "source": str(item.get("source") or "region-overlap"),
+            }
+            crossover_by_edge[key] = normalized
+            normalized_crossovers.append(normalized)
+
+        if normalized_crossovers:
+            payload["topology"].setdefault("data", {})["crossovers"] = normalized_crossovers
+            for adjacency in payload["topology"]["adjacencies"]:
+                key = edge_key(
+                    (
+                        str(adjacency["a"]["channel"]),
+                        str(adjacency["b"]["channel"]),
+                    )
+                )
+                crossover = crossover_by_edge.get(key)
+                if crossover is None:
+                    continue
+                adjacency["kind"] = "seam"
+                adjacency["group"] = crossover["id"]
+                adjacency["data"] = {
+                    **(adjacency.get("data") or {}),
+                    "mechanic": "crossover",
+                    "crossover_id": crossover["id"],
+                    "layer": "under",
+                    "continuation": crossover["under_path"] or crossover["under"],
+                    "surface_channel": crossover["surface_channel"],
+                    "under_channel": crossover["under_channel"],
+                    "center": crossover["center"],
+                    "under_vector": crossover["under_vector"],
+                    "over_vector": crossover["over_vector"],
+                    "source": crossover["source"],
+                }
     if import_detection is not None:
         payload.setdefault("extensions", {})["flow-solver/import"] = _import_schema_extension(
             import_detection,
@@ -1703,6 +2185,10 @@ class ImageImportReprocessFailureRequest(BaseModel):
     stage: str = Field(default="screenshot-library", min_length=1, max_length=100)
 
 
+class ImageImportFlagRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
 _RECOVERED_JOB_TASKS: set[asyncio.Task[None]] = set()
 _IMAGE_JOB_LEASE_SECONDS = 15 * 60
 
@@ -1781,10 +2267,10 @@ app = FastAPI(title="Universal Flow Game Solver API", version="0.1.0", lifespan=
 try:
     _IMAGE_PIPELINE_CONCURRENCY = max(
         1,
-        min(32, int(os.environ.get("FLOW_IMAGE_PIPELINE_CONCURRENCY", "3"))),
+        min(32, int(os.environ.get("FLOW_IMAGE_PIPELINE_CONCURRENCY", "2"))),
     )
 except ValueError:
-    _IMAGE_PIPELINE_CONCURRENCY = 3
+    _IMAGE_PIPELINE_CONCURRENCY = 2
 _IMAGE_PIPELINE_SEMAPHORE = asyncio.Semaphore(_IMAGE_PIPELINE_CONCURRENCY)
 
 
@@ -2095,6 +2581,14 @@ def validate(req: ValidateRequest) -> Dict[str, Any]:
 @app.post("/solve")
 def solve(req: SolveRequest) -> Dict[str, Any]:
     try:
+        if req.import_id:
+            completeness_error = _archived_generation_completeness_error(
+                req.import_id,
+                name=req.name,
+                text=req.text,
+            )
+            if completeness_error:
+                raise ValueError(completeness_error)
         puzzle = _parse_puzzle(req.text, name=req.name)
         if req.fill is not None:
             puzzle = replace(puzzle, fill=req.fill)
@@ -2132,12 +2626,17 @@ def solve(req: SolveRequest) -> Dict[str, Any]:
     except Exception as e:
         if req.import_id:
             try:
-                _store_image_import_solve(
+                attached = _store_image_import_solve(
                     req.import_id,
                     name=req.name,
                     text=req.text,
                     error=str(e),
                 )
+                if attached:
+                    _auto_flag_image_import(
+                        req.import_id,
+                        reason=f"Automated review: solve failed: {str(e)[:600]}",
+                    )
             except Exception:
                 pass
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -2283,6 +2782,7 @@ def list_image_imports(
     limit: int = Query(default=50, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     status: str = Query(default="all"),
+    flagged: Optional[bool] = Query(default=None),
     search: str = Query(default="", max_length=200),
     order: str = Query(default="newest"),
 ) -> Dict[str, Any]:
@@ -2293,37 +2793,50 @@ def list_image_imports(
     if normalized_order not in {"newest", "oldest"}:
         raise HTTPException(status_code=400, detail="order must be newest or oldest")
     query = search.strip().casefold()
-    records: List[Dict[str, Any]] = []
-    base = _image_imports_dir()
-    if base.exists():
-        for record_path in base.glob("*/record.json"):
-            try:
-                record = json.loads(record_path.read_text(encoding="utf-8"))
-                if isinstance(record, dict):
-                    summary = _image_import_summary(record)
-                    failed = summary.get("status") == "failed" or summary.get("solve_status") == "failed"
-                    solved = summary.get("solve_status") == "solved"
-                    matches_status = (
-                        normalized_status == "all"
-                        or (normalized_status == "failed" and failed)
-                        or (normalized_status == "solved" and solved)
-                        or (normalized_status == "processed" and summary.get("status") == "processed")
-                        or (normalized_status == "unknown" and not failed and not solved)
-                    )
-                    searchable = " ".join(
-                        str(summary.get(key) or "")
-                        for key in ("original_name", "generated_name", "geometry")
-                    ).casefold()
-                    if matches_status and (not query or query in searchable):
-                        records.append(summary)
-            except Exception:
-                continue
-    records.sort(
-        key=lambda item: float(item.get("updated_at", item.get("created_at", 0))),
-        reverse=normalized_order == "newest",
-    )
-    total = len(records)
-    entries = records[offset : offset + limit]
+    try:
+        entries, total = _query_image_import_index(
+            limit=limit,
+            offset=offset,
+            status=normalized_status,
+            flagged=flagged,
+            query=query,
+            order=normalized_order,
+        )
+    except Exception:
+        # Keep archive browsing available if SQLite is unavailable on an
+        # unusual filesystem. JSON remains the source of truth.
+        records: List[Dict[str, Any]] = []
+        base = _image_imports_dir()
+        if base.exists():
+            for record_path in base.glob("*/record.json"):
+                try:
+                    record = json.loads(record_path.read_text(encoding="utf-8"))
+                    if isinstance(record, dict):
+                        summary = _image_import_summary(record)
+                        failed = summary.get("status") == "failed" or summary.get("solve_status") == "failed"
+                        solved = summary.get("solve_status") == "solved"
+                        matches_status = (
+                            normalized_status == "all"
+                            or (normalized_status == "failed" and failed)
+                            or (normalized_status == "solved" and solved)
+                            or (normalized_status == "processed" and summary.get("status") == "processed")
+                            or (normalized_status == "unknown" and not failed and not solved)
+                        )
+                        searchable = " ".join(
+                            str(summary.get(key) or "")
+                            for key in ("original_name", "generated_name", "geometry", "flag_reason")
+                        ).casefold()
+                        matches_flagged = flagged is None or summary["flagged"] is flagged
+                        if matches_status and matches_flagged and (not query or query in searchable):
+                            records.append(summary)
+                except Exception:
+                    continue
+        records.sort(
+            key=lambda item: float(item.get("updated_at", item.get("created_at", 0))),
+            reverse=normalized_order == "newest",
+        )
+        total = len(records)
+        entries = records[offset : offset + limit]
     return {
         "entries": entries,
         "total": total,
@@ -2506,6 +3019,10 @@ def bulk_delete_image_imports(request: ImageImportBulkDeleteRequest) -> Dict[str
                 continue
             shutil.rmtree(record_dir)
             deleted.append(import_id)
+    try:
+        _delete_image_import_index(deleted)
+    except Exception:
+        _invalidate_image_import_index_backfill()
     return {"deleted": deleted, "missing": missing}
 
 
@@ -2519,6 +3036,21 @@ def record_image_import_reprocess_failure(
         error=request.error,
         stage=request.stage,
     )
+    return _image_import_summary(record)
+
+
+@app.post("/image-imports/{import_id}/flag")
+def flag_image_import(
+    import_id: str,
+    request: ImageImportFlagRequest,
+) -> Dict[str, Any]:
+    record = _set_image_import_flag(import_id, flagged=True, reason=request.reason)
+    return _image_import_summary(record)
+
+
+@app.delete("/image-imports/{import_id}/flag")
+def unflag_image_import(import_id: str) -> Dict[str, Any]:
+    record = _set_image_import_flag(import_id, flagged=False)
     return _image_import_summary(record)
 
 
@@ -2546,6 +3078,10 @@ def delete_image_import(import_id: str) -> Dict[str, Any]:
         if not (record_dir / "record.json").exists():
             raise HTTPException(status_code=404, detail="Image import not found")
         shutil.rmtree(record_dir)
+    try:
+        _delete_image_import_index([import_id])
+    except Exception:
+        _invalidate_image_import_index_backfill()
     return {"deleted": True, "id": import_id}
 
 
@@ -2894,6 +3430,7 @@ async def image_generate(
     output_schema_version: int = Form(1),
     auto_terminals: bool = Form(True),
     auto_classify: bool = Form(True),
+    expected_flow_count: Optional[int] = Form(None),
     level_type_json: Optional[str] = Form(None),
     edge_overrides_json: Optional[str] = Form(None),
     metadata_json: Optional[str] = Form(None),
@@ -2916,7 +3453,17 @@ async def image_generate(
     data = await file.read()
     if output_schema_version not in {1, 2}:
         raise HTTPException(status_code=400, detail="output_schema_version must be 1 or 2")
+    if expected_flow_count is not None and not 1 <= expected_flow_count <= 26:
+        raise HTTPException(status_code=400, detail="expected_flow_count must be between 1 and 26")
     image = load_image(data)
+    expected_flow_source: Optional[str] = "request" if expected_flow_count is not None else None
+    expected_flow_ocr_message: Optional[str] = None
+    if auto_terminals and expected_flow_count is None:
+        ocr_text, expected_flow_ocr_message = _ocr_image_text(image)
+        inferred_flow_count = parse_expected_flow_count(ocr_text)
+        if inferred_flow_count is not None:
+            expected_flow_count = inferred_flow_count
+            expected_flow_source = "ocr"
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
     auto_crop_info: Dict[str, Any] = {
@@ -2967,7 +3514,14 @@ async def image_generate(
         base=extra_meta,
     )
 
-    detection_info: Dict[str, Any] = {"perspective": perspective_info, "auto_crop": auto_crop_info}
+    detection_info: Dict[str, Any] = {
+        "perspective": perspective_info,
+        "auto_crop": auto_crop_info,
+        "expected_flow_count": expected_flow_count,
+        "expected_flow_count_source": expected_flow_source,
+    }
+    if expected_flow_ocr_message and expected_flow_count is None:
+        detection_info["expected_flow_count_message"] = expected_flow_ocr_message
     requested_target = str(target_type or "auto").strip().lower() or "auto"
     classification_warnings: List[str] = []
 
@@ -3098,6 +3652,8 @@ async def image_generate(
             "grid_height": grid_height,
             "auto_terminals": auto_terminals,
             "auto_classify": auto_classify,
+            "expected_flow_count": expected_flow_count,
+            "expected_flow_count_source": expected_flow_source,
             "crop": (
                 {"x": crop.x, "y": crop.y, "width": crop.width, "height": crop.height}
                 if crop is not None
@@ -3137,6 +3693,14 @@ async def image_generate(
             raise HTTPException(status_code=500, detail=f"Could not archive processed screenshot: {exc}") from exc
         payload["import_id"] = record["id"]
         payload["archived_at"] = record["created_at"]
+        completeness = payload.get("detection", {}).get("terminal_completeness")
+        if isinstance(completeness, dict) and completeness.get("review_required"):
+            flagged_record = _auto_flag_image_import(
+                str(record["id"]),
+                reason=f"Automated review: {str(completeness.get('reason') or 'terminal detection needs review')}",
+            )
+            payload["review_flagged"] = True
+            payload["flag_reason"] = flagged_record.get("flag_reason")
         return payload
 
     if target_used in {"square", "hex", "circle"}:
@@ -3226,6 +3790,7 @@ async def image_generate(
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
                     circle_grid=circle_grid,
+                    expected_pairs=expected_flow_count,
                 )
             else:
                 placements, info = detect_terminals(
@@ -3238,6 +3803,8 @@ async def image_generate(
                     margin_ratio=margin_ratio,
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
+                    expected_pairs=expected_flow_count,
+                    enforce_square_parity=target_used == "square" and not bridge_cell_set,
                 )
             if bridge_cell_set:
                 placements = [
@@ -3270,6 +3837,40 @@ async def image_generate(
                 fallback=False,
             )
             terminal_warnings = grid_warnings
+
+        terminal_completeness = (
+            _terminal_completeness_payload(
+                terminal_info,
+                detected_endpoints=len(placements),
+                expected_pairs=expected_flow_count,
+            )
+            if auto_terminals
+            else {
+                "status": "not_applicable",
+                "expected_pairs": expected_flow_count,
+                "detected_pairs": 0,
+                "detected_endpoints": 0,
+                "pairing_complete": False,
+                "confidence": 0.0,
+                "near_miss_count": 0,
+                "recovered_pair_count": 0,
+                "review_required": False,
+                "reason": "Automatic terminal detection was disabled.",
+            }
+        )
+        terminal_info.update(
+            {
+                "detected_endpoints": terminal_completeness["detected_endpoints"],
+                "detected_pairs": terminal_completeness["detected_pairs"],
+                "expected_pairs": terminal_completeness["expected_pairs"],
+                "completeness_status": terminal_completeness["status"],
+            }
+        )
+        if terminal_completeness["review_required"]:
+            terminal_warnings.append(str(terminal_completeness["reason"]))
+        detection_info["terminals"] = terminals_payload
+        detection_info["terminal_info"] = terminal_info
+        detection_info["terminal_completeness"] = terminal_completeness
 
         for bridge_row, bridge_col in bridge_cells:
             if 0 <= bridge_row < grid_height and 0 <= bridge_col < grid_width:
@@ -3309,8 +3910,6 @@ async def image_generate(
                     status_code=400,
                     detail=f"Could not encode generated grid as schema v2: {exc}",
                 ) from exc
-        detection_info["terminals"] = terminals_payload
-        detection_info["terminal_info"] = terminal_info
         detection_info["warnings"] = classification_warnings + terminal_warnings
         return finalize_generation(
             {"name": name, "text": output_text, "metadata": meta, "detection": detection_info}
@@ -3365,6 +3964,7 @@ async def image_generate(
                     margin_ratio=margin_ratio,
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
+                    expected_pairs=expected_flow_count,
                 )
                 graph_terminal_info = node_info
                 graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
@@ -3397,6 +3997,30 @@ async def image_generate(
                     status_code=400,
                     detail=f"Region graph detection found fewer than two cells{suffix}.",
                 )
+            if bool(region_info.get("regular_hex_lattice")) and level_geometry != "hex":
+                previous_geometry = level_geometry
+                level_geometry = "hex"
+                meta["level_type_geometry"] = "hex"
+                level_type["id"] = _level_type_id("hex", level_modifiers)
+                level_type["geometry"] = "hex"
+                # A clipped/irregular hex silhouette still needs an explicit
+                # region graph even though its local cell lattice is hexagonal.
+                level_type["can_emit_flow"] = False
+                level_type["recommended_target_type"] = "graph"
+                level_type["recommended_output_format"] = "json"
+                level_signals = (
+                    dict(level_type.get("signals", {}))
+                    if isinstance(level_type.get("signals"), dict)
+                    else {}
+                )
+                level_signals["regular_hex_lattice"] = True
+                level_signals["recommended_graph_layout"] = "regions"
+                level_type["signals"] = level_signals
+                detection_info["region_geometry_override"] = {
+                    "from": previous_geometry,
+                    "to": "hex",
+                    "reason": "regular_hex_lattice",
+                }
             space: Dict[str, Any] = {
                 "type": "graph",
                 "topology": "regions",
@@ -3428,6 +4052,7 @@ async def image_generate(
                     margin_ratio=margin_ratio,
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
+                    expected_pairs=expected_flow_count,
                 )
                 graph_terminal_info = node_info
                 graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
@@ -3445,6 +4070,126 @@ async def image_generate(
                 else:
                     obj["terminals"] = {}
                     graph_terminal_warnings.append("No region terminals were confidently detected.")
+                protected_nodes = {
+                    str(node_id)
+                    for pairs in manual_edge_overrides.values()
+                    for pair in pairs
+                    for node_id in pair
+                }
+                region_edges, repaired_region_seams = repair_nonterminal_region_leaves(
+                    nodes_obj,
+                    region_edges,
+                    terminal_nodes=(
+                        node_id
+                        for node_ids in inferred_terminals.values()
+                        for node_id in node_ids
+                    ),
+                    protected_nodes=protected_nodes,
+                )
+                (
+                    nodes_obj,
+                    region_edges,
+                    region_tiles,
+                    region_crossovers,
+                    repaired_region_seams,
+                    forbidden_region_seams,
+                    crossover_under_channels,
+                ) = build_region_crossover_channels(
+                    nodes_obj,
+                    region_edges,
+                    repaired_region_seams,
+                )
+                space["nodes"] = nodes_obj
+                space["edges"] = region_edges
+                if region_crossovers:
+                    obj["tiles"] = region_tiles
+                    space["crossovers"] = region_crossovers
+                inferred_region_seams: List[Tuple[str, str]] = []
+                seam_inference_info: Optional[Dict[str, Any]] = None
+                if repaired_region_seams and inferred_terminals:
+                    inferred_region_seams, seam_inference_info = infer_bounded_region_seams(
+                        nodes_obj,
+                        region_edges,
+                        inferred_terminals,
+                        tiles=region_tiles if region_crossovers else None,
+                        excluded_candidate_nodes=crossover_under_channels,
+                        forbidden_edges=forbidden_region_seams,
+                    )
+                    if inferred_region_seams:
+                        region_edges = sorted(
+                            {
+                                tuple(sorted((str(left), str(right))))
+                                for left, right in region_edges + inferred_region_seams
+                            }
+                        )
+                nodes_obj, region_edges, pruned_region_leaves = prune_nonterminal_region_leaves(
+                    nodes_obj,
+                    region_edges,
+                    terminal_nodes=(
+                        node_id
+                        for node_ids in inferred_terminals.values()
+                        for node_id in node_ids
+                    ),
+                    protected_nodes=protected_nodes,
+                )
+                if region_crossovers:
+                    kept_nodes = set(nodes_obj)
+                    region_tiles = {
+                        tile_id: [
+                            channel_id
+                            for channel_id in channels
+                            if channel_id in kept_nodes
+                        ]
+                        for tile_id, channels in region_tiles.items()
+                        if any(channel_id in kept_nodes for channel_id in channels)
+                    }
+                    region_crossovers = [
+                        crossover
+                        for crossover in region_crossovers
+                        if all(
+                            str(node_id) in kept_nodes
+                            for node_id in crossover.get("under_path", [])
+                        )
+                        and str(crossover.get("surface_channel")) in kept_nodes
+                    ]
+                    obj["tiles"] = region_tiles
+                    if region_crossovers:
+                        space["crossovers"] = region_crossovers
+                    else:
+                        space.pop("crossovers", None)
+                if pruned_region_leaves:
+                    space["nodes"] = nodes_obj
+                    space["edges"] = region_edges
+                    region_info["pruned_nonterminal_leaves"] = pruned_region_leaves
+                    region_info["regions"] = len(region_tiles) if region_crossovers else len(nodes_obj)
+                    region_info["edges"] = len(region_edges)
+                    graph_terminal_info["pruned_nonterminal_leaves"] = pruned_region_leaves
+                elif repaired_region_seams or inferred_region_seams:
+                    space["edges"] = region_edges
+                all_region_seams = sorted(
+                    {
+                        tuple(sorted((left, right)))
+                        for left, right in repaired_region_seams + inferred_region_seams
+                    }
+                )
+                if all_region_seams:
+                    space["seams"] = [
+                        [left, right] for left, right in all_region_seams
+                    ]
+                    region_info["repaired_seams"] = [
+                        [left, right] for left, right in all_region_seams
+                    ]
+                    region_info["edges"] = len(region_edges)
+                    graph_terminal_info["repaired_seams"] = [
+                        [left, right] for left, right in all_region_seams
+                    ]
+                if region_crossovers:
+                    space["crossovers"] = region_crossovers
+                    region_info["crossovers"] = region_crossovers
+                    graph_terminal_info["crossovers"] = region_crossovers
+                if seam_inference_info is not None:
+                    region_info["seam_inference"] = seam_inference_info
+                    graph_terminal_info["seam_inference"] = seam_inference_info
             name = f"{Path(meta.get('source_image', 'image')).stem}_regions_{len(nodes_obj)}.json"
         elif graph_layout == "line":
             if graph_nodes < 2:
@@ -3477,6 +4222,7 @@ async def image_generate(
                     margin_ratio=margin_ratio,
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
+                    expected_pairs=expected_flow_count,
                 )
                 graph_terminal_info = node_info
                 graph_terminal_warnings.extend([str(w) for w in node_info.get("warnings", [])])
@@ -3569,6 +4315,8 @@ async def image_generate(
                     margin_ratio=margin_ratio,
                     cluster_threshold=cluster_threshold,
                     bg_threshold=bg_threshold,
+                    expected_pairs=expected_flow_count,
+                    enforce_square_parity=not warp_edges and not wall_edges,
                 )
                 graph_terminal_info = term_info
                 graph_terminal_warnings.extend([str(w) for w in term_info.get("warnings", [])])
@@ -3607,12 +4355,43 @@ async def image_generate(
                 "warps": len(manual_edge_overrides["warps"]),
                 "walls": len(manual_edge_overrides["walls"]),
             }
+        graph_terminal_completeness = (
+            _terminal_completeness_payload(
+                graph_terminal_info,
+                detected_endpoints=len(graph_terminal_payload),
+                expected_pairs=expected_flow_count,
+            )
+            if auto_terminals
+            else {
+                "status": "not_applicable",
+                "expected_pairs": expected_flow_count,
+                "detected_pairs": 0,
+                "detected_endpoints": 0,
+                "pairing_complete": False,
+                "confidence": 0.0,
+                "near_miss_count": 0,
+                "recovered_pair_count": 0,
+                "review_required": False,
+                "reason": "Automatic terminal detection was disabled.",
+            }
+        )
+        graph_terminal_info.update(
+            {
+                "detected_endpoints": graph_terminal_completeness["detected_endpoints"],
+                "detected_pairs": graph_terminal_completeness["detected_pairs"],
+                "expected_pairs": graph_terminal_completeness["expected_pairs"],
+                "completeness_status": graph_terminal_completeness["status"],
+            }
+        )
+        if graph_terminal_completeness["review_required"]:
+            graph_terminal_warnings.append(str(graph_terminal_completeness["reason"]))
         if modifier_info:
             detection_info["modifier_info"] = modifier_info
         if graph_terminal_payload:
             detection_info["terminals"] = graph_terminal_payload
         if graph_terminal_info:
             detection_info["terminal_info"] = graph_terminal_info
+        detection_info["terminal_completeness"] = graph_terminal_completeness
         detected_terminal_colors = _terminal_color_map_from_placements(graph_terminal_payload)
         if detected_terminal_colors:
             graph_meta = dict(obj.get("meta") if isinstance(obj.get("meta"), dict) else {})
@@ -3674,26 +4453,16 @@ async def image_ocr(
     crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     cropped = apply_crop(image, crop)
     warped, _perspective = _maybe_perspective(cropped, perspective)
-    try:
-        import pytesseract  # type: ignore
-    except Exception:
-        return {"text": "", "suggested_name": None, "message": "pytesseract not installed"}
-
-    tesseract_cmd = os.environ.get("TESSERACT_CMD")
-    if tesseract_cmd:
-        try:
-            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
-        except Exception:
-            pass
-
-    try:
-        text = pytesseract.image_to_string(warped)
-    except Exception as e:
-        return {"text": "", "suggested_name": None, "message": f"OCR failed: {e}"}
-
-    text_clean = " ".join(text.split())
+    text_clean, message = _ocr_image_text(warped)
+    expected_flow_count = parse_expected_flow_count(text_clean)
+    if message:
+        return {
+            "text": "",
+            "suggested_name": None,
+            "expected_flow_count": None,
+            "message": message,
+        }
     level_num = None
-    import re
 
     m = re.search(r"(?:level|lvl)\s*([0-9]{1,5})", text_clean, re.IGNORECASE)
     if m:
@@ -3704,7 +4473,11 @@ async def image_ocr(
             level_num = int(m2.group(1))
 
     suggested = f"classic_level_{level_num}.flow" if level_num is not None else None
-    return {"text": text_clean, "suggested_name": suggested}
+    return {
+        "text": text_clean,
+        "suggested_name": suggested,
+        "expected_flow_count": expected_flow_count,
+    }
 
 
 if __name__ == "__main__":
@@ -3713,4 +4486,15 @@ if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
     reload = os.environ.get("RELOAD", "1").lower() in {"1", "true", "yes", "y", "on"}
-    uvicorn.run("backend.app:app", host=host, port=port, reload=reload)
+    reload_dirs = [
+        str(path)
+        for path in (_ROOT / "backend", _ROOT / "flow_solver")
+        if path.is_dir()
+    ]
+    uvicorn.run(
+        "backend.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        reload_dirs=reload_dirs if reload else None,
+    )

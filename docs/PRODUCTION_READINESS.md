@@ -9,7 +9,7 @@ and the checks required for a release.
 
 - Screenshot processing is bounded in both places that can create load. The
   browser uses a three-item worker pool and the API admits at most
-  `FLOW_IMAGE_PIPELINE_CONCURRENCY` heavy image requests (default `3`). Regular
+  `FLOW_IMAGE_PIPELINE_CONCURRENCY` heavy image requests (default `2`). Regular
   solve and archive requests remain responsive while a batch is active because
   admitted OpenCV/PIL work runs off the FastAPI event loop.
 - `POST /image/jobs` persists a batch, its source images, options, per-file
@@ -21,6 +21,13 @@ and the checks required for a release.
   lock under `.image_imports.locks`, so `uvicorn --workers N` processes cannot
   overwrite each other's updates. The lock implementation uses
   `msvcrt.locking` on Windows and `fcntl.flock` on POSIX.
+- Archive filtering, ordering, and pagination use a persistent SQLite summary
+  index. The per-import JSON remains authoritative and performs a one-time
+  backfill if the index is absent.
+- Development reload watches only `backend/` and `flow_solver/`. Docker Desktop
+  polling remains enabled for reliable hot reload, but it no longer traverses
+  the archive, frontend dependencies, or virtual environment; both development
+  watchers use a two-second polling interval to avoid unnecessary wakeups.
 - Solver parallelism is real: Z3 runs outside the Python GIL and the preferred
   python-sat engine runs in a worker process. Archive validation supports
   `--jobs N` for bounded parallel re-solving.
@@ -74,6 +81,11 @@ so release decisions use the stored ratio thresholds rather than these numbers.
   source images through the current importer and solver in isolated temporary
   archives. Use `--failures-only` to investigate new failures and `--output`
   to retain a machine-readable report.
+- `reference_screenshot_corpus/` retains a local set of up to 500 byte-unique
+  screenshots. Refresh it with `scripts/build_reference_corpus.py --limit 500`
+  and use `scripts/replay_reference_corpus.py` to compare the full image
+  pipeline with reviewed stable-result baselines. It is backed up with mutable
+  data but intentionally not part of CI.
 
 Release verification on 2026-07-14 completed the following gates:
 
@@ -117,8 +129,9 @@ PUBLIC_ORIGIN=https://flow.example.com docker compose -f docker-compose.prod.yml
       `RELOAD=0`, a health check, and `API_WORKERS` (default `2`).
 - [x] `puzzles/` and `data/` are mounted outside the containers.
 - [x] `scripts/backup_data.py` creates an atomic timestamped ZIP containing
-      `puzzles/`, `data/image_imports/`, and `data/image_jobs/`, plus a SHA-256
-      manifest, and applies retention. Schedule it with the host task runner:
+      `puzzles/`, `data/image_imports/`, `data/image_jobs/`, and
+      `reference_screenshot_corpus/`, plus a SHA-256 manifest, and applies
+      retention. Schedule it with the host task runner:
 
       ```bash
       python scripts/backup_data.py --output-dir /srv/flow-backups --retain 14

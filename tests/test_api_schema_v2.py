@@ -7,7 +7,8 @@ import unittest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from backend.app import app
+from backend.app import _image_graph_schema_v2, app
+from backend.image_utils import build_graph_json
 from flow_solver.puzzle import Puzzle
 
 
@@ -87,6 +88,7 @@ class SchemaV2ApiTests(unittest.TestCase):
         graph = response.json()["graph"]
         self.assertEqual(graph["schema_version"], 2)
         self.assertEqual(graph["catalog"]["variant"], "shapes")
+        self.assertEqual(graph["meta"]["author"], "unit-test")
         by_id = {edge["id"]: edge for edge in graph["adjacencies"]}
         self.assertEqual(by_id["b-c"]["kind"], "seam")
 
@@ -161,6 +163,56 @@ class SchemaV2ApiTests(unittest.TestCase):
                 )
                 self.assertEqual(payload["terminals"], {})
                 self.assertEqual(len(Puzzle.from_json(body["text"]).graph.nodes), cells)
+
+    def test_region_crossover_retains_layer_semantics_in_schema_v2(self) -> None:
+        legacy = build_graph_json(
+            layout="line",
+            width=0,
+            height=0,
+            nodes=2,
+            meta={},
+            edge_additions=[],
+            edge_removals=[],
+            warp_edges=[],
+            wall_edges=[],
+        )
+        legacy["space"]["seams"] = [["0", "1"]]
+        legacy["space"]["crossovers"] = [
+            {
+                "id": "crossover-01",
+                "under": ["0", "1"],
+                "center": [0.5, 0.0],
+                "under_vector": [1.0, 0.0],
+                "over_vector": [0.0, 1.0],
+                "source": "unit-test",
+            }
+        ]
+
+        payload = _image_graph_schema_v2(
+            legacy,
+            target_type="graph",
+            graph_layout="regions",
+            width=None,
+            height=None,
+            level_modifiers=[],
+        )
+
+        adjacency = payload["topology"]["adjacencies"][0]
+        self.assertEqual(adjacency["kind"], "seam")
+        self.assertEqual(adjacency["group"], "crossover-01")
+        self.assertEqual(adjacency["data"]["mechanic"], "crossover")
+        self.assertEqual(adjacency["data"]["layer"], "under")
+        self.assertEqual(adjacency["data"]["continuation"], ["0", "1"])
+        self.assertIn("crossovers", payload["catalog"]["mechanics"])
+        self.assertIn("seam", payload["catalog"]["mechanics"])
+        self.assertEqual(
+            payload["topology"]["data"]["crossovers"][0]["id"],
+            "crossover-01",
+        )
+        self.assertEqual(
+            list(Puzzle.from_json(json.dumps(payload)).graph.edges()),
+            [("0", "1")],
+        )
 
 
 if __name__ == "__main__":

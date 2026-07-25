@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   AppBar,
   Box,
@@ -15,8 +15,18 @@ import {
   useMediaQuery
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
-import { AddCircleOutline, LibraryBooks, MenuBookOutlined, PhotoCamera } from "@mui/icons-material";
-import type { ImageImportEntry } from "./api";
+import { AddCircleOutline, Flag, LibraryBooks, MenuBookOutlined, PhotoCamera } from "@mui/icons-material";
+import { getImageImport, getPuzzle, type ImageImportEntry } from "./api";
+import {
+  AppRoute,
+  DocPageId,
+  LibrarySection,
+  PrimaryView,
+  appRoutePath,
+  parseAppRoute,
+  primaryRoute,
+  routePrimaryView
+} from "./routes";
 
 const LibraryView = lazy(async () => ({
   default: (await import("./views/LibraryView")).LibraryView
@@ -30,8 +40,14 @@ const ImageView = lazy(async () => ({
 const SolveView = lazy(async () => ({
   default: (await import("./views/SolveView")).SolveView
 }));
+const FlaggedView = lazy(async () => ({
+  default: (await import("./views/FlaggedView")).FlaggedView
+}));
 const DocsView = lazy(async () => ({
   default: (await import("./views/DocsView")).DocsView
+}));
+const NotFoundView = lazy(async () => ({
+  default: (await import("./views/NotFoundView")).NotFoundView
 }));
 
 const DEFAULT_TEXT = `# type: square
@@ -53,14 +69,28 @@ function clearSolveDraft() {
   }
 }
 
-function loadSolveDraft(): { name: string; text: string; tab: "import" | "new" | "library" } | null {
+function loadSolveDraft(): {
+  name: string;
+  text: string;
+  tab: "import" | "new" | "library" | "flagged";
+  importId: string | null;
+} | null {
   try {
     const raw = window.localStorage.getItem(SOLVE_DRAFT_KEY);
     if (!raw) return null;
-    const value = JSON.parse(raw) as { name?: unknown; text?: unknown; tab?: unknown };
+    const value = JSON.parse(raw) as {
+      name?: unknown;
+      text?: unknown;
+      tab?: unknown;
+      importId?: unknown;
+    };
     if (typeof value.name !== "string" || typeof value.text !== "string" || !value.text.trim()) return null;
-    const tab = value.tab === "new" || value.tab === "library" ? value.tab : "import";
-    return { name: value.name, text: value.text, tab };
+    const tab =
+      value.tab === "new" || value.tab === "library" || value.tab === "flagged"
+        ? value.tab
+        : "import";
+    const importId = typeof value.importId === "string" && value.importId ? value.importId : null;
+    return { name: value.name, text: value.text, tab, importId };
   } catch {
     return null;
   }
@@ -74,60 +104,227 @@ function ViewFallback() {
   );
 }
 
+type AppView = PrimaryView | "solve" | "docs" | "not-found" | "route-loading";
+
+function initialViewForRoute(route: AppRoute): AppView {
+  if (route.kind === "primary") return route.view;
+  if (route.kind === "library") return "library";
+  if (route.kind === "docs") return "docs";
+  if (route.kind === "draft") return "solve";
+  if (route.kind === "not-found") return "not-found";
+  return "route-loading";
+}
+
 export default function App() {
-  type PrimaryView = "import" | "new" | "library";
   const [restoredDraft] = useState(loadSolveDraft);
-  const [tab, setTab] = useState<PrimaryView>(restoredDraft?.tab ?? "import");
-  const [view, setView] = useState<PrimaryView | "solve" | "docs">(restoredDraft ? "solve" : "import");
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute(window.location.pathname));
+  const [tab, setTab] = useState<PrimaryView>(
+    () => routePrimaryView(route) ?? (route.kind === "draft" ? restoredDraft?.tab : null) ?? "import"
+  );
+  const [view, setView] = useState<AppView>(() => initialViewForRoute(route));
   const [puzzleName, setPuzzleName] = useState(restoredDraft?.name ?? "puzzle.flow");
   const [puzzleText, setPuzzleText] = useState(restoredDraft?.text ?? DEFAULT_TEXT);
+  const [puzzleImportId, setPuzzleImportId] = useState<string | null>(
+    restoredDraft?.importId ?? null
+  );
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [solveRequestId, setSolveRequestId] = useState(0);
   const [reprocessRequest, setReprocessRequest] = useState<{
     token: number;
     entries: ImageImportEntry[];
   } | null>(null);
+  const autoSolvePathRef = useRef<string | null>(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+
+  const navigateRoute = useCallback(
+    (
+      nextRoute: AppRoute,
+      options?: { replace?: boolean; state?: Record<string, unknown> }
+    ) => {
+      const path = appRoutePath(nextRoute);
+      const method = options?.replace ? "replaceState" : "pushState";
+      window.history[method](options?.state ?? null, "", path);
+      setRoute(nextRoute);
+      window.scrollTo({ top: 0, behavior: "auto" });
+    },
+    []
+  );
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(parseAppRoute(window.location.pathname));
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (route.kind === "not-found") return;
+    const canonicalPath = appRoutePath(route);
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState(window.history.state, "", canonicalPath);
+    }
+  }, [route]);
+
+  useEffect(() => {
+    let active = true;
+    setRouteError(null);
+
+    if (route.kind === "primary") {
+      setTab(route.view);
+      setView(route.view);
+      return () => {
+        active = false;
+      };
+    }
+    if (route.kind === "library") {
+      setTab("library");
+      setView("library");
+      return () => {
+        active = false;
+      };
+    }
+    if (route.kind === "docs") {
+      setView("docs");
+      return () => {
+        active = false;
+      };
+    }
+    if (route.kind === "not-found") {
+      setView("not-found");
+      return () => {
+        active = false;
+      };
+    }
+    if (route.kind === "draft") {
+      if (restoredDraft) {
+        setPuzzleName(restoredDraft.name);
+        setPuzzleText(restoredDraft.text);
+        setPuzzleImportId(restoredDraft.importId);
+        setTab(restoredDraft.tab);
+      }
+      setView("solve");
+      return () => {
+        active = false;
+      };
+    }
+
+    const historyOrigin = window.history.state?.origin;
+    const origin: PrimaryView =
+      historyOrigin === "import" ||
+      historyOrigin === "new" ||
+      historyOrigin === "library" ||
+      historyOrigin === "flagged"
+        ? historyOrigin
+        : "library";
+    setTab(origin);
+    setView("route-loading");
+
+    void (async () => {
+      try {
+        if (route.kind === "puzzle") {
+          const data = await getPuzzle(route.source, route.relPath);
+          if (!active) return;
+          setPuzzleName(data.name);
+          setPuzzleText(data.text);
+          setPuzzleImportId(null);
+        } else {
+          const record = await getImageImport(route.importId);
+          if (!record.result) {
+            throw new Error(record.error ?? "This imported puzzle is unavailable.");
+          }
+          if (!active) return;
+          setPuzzleName(record.result.name);
+          setPuzzleText(record.result.text);
+          setPuzzleImportId(route.importId);
+        }
+        if (autoSolvePathRef.current === appRoutePath(route)) {
+          autoSolvePathRef.current = null;
+          setSolveRequestId((previous) => previous + 1);
+        }
+        setView("solve");
+      } catch (error) {
+        if (!active) return;
+        setRouteError(error instanceof Error ? error.message : "The requested puzzle is unavailable.");
+        setView("not-found");
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [restoredDraft, route]);
 
   useEffect(() => {
     if (view !== "solve") return;
     try {
       window.localStorage.setItem(
         SOLVE_DRAFT_KEY,
-        JSON.stringify({ name: puzzleName, text: puzzleText, tab, savedAt: Date.now() })
+        JSON.stringify({
+          name: puzzleName,
+          text: puzzleText,
+          tab,
+          importId: puzzleImportId,
+          savedAt: Date.now()
+        })
       );
     } catch {
       // Storage can be unavailable in private/restricted browser contexts.
     }
-  }, [puzzleName, puzzleText, tab, view]);
+  }, [puzzleImportId, puzzleName, puzzleText, tab, view]);
 
-  const handleLoadPuzzle = (name: string, text: string, opts?: { autoSolve?: boolean }) => {
+  const handleLoadPuzzle = (
+    name: string,
+    text: string,
+    opts?: {
+      autoSolve?: boolean;
+      importId?: string | null;
+      source?: "examples" | "user";
+      relPath?: string;
+    }
+  ) => {
     setPuzzleName(name);
     setPuzzleText(text);
-    if (opts?.autoSolve) {
-      setSolveRequestId((prev) => prev + 1);
-    }
-    setView("solve");
+    setPuzzleImportId(opts?.importId ?? null);
+    const nextRoute: AppRoute =
+      opts?.source && opts.relPath
+        ? { kind: "puzzle", source: opts.source, relPath: opts.relPath }
+        : opts?.importId
+          ? { kind: "import", importId: opts.importId }
+          : { kind: "draft" };
+    if (opts?.autoSolve) autoSolvePathRef.current = appRoutePath(nextRoute);
+    navigateRoute(nextRoute, { state: { origin: tab } });
   };
 
   const handleTabChange = (_: unknown, value: PrimaryView) => {
     if (view === "solve") clearSolveDraft();
-    setTab(value);
-    setView(value);
+    navigateRoute(primaryRoute(value));
   };
 
   // Library hands archived screenshots to the importer's batch pipeline.
   const handleReprocessImports = (entries: ImageImportEntry[]) => {
     setReprocessRequest((prev) => ({ token: (prev?.token ?? 0) + 1, entries }));
-    setTab("import");
-    setView("import");
+    navigateRoute(primaryRoute("import"));
   };
 
   const viewLabel: Record<PrimaryView, string> = {
     import: "Solve a screenshot",
     new: "Create puzzle",
-    library: "Puzzle library"
+    library: "Puzzle library",
+    flagged: "Flagged reviews"
   };
+  const librarySection: LibrarySection =
+    route.kind === "library" ? route.section : "puzzles";
+  const docsPageId: DocPageId = route.kind === "docs" ? route.pageId : "architecture";
+  const mobileTitle =
+    view === "solve"
+      ? "Solver"
+      : view === "docs"
+        ? "Docs"
+        : view === "not-found"
+          ? "Page not found"
+          : view === "route-loading"
+            ? "Loading"
+            : viewLabel[view];
 
   return (
     <Box
@@ -157,29 +354,30 @@ export default function App() {
             gap: 1
           }}
         >
-          <Typography
-            variant="h6"
+          <Button
+            aria-label="Home"
+            color="inherit"
+            onClick={() => navigateRoute(primaryRoute("import"))}
             sx={{
+              justifyContent: "flex-start",
+              textTransform: "none",
               fontWeight: 700,
               flexGrow: 1,
-              pr: 2,
-              alignSelf: "center",
+              minWidth: 0,
+              px: 0,
+              mr: 2,
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis"
             }}
           >
-            {isMobile
-              ? view === "solve"
-                ? "Solver"
-                : view === "docs"
-                  ? "Docs"
-                  : viewLabel[view]
-              : "Universal Flow Game Solver"}
-          </Typography>
+            <Typography variant="h6" noWrap>
+              {isMobile ? mobileTitle : "Universal Flow Game Solver"}
+            </Typography>
+          </Button>
           {!isMobile && (
             <Tabs
-              value={view === "docs" ? false : tab}
+              value={view === "docs" || view === "not-found" ? false : tab}
               onChange={handleTabChange}
               textColor="inherit"
               scrollButtons={false}
@@ -187,6 +385,7 @@ export default function App() {
               <Tab value="import" icon={<PhotoCamera fontSize="small" />} iconPosition="start" label="Screenshot" />
               <Tab value="new" icon={<AddCircleOutline fontSize="small" />} iconPosition="start" label="Create" />
               <Tab value="library" icon={<LibraryBooks fontSize="small" />} iconPosition="start" label="Library" />
+              <Tab value="flagged" icon={<Flag fontSize="small" />} iconPosition="start" label="Flagged" />
             </Tabs>
           )}
           <Button
@@ -195,7 +394,10 @@ export default function App() {
             startIcon={<MenuBookOutlined />}
             onClick={() => {
               if (view === "solve") clearSolveDraft();
-              setView("docs");
+              navigateRoute(
+                { kind: "docs", pageId: "architecture" },
+                { state: { origin: tab } }
+              );
             }}
             sx={{ ml: 0.5, whiteSpace: "nowrap", flexShrink: 0 }}
           >
@@ -207,10 +409,13 @@ export default function App() {
         <Suspense fallback={<ViewFallback />}>
           {/* Keep the importer mounted while its puzzle is open in the solver so a
               processed batch isn't lost when opening one of its results. */}
-          {(view === "import" || (view === "solve" && tab === "import")) && (
+          {(view === "import" ||
+            ((view === "solve" || view === "route-loading") && tab === "import")) && (
             <Box sx={{ maxWidth: 860, mx: "auto", display: view === "import" ? "block" : "none" }}>
               <ImageView
-                onGenerated={(name, text) => handleLoadPuzzle(name, text, { autoSolve: true })}
+                onGenerated={(name, text, importId) =>
+                  handleLoadPuzzle(name, text, { autoSolve: true, importId })
+                }
                 reprocessRequest={reprocessRequest}
                 onReprocessHandled={() => setReprocessRequest(null)}
               />
@@ -224,23 +429,58 @@ export default function App() {
           {view === "library" && (
             <LibraryView
               onLoadPuzzle={handleLoadPuzzle}
-              onImportScreenshot={() => handleTabChange(null, "import")}
+              section={librarySection}
+              onSectionChange={(section) => navigateRoute({ kind: "library", section })}
+              onImportScreenshot={() => navigateRoute(primaryRoute("import"))}
               onReprocessImports={handleReprocessImports}
             />
           )}
+          {view === "flagged" && (
+            <FlaggedView
+              onOpenResult={(name, text, importId) =>
+                handleLoadPuzzle(name, text, { importId })
+              }
+              onReprocess={handleReprocessImports}
+            />
+          )}
           {view === "docs" && (
-            <DocsView onBack={() => setView(tab)} backLabel={`Back to ${viewLabel[tab]}`} />
+            <DocsView
+              pageId={docsPageId}
+              onPageChange={(pageId) =>
+                navigateRoute({ kind: "docs", pageId }, { state: { origin: tab } })
+              }
+              onBack={() => navigateRoute(primaryRoute(tab))}
+              backLabel={`Back to ${viewLabel[tab]}`}
+            />
+          )}
+          {view === "route-loading" && <ViewFallback />}
+          {view === "not-found" && (
+            <NotFoundView
+              requestedPath={
+                route.kind === "not-found" ? route.requestedPath : window.location.pathname
+              }
+              message={routeError ?? undefined}
+              onBack={() => {
+                if (window.history.length > 1) {
+                  window.history.back();
+                } else {
+                  navigateRoute(primaryRoute("import"), { replace: true });
+                }
+              }}
+              onHome={() => navigateRoute(primaryRoute("import"))}
+            />
           )}
           {view === "solve" && (
             <SolveView
               puzzleName={puzzleName}
               puzzleText={puzzleText}
+              importId={puzzleImportId}
               onPuzzleNameChange={setPuzzleName}
               onPuzzleTextChange={setPuzzleText}
               autoSolveToken={solveRequestId}
               onBack={() => {
                 clearSolveDraft();
-                setView(tab);
+                navigateRoute(primaryRoute(tab));
               }}
               backLabel={`Back to ${viewLabel[tab]}`}
             />
@@ -262,10 +502,15 @@ export default function App() {
             backdropFilter: "blur(14px)"
           }}
         >
-          <BottomNavigation value={tab} onChange={handleTabChange} showLabels>
+          <BottomNavigation
+            value={view === "docs" || view === "not-found" ? false : tab}
+            onChange={handleTabChange}
+            showLabels
+          >
             <BottomNavigationAction value="import" label="Screenshot" icon={<PhotoCamera />} />
             <BottomNavigationAction value="new" label="Create" icon={<AddCircleOutline />} />
             <BottomNavigationAction value="library" label="Library" icon={<LibraryBooks />} />
+            <BottomNavigationAction value="flagged" label="Flagged" icon={<Flag />} />
           </BottomNavigation>
         </Paper>
       )}

@@ -9,8 +9,11 @@ services:
       - .:/app
     environment:
       - CORS_ORIGINS=*
-      - RELOAD=1
-      - WATCHFILES_FORCE_POLLING=1
+      - RELOAD=${RELOAD:-1}
+      # Docker Desktop bind mounts do not reliably forward Linux file events.
+      # Poll only the two source directories configured in app.py.
+      - WATCHFILES_FORCE_POLLING=${WATCHFILES_FORCE_POLLING:-true}
+      - WATCHFILES_POLL_DELAY_MS=${WATCHFILES_POLL_DELAY_MS:-2000}
     command: python app.py
 
   ui:
@@ -24,8 +27,8 @@ services:
       - /app/node_modules
     environment:
       - VITE_API_PORT=8000
-      - CHOKIDAR_USEPOLLING=1
-      - CHOKIDAR_INTERVAL=1000
+      - CHOKIDAR_USEPOLLING=${CHOKIDAR_USEPOLLING:-true}
+      - CHOKIDAR_INTERVAL=${CHOKIDAR_INTERVAL:-2000}
     command: npm run dev -- --port 5173
     depends_on:
       - api

@@ -15,8 +15,6 @@ import {
   Stack,
   Switch,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
   useMediaQuery
 } from "@mui/material";
@@ -24,12 +22,17 @@ import { useTheme } from "@mui/material/styles";
 import { ArrowBack, AutoAwesome, ExpandMore, SaveOutlined, TuneOutlined, DataObjectOutlined, EditOutlined } from "@mui/icons-material";
 import { graphFromText, parsePuzzle, savePuzzle, solvePuzzle, ParseResponse, SolveResponse } from "../api";
 import { GAME_PALETTE, buildTerminalColorMaps } from "../colors";
-import { GameView } from "../components/GameView";
-import { GraphPreview } from "../components/GraphPreview";
+import {
+  BoardVisualization,
+  BoardViewMode,
+  BoardViewToggle
+} from "../components/BoardVisualization";
+import { FlagReviewControl } from "../components/FlagReviewControl";
 
 type SolveViewProps = {
   puzzleName: string;
   puzzleText: string;
+  importId?: string | null;
   onPuzzleNameChange: (value: string) => void;
   onPuzzleTextChange: (value: string) => void;
   autoSolveToken?: number;
@@ -52,6 +55,7 @@ function formatDuration(ms: number | null): string | null {
 export function SolveView({
   puzzleName,
   puzzleText,
+  importId = null,
   onPuzzleNameChange,
   onPuzzleTextChange,
   autoSolveToken = 0,
@@ -76,7 +80,7 @@ export function SolveView({
   const [metaDifficulty, setMetaDifficulty] = useState("");
   const [metaTags, setMetaTags] = useState("");
   const [metaNotes, setMetaNotes] = useState("");
-  const [viewMode, setViewMode] = useState<"game" | "graph">("game");
+  const [viewMode, setViewMode] = useState<BoardViewMode>("game");
   const [showSolutionOverlay, setShowSolutionOverlay] = useState(false);
   const graphAbortRef = useRef<AbortController | null>(null);
   const handledSolveTokenRef = useRef(0);
@@ -154,7 +158,8 @@ export function SolveView({
         fill: fillAll,
         solver: "z3",
         timeout_ms: timeoutMs,
-        check_unique: checkUnique
+        check_unique: checkUnique,
+        import_id: importId ?? undefined
       });
       setSolveResult(res);
       setGraphResult(res.graph);
@@ -257,6 +262,13 @@ export function SolveView({
               </Box>
             </Box>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ width: { xs: "100%", sm: "auto" } }}>
+              {importId && (
+                <FlagReviewControl
+                  importId={importId}
+                  fullWidth={isMobile}
+                  size="large"
+                />
+              )}
               <Button
                 variant="contained"
                 size="large"
@@ -283,16 +295,7 @@ export function SolveView({
               gap={1}
               flexWrap="wrap"
             >
-              <ToggleButtonGroup
-                exclusive
-                size="small"
-                value={viewMode}
-                onChange={(_event, value) => value && setViewMode(value)}
-                aria-label="Board view"
-              >
-                <ToggleButton value="game">Board</ToggleButton>
-                <ToggleButton value="graph">Graph</ToggleButton>
-              </ToggleButtonGroup>
+              <BoardViewToggle value={viewMode} onChange={setViewMode} />
               <Box display="flex" gap={1} alignItems="center">
                 {solveResult && (
                   <FormControlLabel
@@ -312,25 +315,16 @@ export function SolveView({
             {busy && <LinearProgress />}
 
             {graphResult ? (
-              viewMode === "game" ? (
-                <GameView
-                  graph={graphResult}
-                  nodeColor={solveResult?.node_color}
-                  pathEdges={solveResult?.path_edges}
-                  paths={solveResult?.paths}
-                  showSolution={showSolutionOverlay}
-                  height={boardHeight}
-                />
-              ) : (
-                <GraphPreview
-                  graph={graphResult}
-                  height={280}
-                  nodeColor={solveResult?.node_color}
-                  pathEdges={solveResult?.path_edges}
-                  paths={solveResult?.paths}
-                  showSolution={showSolutionOverlay}
-                />
-              )
+              <BoardVisualization
+                graph={graphResult}
+                mode={viewMode}
+                nodeColor={solveResult?.node_color}
+                pathEdges={solveResult?.path_edges}
+                paths={solveResult?.paths}
+                showSolution={showSolutionOverlay}
+                height={boardHeight}
+                graphHeight={280}
+              />
             ) : graphLoading ? (
               <Box
                 sx={{

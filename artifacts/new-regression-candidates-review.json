@@ -1,0 +1,1329 @@
+{
+  "created_at": 1785021282.5127623,
+  "elapsed_seconds": 27.95,
+  "generated": 25,
+  "generation_failures": 0,
+  "mode": "recorded",
+  "regressions": [],
+  "results": [
+    {
+      "generation_seconds": 6.733,
+      "generation_status": 200,
+      "geometry": "graph",
+      "grid": null,
+      "id": "01aaf8d3c1eff99e",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4143.png",
+      "puzzle_sha256": "08b588279ca9f9e1cbc7e32a9c116f9b5f67f3299a62d57ea9fd24f3797cd5e3",
+      "sha256": "01aaf8d3c1eff99ee16ebd3de33dc15056a1878047d3be3f079dee001b108755",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "graph",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "08b588279ca9f9e1cbc7e32a9c116f9b5f67f3299a62d57ea9fd24f3797cd5e3",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.146,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 0.301,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 6,
+        "mode": "rect",
+        "rows": 6
+      },
+      "id": "0aeaec7fa104c0f1",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_3944.png",
+      "puzzle_sha256": "dd42e2d49af4792c3eb00e887afa62ebf96d669775aadb1535d924deda247018",
+      "sha256": "0aeaec7fa104c0f1082837eca820a757aef565dec76fb23837ac1313df2be822",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 6,
+          "mode": "rect",
+          "rows": 6
+        },
+        "modifiers": [],
+        "puzzle_sha256": "dd42e2d49af4792c3eb00e887afa62ebf96d669775aadb1535d924deda247018",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 12,
+          "detected_pairs": 6,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 12
+      },
+      "solve_seconds": 0.085,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 12,
+        "detected_pairs": 6,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 12
+    },
+    {
+      "generation_seconds": 1.76,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 5,
+        "mode": "rect",
+        "rows": 5
+      },
+      "id": "0c8745ddac509dbe",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4174.png",
+      "puzzle_sha256": "337b10b02e39574bfd263d9456cdf8b4ade951744cd66267329105ead6c7355f",
+      "sha256": "0c8745ddac509dbed7c4712387e31e2d800b31e60a7e7cd368a1e5206be92cb5",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 5,
+          "mode": "rect",
+          "rows": 5
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "337b10b02e39574bfd263d9456cdf8b4ade951744cd66267329105ead6c7355f",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.075,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 9.704,
+      "generation_status": 200,
+      "geometry": "graph",
+      "grid": null,
+      "id": "0f156c09fbf5e9be",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4138.png",
+      "puzzle_sha256": "02e153bc51eb34d6917f85041703fe8fe4698bd2c663d148a109ce03630d2394",
+      "sha256": "0f156c09fbf5e9be532e89cb4665f472139939e77911a95ff30d1ae699953bcd",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "graph",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "02e153bc51eb34d6917f85041703fe8fe4698bd2c663d148a109ce03630d2394",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 12,
+          "detected_pairs": 6,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 12
+      },
+      "solve_seconds": 0.083,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 12,
+        "detected_pairs": 6,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 12
+    },
+    {
+      "generation_seconds": 3.225,
+      "generation_status": 200,
+      "geometry": "hex",
+      "grid": null,
+      "id": "13ff1b164e4dc424",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4172.png",
+      "puzzle_sha256": "8528706a4a80cd7ad0af62c2fd5a7221ba9652b57bed0a8308ceb4b7aedb8584",
+      "sha256": "13ff1b164e4dc424355aa36f933bae1ffd5201e1f600315bf6a05ecc30f4bf44",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "hex",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "8528706a4a80cd7ad0af62c2fd5a7221ba9652b57bed0a8308ceb4b7aedb8584",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 16,
+          "detected_pairs": 8,
+          "expected_pairs": 8,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 16
+      },
+      "solve_seconds": 0.173,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 16,
+        "detected_pairs": 8,
+        "expected_pairs": 8,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 8 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 16
+    },
+    {
+      "generation_seconds": 0.613,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 5,
+        "mode": "rect",
+        "rows": 5
+      },
+      "id": "2beee97ea143bd5e",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4180.png",
+      "puzzle_sha256": "c999fa522b4d887f77a02ad1820ca27b71a17b64518387d0728098a375157187",
+      "sha256": "2beee97ea143bd5ebad9bdf18963da9d700cd621a844fd9bdaf77363ea9e2eff",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 5,
+          "mode": "rect",
+          "rows": 5
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "c999fa522b4d887f77a02ad1820ca27b71a17b64518387d0728098a375157187",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": 5,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.065,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": 5,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 5 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 3.265,
+      "generation_status": 200,
+      "geometry": "hex",
+      "grid": null,
+      "id": "3c81737f99c79ef4",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4170.png",
+      "puzzle_sha256": "770ed0b1474b9246977d55108c9f666e278792da89566c7bb30088985e66c9f8",
+      "sha256": "3c81737f99c79ef4818f2e1512b74bba6302d6e68960c09e25fa3c33320b9438",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "hex",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "770ed0b1474b9246977d55108c9f666e278792da89566c7bb30088985e66c9f8",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 16,
+          "detected_pairs": 8,
+          "expected_pairs": 8,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 16
+      },
+      "solve_seconds": 0.161,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 16,
+        "detected_pairs": 8,
+        "expected_pairs": 8,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 8 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 16
+    },
+    {
+      "generation_seconds": 3.924,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": null,
+      "id": "452268ea15b1117d",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4144.png",
+      "puzzle_sha256": "2ecc122aaad566919f536ad68e1d8ecb3412550a4f2058e020389ba80df1b7ad",
+      "sha256": "452268ea15b1117d053148a931596b7eee6198f84ddbd3d581efe3ccbfb22d6d",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "2ecc122aaad566919f536ad68e1d8ecb3412550a4f2058e020389ba80df1b7ad",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.083,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 13.542,
+      "generation_status": 200,
+      "geometry": "graph",
+      "grid": null,
+      "id": "461441f4d390b288",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4162.png",
+      "puzzle_sha256": "320dd2a562cdd30a23ceabdb719bae5ef3358fa73dd5a724950c6e1a4306035d",
+      "sha256": "461441f4d390b288d5aea395b46f997f8d2406e5263ebcee9267772d4cbd45eb",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "graph",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "320dd2a562cdd30a23ceabdb719bae5ef3358fa73dd5a724950c6e1a4306035d",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 18,
+          "detected_pairs": 9,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 18
+      },
+      "solve_seconds": 0.167,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 18,
+        "detected_pairs": 9,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 18
+    },
+    {
+      "generation_seconds": 5.309,
+      "generation_status": 200,
+      "geometry": "graph",
+      "grid": null,
+      "id": "482fce08c98e203f",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4142.png",
+      "puzzle_sha256": "77e91beb355179f5931246d248080bf4e7328e4974f75a33993fbd65fe23d489",
+      "sha256": "482fce08c98e203f7c0a20bcf0567ccd5b7244d9a16c6b9fa9761d138974ac13",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "graph",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "77e91beb355179f5931246d248080bf4e7328e4974f75a33993fbd65fe23d489",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 8,
+          "detected_pairs": 4,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 8
+      },
+      "solve_seconds": 0.076,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 8,
+        "detected_pairs": 4,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 8
+    },
+    {
+      "generation_seconds": 0.38,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 6,
+        "mode": "rect",
+        "rows": 6
+      },
+      "id": "61d46acad8f007a4",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4175.png",
+      "puzzle_sha256": "226d020c6ddc3fd622241c59a8f662c3fafa41e8290919dfc4dde89413c3beb8",
+      "sha256": "61d46acad8f007a464a5cfbf529a661728e3ed375954e580996b58a4f558e489",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 6,
+          "mode": "rect",
+          "rows": 6
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "226d020c6ddc3fd622241c59a8f662c3fafa41e8290919dfc4dde89413c3beb8",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 8,
+          "detected_pairs": 4,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 8
+      },
+      "solve_seconds": 0.088,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 8,
+        "detected_pairs": 4,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 8
+    },
+    {
+      "generation_seconds": 1.019,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 7,
+        "mode": "rect",
+        "rows": 7
+      },
+      "id": "66310596c828f531",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4176.png",
+      "puzzle_sha256": "8d4ce2fac7416fbe3a5d3bfdca496aa0548d8c841da69bec822b7e3dd441d0eb",
+      "sha256": "66310596c828f53129f9feb93df55b738a6acf5c106011efff00312987a08d35",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 7,
+          "mode": "rect",
+          "rows": 7
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "8d4ce2fac7416fbe3a5d3bfdca496aa0548d8c841da69bec822b7e3dd441d0eb",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": 5,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.077,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": 5,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 5 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 0.475,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 5,
+        "mode": "rect",
+        "rows": 5
+      },
+      "id": "663b4b7664246b8f",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_3941.png",
+      "puzzle_sha256": "16791df52b692421842845ab77b15fa4d6889ba5ade29f72e5c8a7b8d660f24d",
+      "sha256": "663b4b7664246b8f8815a37c344dac7d285b27825a24b613d2794cdb9cc7308e",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 5,
+          "mode": "rect",
+          "rows": 5
+        },
+        "modifiers": [],
+        "puzzle_sha256": "16791df52b692421842845ab77b15fa4d6889ba5ade29f72e5c8a7b8d660f24d",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 8,
+          "detected_pairs": 4,
+          "expected_pairs": 4,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 8
+      },
+      "solve_seconds": 0.073,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 8,
+        "detected_pairs": 4,
+        "expected_pairs": 4,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 4 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 8
+    },
+    {
+      "generation_seconds": 0.577,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 8,
+        "mode": "rect",
+        "rows": 8
+      },
+      "id": "76af3528841c38ca",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4177.png",
+      "puzzle_sha256": "9c80ffbeea8fc1591d07cfeb68ccad5f2627776178bb8e311fbab4b2c42b03fc",
+      "sha256": "76af3528841c38ca47b7358486dc5930748720e754c9a00295302854cc517c1e",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 8,
+          "mode": "rect",
+          "rows": 8
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "9c80ffbeea8fc1591d07cfeb68ccad5f2627776178bb8e311fbab4b2c42b03fc",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 18,
+          "detected_pairs": 9,
+          "expected_pairs": 9,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 18
+      },
+      "solve_seconds": 0.163,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 18,
+        "detected_pairs": 9,
+        "expected_pairs": 9,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 9 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 18
+    },
+    {
+      "generation_seconds": 4.024,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": null,
+      "id": "7dc25c3ebd069f99",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4141.png",
+      "puzzle_sha256": "eeab9115a7b33f90aa27ea5f8584459689b80772595985435a068272d8767237",
+      "sha256": "7dc25c3ebd069f9991191590a986474293745b4a91bff739becf2dbb1ea63fc1",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "eeab9115a7b33f90aa27ea5f8584459689b80772595985435a068272d8767237",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 12,
+          "detected_pairs": 6,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 12
+      },
+      "solve_seconds": 0.081,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 12,
+        "detected_pairs": 6,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 12
+    },
+    {
+      "generation_seconds": 3.402,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": null,
+      "id": "8bb018dedd66584a",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4140.png",
+      "puzzle_sha256": "76e333a8df92264ea8c0b7fed4dd66d7d0bec06986b874a4f8792615bc1663e8",
+      "sha256": "8bb018dedd66584a85e7b0100ad3e467acc88d6e663f5d002908e52063ce6a2b",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "76e333a8df92264ea8c0b7fed4dd66d7d0bec06986b874a4f8792615bc1663e8",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 12,
+          "detected_pairs": 6,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 12
+      },
+      "solve_seconds": 0.092,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 12,
+        "detected_pairs": 6,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 12
+    },
+    {
+      "generation_seconds": 4.249,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": null,
+      "id": "b4d155348012e0fc",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4139.png",
+      "puzzle_sha256": "af500b9648da469c9ed0ccc10c0b0b6efb5aa03abeb444f49c54d05cfc809d43",
+      "sha256": "b4d155348012e0fc11f04e48e707197d41f1eb8cba0f1da50a7ba7f573c6a2d8",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "af500b9648da469c9ed0ccc10c0b0b6efb5aa03abeb444f49c54d05cfc809d43",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 10,
+          "detected_pairs": 5,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 10
+      },
+      "solve_seconds": 0.868,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 10,
+        "detected_pairs": 5,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 10
+    },
+    {
+      "generation_seconds": 4.501,
+      "generation_status": 200,
+      "geometry": "graph",
+      "grid": null,
+      "id": "bc7b2112c258193f",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4137.png",
+      "puzzle_sha256": "e18d61ee0ea431a6201a3cd409e82d40929445c6bfef99c2b9497099507b8340",
+      "sha256": "bc7b2112c258193f8aa0b5843440b37f73799b55b212c623b29af133e0597213",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "graph",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "e18d61ee0ea431a6201a3cd409e82d40929445c6bfef99c2b9497099507b8340",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 12,
+          "detected_pairs": 6,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 12
+      },
+      "solve_seconds": 0.083,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 12,
+        "detected_pairs": 6,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 12
+    },
+    {
+      "generation_seconds": 3.204,
+      "generation_status": 200,
+      "geometry": "hex",
+      "grid": null,
+      "id": "c2eb57926c88b51d",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4169.png",
+      "puzzle_sha256": "1cfa3135bdf0c3350da7bcbedbdef5d7c53f179a0925c57fe2da550162c433cc",
+      "sha256": "c2eb57926c88b51d75eb7724140d2b2d9125921ed714f99939746667d3ff51c0",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "hex",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "1cfa3135bdf0c3350da7bcbedbdef5d7c53f179a0925c57fe2da550162c433cc",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 18,
+          "detected_pairs": 9,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 18
+      },
+      "solve_seconds": 0.239,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 18,
+        "detected_pairs": 9,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 18
+    },
+    {
+      "generation_seconds": 0.44,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 8,
+        "mode": "rect",
+        "rows": 8
+      },
+      "id": "c6f2b9553abce935",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_3947.png",
+      "puzzle_sha256": "66299afce16e0f4965c1faed24163fd063509adb7b1a47e1ce9f589959c83366",
+      "sha256": "c6f2b9553abce93572fc918974bede415fd4b10705f586f2999ec0c8cfbcc9c7",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 8,
+          "mode": "rect",
+          "rows": 8
+        },
+        "modifiers": [],
+        "puzzle_sha256": "66299afce16e0f4965c1faed24163fd063509adb7b1a47e1ce9f589959c83366",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 16,
+          "detected_pairs": 8,
+          "expected_pairs": 8,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 16
+      },
+      "solve_seconds": 0.103,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 16,
+        "detected_pairs": 8,
+        "expected_pairs": 8,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 8 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 16
+    },
+    {
+      "generation_seconds": 3.013,
+      "generation_status": 200,
+      "geometry": "hex",
+      "grid": null,
+      "id": "d33b7f57ce0dfc12",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4173.png",
+      "puzzle_sha256": "4ad72f2b4c0ec947d9f24d77edb9aad76db185929f7c958a0322195b23d2fa54",
+      "sha256": "d33b7f57ce0dfc124e05d04941b133bac5afb1a9857b4fc529bb42bbb9c6cb11",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "hex",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "4ad72f2b4c0ec947d9f24d77edb9aad76db185929f7c958a0322195b23d2fa54",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 14,
+          "detected_pairs": 7,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 14
+      },
+      "solve_seconds": 0.144,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 14,
+        "detected_pairs": 7,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 14
+    },
+    {
+      "generation_seconds": 0.204,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 7,
+        "mode": "rect",
+        "rows": 7
+      },
+      "id": "d8bad44c4d9aab16",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_3946.png",
+      "puzzle_sha256": "9ec1c01723682d17852009a4e91052dc14af1a29973d328503c00bcf925ed185",
+      "sha256": "d8bad44c4d9aab1640ffd46147d59bd8cdc7a09f6c67793dcac940e5c57c909c",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 7,
+          "mode": "rect",
+          "rows": 7
+        },
+        "modifiers": [],
+        "puzzle_sha256": "9ec1c01723682d17852009a4e91052dc14af1a29973d328503c00bcf925ed185",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 14,
+          "detected_pairs": 7,
+          "expected_pairs": 7,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 14
+      },
+      "solve_seconds": 0.105,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 14,
+        "detected_pairs": 7,
+        "expected_pairs": 7,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 7 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 14
+    },
+    {
+      "generation_seconds": 3.048,
+      "generation_status": 200,
+      "geometry": "hex",
+      "grid": null,
+      "id": "de808d5325ba2d12",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_4171.png",
+      "puzzle_sha256": "3519efcbd84d2f5f3a6c692220dacf33726a41e6198e2ebacc1c202572b028f3",
+      "sha256": "de808d5325ba2d12b267faa98514b74b7e9707bb4b22bf485b8320eb26f8751b",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "hex",
+        "grid": null,
+        "modifiers": [],
+        "puzzle_sha256": "3519efcbd84d2f5f3a6c692220dacf33726a41e6198e2ebacc1c202572b028f3",
+        "solve_status": 200,
+        "target": "graph",
+        "terminal_completeness": {
+          "detected_endpoints": 22,
+          "detected_pairs": 11,
+          "expected_pairs": null,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "plausible"
+        },
+        "terminal_count": 22
+      },
+      "solve_seconds": 0.842,
+      "solve_status": 200,
+      "solver": "pysat-portfolio-cadical195+maplechrono",
+      "target": "graph",
+      "terminal_completeness": {
+        "confidence": 0.82,
+        "detected_endpoints": 22,
+        "detected_pairs": 11,
+        "expected_pairs": null,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "All detected terminal colors are paired; no advertised flow count was available.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "plausible"
+      },
+      "terminal_count": 22
+    },
+    {
+      "generation_seconds": 0.468,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 6,
+        "mode": "rect",
+        "rows": 6
+      },
+      "id": "df2a597814aa6075",
+      "mode": "recorded",
+      "modifiers": [],
+      "original_name": "IMG_3943.png",
+      "puzzle_sha256": "5dfabaa47b1f4edeea4016b2eace9544cdd069079c874363997f379deb9dfe62",
+      "sha256": "df2a597814aa60754ad69396e878d4e0a7a85cde0e5e525b7c9a5fb410984cec",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 6,
+          "mode": "rect",
+          "rows": 6
+        },
+        "modifiers": [],
+        "puzzle_sha256": "5dfabaa47b1f4edeea4016b2eace9544cdd069079c874363997f379deb9dfe62",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 14,
+          "detected_pairs": 7,
+          "expected_pairs": 7,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 14
+      },
+      "solve_seconds": 0.877,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 14,
+        "detected_pairs": 7,
+        "expected_pairs": 7,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 7 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 14
+    },
+    {
+      "generation_seconds": 0.356,
+      "generation_status": 200,
+      "geometry": "square",
+      "grid": {
+        "cols": 7,
+        "mode": "rect",
+        "rows": 7
+      },
+      "id": "df647d2f8bdedd29",
+      "mode": "recorded",
+      "modifiers": [
+        "bridges"
+      ],
+      "original_name": "IMG_4178.png",
+      "puzzle_sha256": "e727e3d7fc7e65d5dfb746900c02be48810a08067939f5d472f6ddfa1b5931c0",
+      "sha256": "df647d2f8bdedd29fff78c03a5d32a6bec1924690e9a35765d3e559d135ad706",
+      "signature": {
+        "generation_status": 200,
+        "geometry": "square",
+        "grid": {
+          "cols": 7,
+          "mode": "rect",
+          "rows": 7
+        },
+        "modifiers": [
+          "bridges"
+        ],
+        "puzzle_sha256": "e727e3d7fc7e65d5dfb746900c02be48810a08067939f5d472f6ddfa1b5931c0",
+        "solve_status": 200,
+        "target": "square",
+        "terminal_completeness": {
+          "detected_endpoints": 16,
+          "detected_pairs": 8,
+          "expected_pairs": 8,
+          "pairing_complete": true,
+          "review_required": false,
+          "status": "verified"
+        },
+        "terminal_count": 16
+      },
+      "solve_seconds": 0.098,
+      "solve_status": 200,
+      "solver": "pysat-glucose42",
+      "target": "square",
+      "terminal_completeness": {
+        "confidence": 0.98,
+        "detected_endpoints": 16,
+        "detected_pairs": 8,
+        "expected_pairs": 8,
+        "near_miss_count": 0,
+        "pairing_complete": true,
+        "reason": "Detected all 8 expected flow pairs.",
+        "recovered_pair_count": 0,
+        "review_required": false,
+        "status": "verified"
+      },
+      "terminal_count": 16
+    }
+  ],
+  "schema_version": 1,
+  "selected": 25,
+  "solve_failures": 0,
+  "solved": 25,
+  "unbaselined_ids": [
+    "01aaf8d3c1eff99e",
+    "0aeaec7fa104c0f1",
+    "0c8745ddac509dbe",
+    "0f156c09fbf5e9be",
+    "13ff1b164e4dc424",
+    "2beee97ea143bd5e",
+    "3c81737f99c79ef4",
+    "452268ea15b1117d",
+    "461441f4d390b288",
+    "482fce08c98e203f",
+    "61d46acad8f007a4",
+    "66310596c828f531",
+    "663b4b7664246b8f",
+    "76af3528841c38ca",
+    "7dc25c3ebd069f99",
+    "8bb018dedd66584a",
+    "b4d155348012e0fc",
+    "bc7b2112c258193f",
+    "c2eb57926c88b51d",
+    "c6f2b9553abce935",
+    "d33b7f57ce0dfc12",
+    "d8bad44c4d9aab16",
+    "de808d5325ba2d12",
+    "df2a597814aa6075",
+    "df647d2f8bdedd29"
+  ],
+  "worker_failure_ids": []
+}

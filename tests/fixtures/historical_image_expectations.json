@@ -1,0 +1,17 @@
+{
+  "582b5c7fb82e408080dbc847f4d2a4fb": {
+    "name": "IMG_4135.png",
+    "expected_pairs": 13,
+    "regression": "low-saturation gray pair at cells (6,7) and (7,9)"
+  },
+  "6090f7168d004643a33c7fd58fe02539": {
+    "name": "IMG_4120.png",
+    "expected_pairs": 11,
+    "regression": "low-saturation gray pair at cells (9,10) and (11,9)"
+  },
+  "8ad83d5fe7e846fda7c822a17b3d592f": {
+    "name": "IMG_4136.png",
+    "expected_pairs": 13,
+    "regression": "low-saturation gray pair at cells (1,10) and (10,11)"
+  }
+}

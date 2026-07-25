@@ -63,7 +63,12 @@ import {
   solvePuzzle,
   SolveResponse
 } from "../api";
-import { GameView } from "../components/GameView";
+import {
+  BoardVisualization,
+  BoardViewMode,
+  BoardViewToggle
+} from "../components/BoardVisualization";
+import { FlagReviewControl } from "../components/FlagReviewControl";
 import {
   EdgeOverrides,
   formatEdgePairsText,
@@ -73,11 +78,14 @@ import {
 
 type TerminalPayload = { row: number; col: number; letter: string; color?: number[] };
 type NodeTerminalPayload = { nodeId: string; letter: string; color?: number[] };
+type TerminalCompleteness = NonNullable<
+  import("../api").ImageGenerateResponse["detection"]["terminal_completeness"]
+>;
 type BuilderType = "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8";
 type TargetType = "auto" | BuilderType;
 
 type ImageViewProps = {
-  onGenerated: (name: string, text: string) => void;
+  onGenerated: (name: string, text: string, importId?: string) => void;
   onApplied?: () => void;
   onSuggestedName?: (name: string) => void;
   onApplyGrid?: (payload: {
@@ -320,6 +328,7 @@ export function ImageView({
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const [generatedName, setGeneratedName] = useState("");
   const [generatedText, setGeneratedText] = useState("");
+  const [generatedImportId, setGeneratedImportId] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [gridDetection, setGridDetection] = useState<{ rows: number; cols: number } | null>(null);
@@ -346,6 +355,8 @@ export function ImageView({
   }>({ classify: "idle", ocr: "idle", grid: "idle", terminals: "idle" });
   const [ocrText, setOcrText] = useState("");
   const [ocrSuggested, setOcrSuggested] = useState<string | null>(null);
+  const [expectedFlowCount, setExpectedFlowCount] = useState<number | null>(null);
+  const [terminalCompleteness, setTerminalCompleteness] = useState<TerminalCompleteness | null>(null);
   const [ocrWholeImage, setOcrWholeImage] = useState(true);
   const [levelType, setLevelType] = useState<LevelType | null>(null);
   const [levelTypeStatus, setLevelTypeStatus] = useState<string | null>(null);
@@ -358,6 +369,7 @@ export function ImageView({
 
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
   const [batchBusy, setBatchBusy] = useState(false);
+  const [boardViewMode, setBoardViewMode] = useState<BoardViewMode>("game");
   const [serverJob, setServerJob] = useState<ImageJob | null>(null);
   const [serverJobSubmitting, setServerJobSubmitting] = useState(false);
   const [reprocessProgress, setReprocessProgress] = useState<{ current: number; total: number } | null>(null);
@@ -556,6 +568,9 @@ export function ImageView({
       setImageName("");
       setGeneratedName("");
       setGeneratedText("");
+      setGeneratedImportId(null);
+      setExpectedFlowCount(null);
+      setTerminalCompleteness(null);
       setPipelineStatus(null);
       return;
     }
@@ -566,6 +581,9 @@ export function ImageView({
     setCompletedCrop(null);
     setGeneratedName("");
     setGeneratedText("");
+    setGeneratedImportId(null);
+    setExpectedFlowCount(null);
+    setTerminalCompleteness(null);
     setStatus(null);
     setSaveStatus(null);
     setSaveError(null);
@@ -1000,6 +1018,7 @@ export function ImageView({
         graphNodes,
         autoTerminals,
         autoClassify,
+        expectedFlowCount,
         levelType,
         edgeOverrides: manualEdgeOverrides,
         metadata: {
@@ -1020,6 +1039,8 @@ export function ImageView({
       });
       setGeneratedName(res.name);
       setGeneratedText(res.text);
+      setGeneratedImportId(res.import_id ?? null);
+      setTerminalCompleteness(res.detection?.terminal_completeness ?? null);
       setGridDetection(
         res.detection?.grid
           ? {
@@ -1068,7 +1089,11 @@ export function ImageView({
           `Detected ${detectedLevelType.geometry} (${Math.round(detectedLevelType.confidence * 100)}% confidence).`
         );
       }
-      setStatus("Generated puzzle text.");
+      setStatus(
+        res.detection?.terminal_completeness?.review_required
+          ? "Generated puzzle text and flagged it for terminal review."
+          : "Generated puzzle text."
+      );
       const targetUsed = String(res.detection?.target_type_used ?? targetType);
       if (onApplyGrid && !(targetUsed === "graph" && effectiveGraphLayout === "regions")) {
         const rows =
@@ -1242,7 +1267,8 @@ export function ImageView({
       let suggestedName: string | null = ocrSuggested;
       let detectedLevelType: LevelType | null = levelType;
       let ocrRawText = ocrText;
-      let rawTopology: { name: string; text: string } | null = null;
+      let expectedPairs: number | null = expectedFlowCount;
+      let rawTopology: { name: string; text: string; importId?: string } | null = null;
 
       if (pipelineUseClassifier) {
         const classified = await handleClassifyLevel(crop);
@@ -1266,6 +1292,8 @@ export function ImageView({
         setOcrText(ocrRes.text || ocrRes.message || "");
         ocrRawText = ocrRes.text || ocrRes.message || "";
         setOcrSuggested(suggested);
+        expectedPairs = ocrRes.expected_flow_count ?? null;
+        setExpectedFlowCount(expectedPairs);
         suggestedName = suggested;
         setPipelineChecks((prev) => ({
           ...prev,
@@ -1349,7 +1377,7 @@ export function ImageView({
         setPipelineChecks((prev) => ({ ...prev, grid: "skipped" }));
       }
 
-      if (pipelineUseTerminals && gridDrivenTarget) {
+      if (pipelineUseTerminals && gridDrivenTarget && onApplyGrid) {
         const termRes = await imageDetectTerminals({
           file,
           targetType: builderType,
@@ -1379,6 +1407,7 @@ export function ImageView({
           graphNodes,
           autoTerminals: pipelineUseTerminals,
           autoClassify: false,
+          expectedFlowCount: expectedPairs,
           levelType: detectedLevelType,
           edgeOverrides: manualEdgeOverrides,
           metadata: {
@@ -1397,9 +1426,15 @@ export function ImageView({
           bgThreshold
         });
         if (!onApplyGrid || (builderType === "graph" && effectiveGraphLayout === "regions")) {
-          rawTopology = { name: graphRes.name, text: graphRes.text };
+          rawTopology = {
+            name: graphRes.name,
+            text: graphRes.text,
+            importId: graphRes.import_id
+          };
           setGeneratedName(graphRes.name);
           setGeneratedText(graphRes.text);
+          setGeneratedImportId(graphRes.import_id ?? null);
+          setTerminalCompleteness(graphRes.detection?.terminal_completeness ?? null);
         }
         const detected = graphRes.detection ?? {};
         const modifierInfo = (detected.modifier_info as { topology?: { width_hint?: number; height_hint?: number } } | undefined)?.topology;
@@ -1464,7 +1499,7 @@ export function ImageView({
           setPipelineChecks((prev) => ({ ...prev, terminals: "skipped" }));
           setTerminalStatus("Terminal detection skipped.");
         }
-      } else {
+      } else if (!(pipelineUseTerminals && gridDrivenTarget && !onApplyGrid)) {
         setPipelineChecks((prev) => ({ ...prev, terminals: "skipped" }));
       }
 
@@ -1478,6 +1513,7 @@ export function ImageView({
           graphNodes,
           autoTerminals: pipelineUseTerminals,
           autoClassify: false,
+          expectedFlowCount: expectedPairs,
           levelType: detectedLevelType,
           edgeOverrides: manualEdgeOverrides,
           metadata: { source: "image-import" },
@@ -1493,13 +1529,49 @@ export function ImageView({
           clusterThreshold,
           bgThreshold
         });
-        rawTopology = { name: generated.name, text: generated.text };
+        rawTopology = {
+          name: generated.name,
+          text: generated.text,
+          importId: generated.import_id
+        };
+        setTerminalCompleteness(generated.detection?.terminal_completeness ?? null);
+        const generatedTerminals = Array.isArray(generated.detection?.terminals)
+          ? generated.detection.terminals
+              .filter(
+                (terminal) =>
+                  Number.isFinite(terminal.row) &&
+                  Number.isFinite(terminal.col) &&
+                  typeof terminal.letter === "string"
+              )
+              .map((terminal) => ({
+                row: Number(terminal.row),
+                col: Number(terminal.col),
+                letter: String(terminal.letter),
+                color: terminal.color ?? []
+              }))
+          : [];
+        setTerminalDetections(generatedTerminals);
+        if (pipelineUseTerminals) {
+          const completeness = generated.detection?.terminal_completeness;
+          const detectedCount = generatedTerminals.length;
+          setPipelineChecks((prev) => ({
+            ...prev,
+            terminals: detectedCount > 0 && !completeness?.review_required ? "ok" : "fail"
+          }));
+          setTerminalStatus(
+            completeness?.reason ??
+              (detectedCount > 0
+                ? `Detected ${detectedCount} terminals.`
+                : "No terminals were confidently detected.")
+          );
+        }
         setGeneratedName(nameForPuzzleText(suggestedName, generated.name, generated.text));
         setGeneratedText(generated.text);
+        setGeneratedImportId(generated.import_id ?? null);
       }
 
       if (rawTopology && onApplyGrid) {
-        onGenerated(rawTopology.name, rawTopology.text);
+        onGenerated(rawTopology.name, rawTopology.text, rawTopology.importId);
       } else if (onApplyGrid) {
         onApplyGrid({
           type: builderType,
@@ -1514,7 +1586,11 @@ export function ImageView({
         onApplied?.();
       } else if (rawTopology) {
         // Standalone import: hand the detected puzzle straight to the solver.
-        onGenerated(nameForPuzzleText(suggestedName, rawTopology.name, rawTopology.text), rawTopology.text);
+        onGenerated(
+          nameForPuzzleText(suggestedName, rawTopology.name, rawTopology.text),
+          rawTopology.text,
+          rawTopology.importId
+        );
       }
       const classificationNote = detectedLevelType ? ` (${detectedLevelType.geometry})` : "";
       setPipelineStatus(
@@ -1605,10 +1681,12 @@ export function ImageView({
     }
 
     let suggested: string | null = null;
+    let expectedPairs: number | null = null;
     if (pipelineUseOcr) {
       try {
         const ocr = await imageOcr({ file: batchFile, crop: ocrWholeImage ? null : crop, perspective });
         suggested = ocr.suggested_name ?? null;
+        expectedPairs = ocr.expected_flow_count ?? null;
       } catch {
         // OCR is best-effort in batch mode
       }
@@ -1657,6 +1735,7 @@ export function ImageView({
       graphNodes,
       autoTerminals: pipelineUseTerminals,
       autoClassify: !detected,
+      expectedFlowCount: expectedPairs,
       levelType: detected,
       metadata: { source: "image-import", source_image: batchFile.name },
       crop,
@@ -1684,7 +1763,8 @@ export function ImageView({
       text: gen.text,
       geometry,
       sizeLabel,
-      endpoints: detectedTerminals
+      endpoints: detectedTerminals,
+      archiveImportId: gen.import_id
     };
 
     try {
@@ -1708,12 +1788,14 @@ export function ImageView({
       const canRetryAsRegions =
         targetType === "auto" &&
         !(builderType === "graph" && effectiveGraphLayout === "regions") &&
-        /(validation failed|\bunsat\b|no solution found|cannot reach each other)/i.test(initialMessage);
+        gen.detection?.terminal_completeness?.status !== "incomplete" &&
+        !/terminal detection|bipartite parity/i.test(initialMessage) &&
+        /(\bunsat\b|no solution found|cannot reach each other)/i.test(initialMessage);
       if (canRetryAsRegions) {
         try {
           const recovery = await imageGenerate({
             file: batchFile,
-            replaceImportId: item.archiveImportId,
+            replaceImportId: gen.import_id,
             targetType: "graph",
             gridWidth: detectedCols,
             gridHeight: detectedRows,
@@ -1721,6 +1803,7 @@ export function ImageView({
             graphNodes,
             autoTerminals: pipelineUseTerminals,
             autoClassify: !detected,
+            expectedFlowCount: expectedPairs,
             levelType: detected,
             metadata: { source: "image-import", source_image: batchFile.name },
             crop,
@@ -1755,7 +1838,8 @@ export function ImageView({
             endpoints: recoveryTerminals,
             status: "solved",
             solve: recoveredSolve,
-            solveMs: typeof recoveryMs === "number" ? recoveryMs : null
+            solveMs: typeof recoveryMs === "number" ? recoveryMs : null,
+            archiveImportId: recovery.import_id
           };
         } catch (recoveryError) {
           const recoveryMessage =
@@ -1805,7 +1889,10 @@ export function ImageView({
                 stage: "screenshot-library"
               })
             : archiveImageImportFailure({ file: item.file, error: message, stage: "screenshot-batch" });
-          await archiveFailure.catch(() => undefined);
+          const archived = await archiveFailure.catch(() => undefined);
+          if (archived) {
+            updateBatchItem(item.id, { archiveImportId: archived.id });
+          }
         }
       };
       const workers = Array.from({ length: Math.min(BATCH_CONCURRENCY, queue.length) }, async () => {
@@ -2013,12 +2100,14 @@ export function ImageView({
       const suggested = res.suggested_name ?? null;
       setOcrText(res.text || res.message || "");
       setOcrSuggested(suggested);
+      setExpectedFlowCount(res.expected_flow_count ?? null);
       if (suggested) {
         onSuggestedName?.(suggested);
       }
     } catch (err) {
       setOcrText(err instanceof Error ? err.message : "OCR failed.");
       setOcrSuggested(null);
+      setExpectedFlowCount(null);
     }
   }
 
@@ -2217,7 +2306,7 @@ export function ImageView({
               OCR level name
             </Button>
           </Stack>
-          {(ocrText || ocrSuggested) && (
+          {(ocrText || ocrSuggested || expectedFlowCount !== null) && (
             <Box mt={2}>
               <Typography variant="body2" color="text.secondary">
                 {ocrText || "Run OCR to detect a level name or number."}
@@ -2236,6 +2325,14 @@ export function ImageView({
                     Use name
                   </Button>
                 </Box>
+              )}
+              {expectedFlowCount !== null && (
+                <Chip
+                  sx={{ mt: 1 }}
+                  size="small"
+                  color="info"
+                  label={`${expectedFlowCount} advertised flows`}
+                />
               )}
             </Box>
           )}
@@ -2693,7 +2790,8 @@ export function ImageView({
                     to the library.
                   </Typography>
                 </Box>
-                <Box display="flex" gap={0.75} flexWrap="wrap">
+                <Box display="flex" gap={0.75} flexWrap="wrap" alignItems="center" justifyContent="flex-end">
+                  <BoardViewToggle value={boardViewMode} onChange={setBoardViewMode} />
                   {batchItems.filter((item) => item.status === "solved").length > 0 && (
                     <Chip
                       label={`${batchItems.filter((item) => item.status === "solved").length} solved`}
@@ -2846,8 +2944,9 @@ export function ImageView({
                             )}
                             {item.status === "solved" && item.solve && (
                               <Box my={1}>
-                                <GameView
+                                <BoardVisualization
                                   graph={item.solve.graph}
+                                  mode={boardViewMode}
                                   nodeColor={item.solve.node_color}
                                   pathEdges={item.solve.path_edges}
                                   paths={item.solve.paths}
@@ -2863,6 +2962,14 @@ export function ImageView({
                               >
                                 {item.error}
                               </Alert>
+                            )}
+                            {item.archiveImportId && !item.text && (
+                              <Box my={1}>
+                                <FlagReviewControl
+                                  importId={item.archiveImportId}
+                                  size="small"
+                                />
+                              </Box>
                             )}
                             {item.text && (
                               <>
@@ -2883,10 +2990,18 @@ export function ImageView({
                                   <Button
                                     variant="contained"
                                     size="small"
-                                    onClick={() => onGenerated(item.name, item.text!)}
+                                    onClick={() =>
+                                      onGenerated(item.name, item.text!, item.archiveImportId)
+                                    }
                                   >
                                     Open in solver
                                   </Button>
+                                  {item.archiveImportId && (
+                                    <FlagReviewControl
+                                      importId={item.archiveImportId}
+                                      size="small"
+                                    />
+                                  )}
                                   <Button
                                     variant="outlined"
                                     size="small"
@@ -3113,15 +3228,48 @@ export function ImageView({
                 {terminalDetections.length > 0 && (
                   <Chip label={`${terminalDetections.length} endpoints`} size="small" />
                 )}
+                {terminalCompleteness && (
+                  <Chip
+                    label={`${terminalCompleteness.detected_pairs}${
+                      terminalCompleteness.expected_pairs != null
+                        ? ` / ${terminalCompleteness.expected_pairs}`
+                        : ""
+                    } flow pairs · ${terminalCompleteness.status}`}
+                    size="small"
+                    color={
+                      terminalCompleteness.review_required
+                        ? "warning"
+                        : terminalCompleteness.status === "verified"
+                          ? "success"
+                          : "default"
+                    }
+                  />
+                )}
               </Box>
+              {terminalCompleteness && (
+                <Alert severity={terminalCompleteness.review_required ? "warning" : "info"}>
+                  {terminalCompleteness.reason}
+                  {terminalCompleteness.near_miss_count > 0
+                    ? ` ${terminalCompleteness.near_miss_count} near-miss cell(s) were retained for review.`
+                    : ""}
+                </Alert>
+              )}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
                 <Button
                   variant="contained"
                   fullWidth
-                  onClick={() => onGenerated(generatedName, generatedText)}
+                  onClick={() =>
+                    onGenerated(generatedName, generatedText, generatedImportId ?? undefined)
+                  }
                 >
                   Open in solver
                 </Button>
+                {generatedImportId && (
+                  <FlagReviewControl
+                    importId={generatedImportId}
+                    fullWidth
+                  />
+                )}
                 <Button variant="outlined" fullWidth onClick={handleSave}>
                   Save to library
                 </Button>

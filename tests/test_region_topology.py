@@ -144,6 +144,41 @@ class RegionTopologyDetectionTests(unittest.TestCase):
         self.assertEqual(info["max_degree"], 4)
         self.assertGreaterEqual(len(info["adjacency_search"]), 2)
 
+    def test_auto_recognizes_regular_hex_regions_without_false_walls(self) -> None:
+        radius = 25.0
+        horizontal_pitch = math.sqrt(3.0) * radius
+        vertical_pitch = 1.5 * radius
+        image = Image.new("RGB", (300, 235), color="black")
+        draw = ImageDraw.Draw(image)
+        for row in range(4):
+            for column in range(5):
+                center_x = 45.0 + column * horizontal_pitch + (row % 2) * horizontal_pitch / 2.0
+                center_y = 45.0 + row * vertical_pitch
+                polygon = [
+                    (
+                        center_x + radius * math.cos(math.radians(-30.0 + index * 60.0)),
+                        center_y + radius * math.sin(math.radians(-30.0 + index * 60.0)),
+                    )
+                    for index in range(6)
+                ]
+                draw.line(polygon + [polygon[0]], fill="white", width=3, joint="curve")
+
+        nodes, edges, info = detect_region_topology(image, prefer_hex=False)
+
+        self.assertEqual(len(nodes), 20)
+        self.assertEqual(len(edges), 43)
+        self.assertTrue(info["regular_hex_lattice"])
+        self.assertTrue(info["polygon_regularized"])
+        self.assertEqual(info["max_degree"], 6)
+        self.assertEqual(info["warnings"], [])
+        self.assertTrue(
+            all(
+                len(node["data"]["polygon"]) == 6
+                and node["data"]["polygon_source"] == "regular-hex-lattice"
+                for node in nodes.values()
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

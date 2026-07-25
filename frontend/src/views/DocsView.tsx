@@ -17,8 +17,11 @@ import { ArrowBack, MenuBookOutlined } from "@mui/icons-material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DocPageInfo, getDocPage, listDocPages } from "../api";
+import type { DocPageId } from "../routes";
 
 type DocsViewProps = {
+  pageId: DocPageId;
+  onPageChange: (pageId: DocPageId) => void;
   onBack?: () => void;
   backLabel?: string;
 };
@@ -124,9 +127,13 @@ const DOC_LINK_TO_PAGE: Record<string, string> = {
   "PRODUCTION_READINESS.md": "production-readiness"
 };
 
-export function DocsView({ onBack, backLabel = "Back" }: DocsViewProps) {
+export function DocsView({
+  pageId,
+  onPageChange,
+  onBack,
+  backLabel = "Back"
+}: DocsViewProps) {
   const [pages, setPages] = useState<DocPageInfo[]>([]);
-  const [pageId, setPageId] = useState("architecture");
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -244,7 +251,7 @@ export function DocsView({ onBack, backLabel = "Back" }: DocsViewProps) {
         {pages.length > 0 && (
           <Tabs
             value={pageId}
-            onChange={(_event, value) => value && setPageId(value)}
+            onChange={(_event, value) => value && onPageChange(value as DocPageId)}
             variant={isMobile ? "scrollable" : "standard"}
             scrollButtons="auto"
             sx={{ px: 1, borderTop: "1px solid rgba(255,255,255,0.08)" }}
@@ -282,7 +289,7 @@ export function DocsView({ onBack, backLabel = "Back" }: DocsViewProps) {
                               href="#"
                               onClick={(event) => {
                                 event.preventDefault();
-                                setPageId(target);
+                                onPageChange(target as DocPageId);
                               }}
                             >
                               {children}

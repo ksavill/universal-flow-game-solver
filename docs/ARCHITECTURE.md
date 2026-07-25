@@ -168,7 +168,7 @@ flowchart TB
     UP[Uploaded image] --> AC["Auto-crop<br/>edge- and color-based (OpenCV),<br/>optional saved crop template"]
     AC --> PSP["Perspective correction<br/>(optional, quad detection)"]
     PSP --> CLS["Level-type classifier<br/>geometry + modifier candidates<br/>with confidences"]
-    PSP --> OCR["OCR title strip<br/>suggested name, size hint"]
+    PSP --> OCR["OCR title strip<br/>suggested name, size hint,<br/>advertised flow count"]
     CLS --> BR{geometry}
 
     BR -->|square / hex| GRID["Grid detection<br/>Hough lines to lattice inference,<br/>thick-line merging, spacing vote"]
@@ -176,20 +176,23 @@ flowchart TB
     BR -->|cube / star / figure8| TPL["Topology template<br/>(flow_solver.topologies)"]
     BR -->|free-form| REG["Region topology detection<br/>(see next section)"]
 
-    GRID --> TERM["Terminal detection<br/>saturation/brightness filter,<br/>per-cell sampling, color clustering"]
+    GRID --> TERM["Terminal detection<br/>shared colorful + neutral/gray policy,<br/>near-miss retention, color clustering"]
     CIRC --> TERM
     TPL --> NTERM["Terminal detection on node positions<br/>(project nodes to pixels)"]
     REG --> NTERM
 
-    TERM --> MODS["Modifier detectors<br/>bridges (cell glyphs),<br/>walls (thick shared borders),<br/>warps (paired border breaks)"]
-    NTERM --> MODS
+    TERM --> COMP["Completeness check<br/>expected vs detected pairs,<br/>confidence + recovery evidence"]
+    NTERM --> COMP
+    OCR --> COMP
+    COMP --> MODS["Modifier detectors<br/>bridges (cell glyphs),<br/>walls (thick shared borders),<br/>warps (paired border breaks)"]
     MODS --> EMIT{output format}
     EMIT -->|plain square/hex/circle| FLOWT[".flow text"]
     EMIT -->|anything typed| V2J["schema-v2 JSON<br/>blocked/warp adjacencies,<br/>display geometry, catalog"]
     FLOWT --> ARCH["Archive: data/image_imports/&lt;id&gt;/<br/>original bytes + record.json"]
     V2J --> ARCH
+    ARCH -->|incomplete| REVIEW["Automatic durable review flag"]
     ARCH --> SOLVE["Auto-solve (z3, 30 s)<br/>result attached to the archive record"]
-    SOLVE -->|unsat with auto target| RECOVER["Retry as region graph<br/>(regions layout)"]
+    SOLVE -->|topology mismatch with auto target| RECOVER["Retry as region graph<br/>(regions layout)"]
 ```
 
 Design rules the pipeline follows:
@@ -203,6 +206,17 @@ Design rules the pipeline follows:
   error and stage; the Library's *Uploaded screenshots* page can bulk-select
   and reprocess them after the pipeline improves. Each reprocess appends a run
   summary to the record (`runs[]`), preserving history.
+- **Archive reads are indexed.** `record.json` remains authoritative, while a
+  rebuildable SQLite summary index handles filtering, ordering, and pagination
+  without reopening every historical record on each list request.
+- **Review work is durable.** A record can carry `flagged`, `flagged_at`, and an
+  optional `flag_reason`. Flag updates use the same per-import file lock as
+  solve and reprocess updates, and the Flagged UI queries the archive with
+  `flagged=true`.
+- **Incomplete output cannot masquerade as a solve.** The importer records
+  expected/detected pair counts, confidence, near misses, and any recovered
+  pairs. A mismatch auto-flags the archive and the solve API rejects that exact
+  archived generated text; manually corrected text remains eligible to solve.
 
 ## Free-form (region) detection
 
@@ -262,8 +276,10 @@ backed up, no database:
 puzzles/                       curated library (.flow / .json), organized kind/size
 puzzles/templates/crop/        saved crop templates (+ preview.png)
 data/image_imports/<id>/       source.<ext>  original screenshot bytes (immutable)
-                               record.json   detection result, solve result, runs[]
+                               record.json   detection/solve results, runs[], review flag
 data/image_jobs/<id>/          durable batch sources + recoverable job.json
+reference_screenshot_corpus/   up to 500 byte-unique source screenshots,
+                               manifest, reviewed baselines, and replay reports
 tests/golden/puzzle_baseline.json   golden outcomes for every library puzzle
 tests/golden/benchmark_baseline.json stored performance/model-size corpus
 ```
@@ -272,8 +288,12 @@ tests/golden/benchmark_baseline.json stored performance/model-size corpus
 `--include-imports` every archived generation), re-verifies each solution
 independently, and diffs stable outcomes against the golden baseline —
 regressions exit nonzero. `scripts/benchmark_solver.py` checks solve-time and
-model-size drift. Together with the production frontend build they are the
-release gate:
+model-size drift. `scripts/replay_reference_corpus.py` separately exercises
+the screenshot-to-puzzle-to-solution path from immutable source pixels. The
+local corpus is refreshed with `scripts/build_reference_corpus.py --limit
+500`; selection is SHA-256 deduplicated and stratified so common square boards
+do not crowd out less frequent geometry and modifier combinations. Together
+with the production frontend build, the versioned checks are the release gate:
 
 ```mermaid
 flowchart LR

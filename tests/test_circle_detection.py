@@ -80,6 +80,30 @@ class CircleDetectionTests(unittest.TestCase):
         self.assertEqual(detection.geometry, "circle")
         self.assertEqual(detection.signals["circle_grid"]["rings"], 4)
 
+    def test_compact_octagonal_shape_routes_to_regions_instead_of_circle(self) -> None:
+        image = Image.new("RGB", (520, 520), color="black")
+        draw = ImageDraw.Draw(image)
+        outline = [
+            (260, 20),
+            (400, 120),
+            (500, 260),
+            (400, 400),
+            (260, 500),
+            (120, 400),
+            (20, 260),
+            (120, 120),
+        ]
+        draw.line(outline + [outline[0]], fill=(255, 125, 145), width=8, joint="curve")
+        for x in (120, 260, 400):
+            draw.line((x, 120, x, 400), fill=(135, 65, 80), width=4)
+        for y in (120, 260, 400):
+            draw.line((120, y, 400, y), fill=(135, 65, 80), width=4)
+
+        detection = classify_level_type(image)
+
+        self.assertNotEqual(detection.geometry, "circle")
+        self.assertEqual(detection.signals["recommended_graph_layout"], "regions")
+
 
 if __name__ == "__main__":
     unittest.main()

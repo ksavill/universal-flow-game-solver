@@ -12,7 +12,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKUP_SOURCES = (ROOT / "puzzles", ROOT / "data" / "image_imports", ROOT / "data" / "image_jobs")
+BACKUP_SOURCES = (
+    ROOT / "puzzles",
+    ROOT / "data" / "image_imports",
+    ROOT / "data" / "image_jobs",
+    ROOT / "reference_screenshot_corpus",
+)
 
 
 def main() -> int:
