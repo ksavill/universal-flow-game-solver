@@ -85,6 +85,15 @@ The replay report adds `by_difficulty`, `by_in_envelope`, `by_device`,
 `by_environment`, `by_split`, and `by_geometry` breakdowns. Check `--preview`
 contact sheets after changing the renderer: labels are drawn on each photo.
 
+Renderer `scene-v2` adds a curved-edge phone (`curved-edge-silver`), screen
+protectors (extra reflection, haze, trapped-air bubbles), cracked glass (always
+outside the envelope), and a second reflected light source.
+`--full-resolution` renders at native 12 MP phone-camera sizes; it is about
+three times slower and needs roughly 1.5 GB of memory per photo. Region-graph
+replays (hex and other region boards) compare cells by normalized position,
+because region ids and pixel data legitimately differ between a screenshot and
+a photo.
+
 ## Real photos
 
 Real camera imports become labels once a person reviews them: clearing an

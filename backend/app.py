@@ -1733,6 +1733,7 @@ def _prepare_camera_pipeline_images(
     auto_board_crop: bool = True,
     expected_grid: Optional[Tuple[int, int]] = None,
     cache_key: Optional[str] = None,
+    board_warp: bool = True,
 ) -> CameraPipelineImages:
     roi = (
         (crop.x, crop.y, crop.width, crop.height)
@@ -1744,7 +1745,9 @@ def _prepare_camera_pipeline_images(
             image,
             roi=roi,
             manual_corners=manual_corners,
-            detect_board=auto_board_crop,
+            # The board warp assumes a square lattice; other geometries keep
+            # the straightened display and fall back to auto-crop below.
+            detect_board=auto_board_crop and board_warp,
             expected_grid=expected_grid,
             cache_key=cache_key,
         )
@@ -1846,6 +1849,16 @@ CAMERA_REVIEW_THRESHOLDS: Dict[str, float] = {
 # detection fails) are not yet, so their results always go to review.
 CAMERA_UNSUPPORTED_GEOMETRIES = {"hex", "graph", "cube", "star", "figure8"}
 CAMERA_UNSUPPORTED_MODIFIERS = {"warps", "walls"}
+
+
+def _camera_board_is_not_square(level_type: Dict[str, Any], graph_layout: Optional[str]) -> bool:
+    geometry = str(level_type.get("geometry") or "").lower()
+    signals = level_type.get("signals") if isinstance(level_type.get("signals"), dict) else {}
+    return (
+        geometry in {"hex", "circle", "graph", "cube", "star", "figure8"}
+        or str(graph_layout or "").lower() == "regions"
+        or signals.get("recommended_graph_layout") == "regions"
+    )
 
 
 def _camera_unsupported_features(level_type: Dict[str, Any]) -> Optional[str]:
@@ -4386,6 +4399,30 @@ async def image_generate(
     if requested_target == "auto" and auto_level_signals.get("recommended_graph_layout") == "regions":
         target_used = "graph"
 
+    board_was_warped = bool(((photo_info or {}).get("board") or {}).get("selected"))
+    if effective_source_mode == "camera" and board_was_warped and _camera_board_is_not_square(level_type, graph_layout):
+        # The square-lattice board warp crops or stretches hex, circle, and
+        # region boards; redo preparation from the (cached) straightened
+        # display without it.
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=threshold,
+            invert=invert,
+            manual_corners=photo_corners,
+            cache_key=_photo_cache_key(data),
+            board_warp=False,
+        )
+        warped = camera.color
+        geometry_warped = camera.geometry
+        invalid_mask = camera.invalid_mask
+        warp_context = camera.warp_context
+        perspective_info = camera.perspective_info
+        auto_crop_info = camera.auto_crop_info
+        photo_info = camera.photo_info
+        photo_info["board_warp_skipped"] = "non-square board"
+        detection_info.update(perspective=perspective_info, auto_crop=auto_crop_info, photo=photo_info)
+
     auto_target_adjustment: Optional[Dict[str, Any]] = None
     if requested_target == "auto" and target_used in FLOW_LEVEL_GEOMETRIES:
         top_conf = 0.0
@@ -4839,7 +4876,11 @@ async def image_generate(
             name = f"{Path(meta.get('source_image', 'image')).stem}_{target_used}_{topo_width}x{topo_height}.json"
         elif graph_layout == "regions":
             nodes_obj, region_edges, region_info = detect_region_topology(
-                warped,
+                # Camera photos lift the black background and blur the thin
+                # cell outlines, so the global threshold on the color image
+                # merges cells; the contrast-enhanced geometry view keeps them.
+                # For screenshots geometry_warped is the same image as warped.
+                geometry_warped,
                 prefer_hex=level_geometry == "hex",
             )
             if len(nodes_obj) < 2:

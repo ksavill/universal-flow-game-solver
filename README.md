@@ -75,7 +75,11 @@ display and inner board, uses separate geometry and color views, masks glare,
 and then hands the prepared board to the established detectors. The detected
 screen outline and rectified preview are shown before processing. If the
 outline is wrong, choose **Adjust screen corners**, drag all four handles, and
-preview the correction without uploading again.
+preview the correction without uploading again. The board that will be used is
+drawn as a dashed yellow outline, and **Try next outline** cycles through the
+other screen outlines the detector found. Photo import is reliable for square
+boards; hex boards and boards with warps or walls are imported but always
+flagged for review.
 
 For reliable camera imports, keep all four display corners visible, fill a
 reasonable part of the frame, and make sure grid boundaries and colored dots

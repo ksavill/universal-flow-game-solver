@@ -35,7 +35,7 @@ describe("image uploads", () => {
     );
 
     await imageDetectGrid(gridParams(file));
-    await imageClassify({ file, threshold: 230, invert: false });
+    await imageClassify({ file, threshold: 230, lineThreshold: 0.6, invert: false });
 
     expect(calls.map((call) => call.path)).toEqual(["/image/uploads", "/image/grid/detect", "/image/classify"]);
     for (const call of calls.slice(1)) {
@@ -64,7 +64,7 @@ describe("image uploads", () => {
     await expect(imageDetectGrid(gridParams(file))).resolves.toEqual({ ok: true });
 
     expect(uploads).toBe(2);
-    expect(calls.at(-1)?.body.get("upload_id")).toBe("2".repeat(64));
+    expect(calls[calls.length - 1]?.body.get("upload_id")).toBe("2".repeat(64));
   });
 
   it("falls back to sending the file when the upload endpoint fails", async () => {

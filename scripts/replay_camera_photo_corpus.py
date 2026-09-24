@@ -75,6 +75,60 @@ def _semantic_signature(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _region_graph(text: str) -> tuple[dict[str, tuple[float, float]], set[frozenset[str]], list[tuple[str, ...]]] | None:
+    try:
+        document = json.loads(text)
+        channels = document["topology"]["channels"]
+        centers = {key: value["data"]["pixel_center"] for key, value in channels.items()}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    if not centers:
+        return None
+    xs = [float(center[0]) for center in centers.values()]
+    ys = [float(center[1]) for center in centers.values()]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    normalized = {
+        key: ((float(center[0]) - x0) / max(1.0, x1 - x0), (float(center[1]) - y0) / max(1.0, y1 - y0))
+        for key, center in centers.items()
+    }
+    adjacency = {
+        frozenset((item["a"]["channel"], item["b"]["channel"]))
+        for item in document["topology"].get("adjacencies", [])
+    }
+    pairs = [tuple(value.get("endpoints", [])) for value in document.get("terminals", {}).values()]
+    return normalized, adjacency, pairs
+
+
+def _region_graphs_equivalent(source_text: str, camera_text: str) -> bool:
+    """Same region puzzle up to renamed cells.
+
+    Region ids follow pixel raster order and cell centers depend on the
+    resolution, so photo imports of region boards never share a byte-level
+    signature with the screenshot; match cells by normalized position instead.
+    """
+
+    source, camera = _region_graph(source_text), _region_graph(camera_text)
+    if source is None or camera is None:
+        return False
+    source_cells, source_adjacency, source_pairs = source
+    camera_cells, camera_adjacency, camera_pairs = camera
+    if len(source_cells) != len(camera_cells):
+        return False
+    mapping = {
+        key: min(
+            source_cells,
+            key=lambda other: (source_cells[other][0] - point[0]) ** 2 + (source_cells[other][1] - point[1]) ** 2,
+        )
+        for key, point in camera_cells.items()
+    }
+    if len(set(mapping.values())) != len(mapping):
+        return False
+    if {frozenset(mapping[node] for node in edge) for edge in camera_adjacency} != source_adjacency:
+        return False
+    mapped_pairs = sorted(tuple(sorted(mapping.get(node, node) for node in pair)) for pair in camera_pairs)
+    return mapped_pairs == sorted(tuple(sorted(pair)) for pair in source_pairs)
+
+
 def _source_request_data(entry: dict[str, Any]) -> dict[str, str]:
     raw = entry.get("source_generation_data")
     data = {str(key): str(value) for key, value in raw.items()} if isinstance(raw, dict) else {}
@@ -234,7 +288,13 @@ def main() -> int:
                 "camera_status": camera_status,
                 "source_signature": source_signature,
                 "camera_signature": camera_signature,
-                "match": bool(source_signature and source_signature == camera_signature),
+                "match": bool(source_signature and source_signature == camera_signature)
+                or bool(
+                    source_status == 200
+                    and camera_status == 200
+                    and not entry.get("expected_signature")
+                    and _region_graphs_equivalent(str(source.get("text") or ""), str(camera.get("text") or ""))
+                ),
                 "variant_index": entry.get("variant_index"),
                 "difficulty": entry.get("difficulty"),
                 "in_envelope": entry.get("in_envelope"),

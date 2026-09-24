@@ -40,9 +40,11 @@ Completed in the follow-up pass:
   screenshots look like a tilted phone), but no corpus screenshot passes both
   checks: 0 of 219 are misrouted, while 37 of 75 EXIF-less synthetic photos are
   recognized. Photos with camera EXIF still switch on metadata.
-- Phase 5 candidate scoring: when the best display outline is ambiguous or
-  uncorroborated, the top three outlines are each carried through board
-  detection and scored by the board they produce (cached per outline).
+- Phase 5 candidate scoring: every shortlisted display outline (up to five)
+  is carried through board detection, and the outline whose board the others
+  agree on is chosen; a display whose own lattice reaches every edge is
+  accepted as the board. Board localization with automatic corners improved
+  from 42 to 58 of 77 in-envelope synthetic photos.
 - The browser uploads each image once (`POST /image/uploads`) and later
   stages send only its content hash; expired uploads are re-sent
   automatically.
@@ -55,30 +57,41 @@ Completed in the follow-up pass:
 - The synthetic corpus gained sensor-noise/color-cast, in-plane rotation, and
   moire variants (3-5); variants 0-2 are unchanged.
 
-Still open (measured with the scene renderer, `scripts/synthetic_camera.py`):
+Completed in the third pass (2026-09-24):
 
-- Square boards: inside the envelope 60% reconstruct exactly with labeled
-  corners but 30% with automatic corners; automatic display detection struggles
-  with bezels, cases, hands, and clutter around the phone.
-- Photos lose warp adjacencies on walls/warps boards (16 unflagged errors in
-  73), and hex boards fail region-graph detection entirely from photos. Treat
-  both as unsupported for photos until warp-glyph and region detection are
-  adapted to rectified photos; a crop margin alone did not help.
-- Review misses two terminal failure modes: a whole pair lost when no flow
-  count is advertised, and similar colors paired with the wrong partner under
-  a white-balance shift.
+- Camera review flags color clusters that are not exactly one pair and
+  near-identical colors of different pairs, which removed every remaining
+  unflagged error on the synthetic corpora.
+- Photos of hex/graph boards and boards with warps or walls are always
+  flagged; the UI says square boards are the supported case.
+- Warp detection receives a board view with half a cell of real surrounding
+  pixels (the detector needs context outside the outer grid lines); region
+  detection uses the contrast-enhanced geometry view; non-square boards skip
+  the square-lattice board warp. Hex boards with labeled corners went from 0
+  to 9 of 30 exact.
+- Region-seam inference is bounded by a deterministic conflict budget, so
+  screenshot results no longer depend on host load; incomplete inference is
+  reported and flagged instead of silently dropping seams.
+- The corner editor draws the board outline and can cycle through the other
+  detected outlines.
+- Scene renderer v2 adds full-resolution output, a curved-edge phone, screen
+  protectors, cracked glass, and a second light source.
 
-- Thresholds remain calibrated on synthetic photos only. The tooling above is
-  ready, but no labeled real-device photos exist yet; run the harvest and
-  calibration on the tuning split, then confirm on the held-out split, before
-  widening the supported envelope.
-- Automatic display detection misses the true screen outline when the app's
-  black background meets a dark bezel or desk (the main cause of the gap
-  between labeled-corner and automatic-corner accuracy). Candidate scoring
-  cannot recover an outline that was never proposed. Extrapolating the board's
-  own grid lines to its corners was prototyped and rejected: only 1 of 6
-  failing photos would have been fixed, so it needs a proper
-  perspective-lattice fit.
+Still open:
+
+- Real photos (plan items 11-13): thresholds remain calibrated on synthetic
+  photos only. The harvest and calibration tooling is ready; collect reviewed
+  real imports, calibrate on the tuning split, and confirm on the held-out
+  split before widening the supported envelope.
+- Automatic corners still trail labeled corners on square boards (39/104 vs
+  60/104 in the v2 corpus). On black-front phones the screen edge is often
+  never proposed; nested-contour and inner-Hough proposals are the next step.
+- Hex boards from photos need hex-aware display and board localization
+  (automatic corners: 1/30); warp boards still misplace the board in about 40%
+  of cases because the warp artwork extends the lattice one cell past the
+  board. Both remain flagged for review. Walls from photos were not analyzed.
+- Review is conservative: most imperfect photos are flagged, including many
+  that imported correctly. Calibrating on real photos should lower that.
 
 Verification results are recorded in `docs/PRODUCTION_READINESS.md`.
 

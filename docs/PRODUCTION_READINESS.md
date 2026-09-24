@@ -93,6 +93,24 @@ so release decisions use the stored ratio thresholds rather than these numbers.
   harmless RGB sampling drift and pair-label ordering. Add labeled real photos
   by device/capture session before expanding the supported quality envelope.
 
+Follow-up verification (2026-09-24, after the review, detection, and seam
+fixes). Every camera run below had zero wrong results left unflagged:
+
+| Corpus | Labeled corners | Automatic corners |
+| --- | --- | --- |
+| scene-v1 square-target (123) | 51 (46/77 in envelope) | 34 (31/77; was 23) |
+| scene-v2 square-target (164) | 67 (60/104 in envelope) | 41 (39/104) |
+| scene-v1 hex (30) | 9 (was 0) | 1 |
+| fixed variants main / large | 28/30, 12/15 | 22/30, 9/15 |
+
+Board localization with automatic corners improved from 42 to 58 of 77
+in-envelope photos. All 219 retained screenshots matched the idle-machine
+baseline while the host was at full CPU load: region-seam inference now uses
+a deterministic conflict budget, so the graph board that previously depended
+on load (`7679d40f3e188218`) solves identically. Review is deliberately
+conservative (most imperfect photos are flagged); thresholds await
+calibration on real photos.
+
 The scene renderer (2026-09-24, `scene-v1`: 9 mock devices, 9 environments,
 modeled display/glass light and camera) is considerably harsher than the fixed
 variants. On 123 photos of 41 square-target screenshots with labeled screen

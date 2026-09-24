@@ -949,3 +949,32 @@ def test_camera_review_flags_unsupported_photo_boards() -> None:
         assert review["required"] and "not reliable yet" in review["reasons"][0]
     plain = _camera_photo_review(_clean_photo_info(), detection={"level_type": {"geometry": "square", "modifiers": ["bridges"]}})
     assert plain["required"] is False
+
+
+def test_region_graph_replay_matches_renamed_cells() -> None:
+    from scripts.replay_camera_photo_corpus import _region_graphs_equivalent
+
+    def region_graph(names: list[str], scale: float) -> str:
+        centers = [(10, 10), (30, 10), (20, 30)]
+        return json.dumps(
+            {
+                "topology": {
+                    "channels": {
+                        name: {"data": {"pixel_center": [x * scale, y * scale]}} for name, (x, y) in zip(names, centers)
+                    },
+                    "adjacencies": [
+                        {"a": {"channel": names[0]}, "b": {"channel": names[1]}},
+                        {"a": {"channel": names[1]}, "b": {"channel": names[2]}},
+                    ],
+                },
+                "terminals": {"A": {"endpoints": [names[0], names[2]]}},
+            }
+        )
+
+    screenshot = region_graph(["r0", "r1", "r2"], 1.0)
+    photo = region_graph(["r7", "r3", "r9"], 2.5)
+    rewired = json.loads(photo)
+    rewired["terminals"]["A"]["endpoints"] = ["r7", "r3"]
+
+    assert _region_graphs_equivalent(screenshot, photo)
+    assert not _region_graphs_equivalent(screenshot, json.dumps(rewired))

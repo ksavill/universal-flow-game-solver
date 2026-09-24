@@ -224,9 +224,16 @@ Design rules the pipeline follows:
   final views are cached by that hash (`FLOW_CAMERA_PREP_CACHE_SIZE`, default
   4), so the classify, OCR, grid, terminal, and generate calls of one import
   share a single preparation.
-- **Weak outlines are decided downstream.** When the best display outline is
-  ambiguous or uncorroborated, the top three are each carried through board
-  detection and the one producing the most convincing board wins.
+- **Outlines are chosen by the board they produce.** Up to five display
+  outlines are each carried through board detection; the one whose board the
+  other outlines agree on is used (the photo frame and phone body often
+  outscore the real screen). A display whose own lattice reaches every edge is
+  itself accepted as the board. Non-square boards skip the square-lattice
+  board warp, region detection reads the contrast-enhanced geometry view, and
+  warp detection gets the board plus half a cell of surrounding pixels.
+- **Region seams are deterministic.** Seam inference is bounded by a SAT
+  conflict budget rather than wall-clock time, with a longer clock only as a
+  safety net; any incomplete inference is reported and sent to review.
 - **Auto mode compares pipelines.** Without camera EXIF, `auto` switches to
   the camera path only when the screenshot path's grid is missing or
   irregular and the camera path finds a confident board through a

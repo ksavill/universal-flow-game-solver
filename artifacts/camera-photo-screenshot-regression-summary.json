@@ -2,7 +2,7 @@
   "schema_version": 1,
   "purpose": "Prove that camera-photo preprocessing changes do not change screenshot-mode results.",
   "preprocessing_version": "camera-v3",
-  "verified_on": "2026-09-23",
+  "verified_on": "2026-09-24",
   "corpus_size": 219,
   "mode": "recorded",
   "semantic_signatures_changed": 0,
@@ -14,7 +14,7 @@
     "solve_failures": 6
   },
   "after": {
-    "report_sha256": "35ab7028e2ce3598486b8ae433d974e75007ede183674059aaddfd670749a0cc",
+    "report_sha256": "b7f44029140f8f988dddb72c5756148fecaab62ef89d242846d345b3552f5b12",
     "generated": 219,
     "generation_failures": 0,
     "solved": 213,
@@ -23,6 +23,7 @@
   "notes": [
     "Each results[*].signature value was compared directly between the before and after reports.",
     "The before report was recorded from the camera-v2 working tree immediately before the camera-v3 changes.",
-    "Follow-up pass (upload ids, auto pipeline evidence, candidate scoring): 218/219 signatures unchanged. 7679d40f3e188218 (graph) exceeded the 60 s region-seam deadline at 100% host CPU; committed HEAD produced the identical changed hash e0fd31e2... under the same load, so the difference is load-dependent, not a code regression."
+    "Follow-up pass (upload ids, auto pipeline evidence, candidate scoring): 218/219 signatures unchanged. 7679d40f3e188218 (graph) exceeded the 60 s region-seam deadline at 100% host CPU; committed HEAD produced the identical changed hash e0fd31e2... under the same load, so the difference is load-dependent, not a code regression.",
+    "2026-09-24 (deterministic region-seam budget, camera review/detection fixes): all 219 signatures and solve outcomes match the idle-machine baseline, verified with the host at full CPU load, including 7679d40f3e188218."
   ]
 }
