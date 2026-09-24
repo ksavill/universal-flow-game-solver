@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Accordion,
   AccordionDetails,
@@ -52,11 +52,14 @@ import {
   imageOcr,
   ImageImportEntry,
   ImageJob,
+  ImageSourceMode,
+  PhotoCorner,
   getImageJob,
   getImageImport,
   LevelType,
   listCropTemplates,
   listPuzzles,
+  prepareCameraPhoto,
   recordImageImportReprocessFailure,
   saveCropTemplate,
   savePuzzle,
@@ -126,11 +129,13 @@ type BatchItem = {
   saveState: "idle" | "saving" | "saved" | "error";
   saveMessage?: string;
   archiveImportId?: string;
+  sourceMode: ImageSourceMode;
 };
 
 type BatchSource = {
   file: File;
   archiveImportId?: string;
+  sourceMode?: ImageSourceMode;
 };
 
 const DEFAULT_CROP: Crop = { unit: "%", x: 0, y: 0, width: 100, height: 100 };
@@ -309,6 +314,18 @@ export function ImageView({
   const [lineThreshold, setLineThreshold] = useState(0.6);
   const [invert, setInvert] = useState(false);
   const [perspective, setPerspective] = useState(false);
+  const [sourceMode, setSourceMode] = useState<ImageSourceMode>("screenshot");
+  const [photoInfo, setPhotoInfo] = useState<Record<string, unknown> | null>(null);
+  const [photoCorners, setPhotoCorners] = useState<PhotoCorner[] | null>(null);
+  // Detected corners are shown for editing, but only corners the user moved are
+  // sent to the backend as manual; otherwise the server keeps detecting (and
+  // reviewing) the display outline itself.
+  const [photoCornersManual, setPhotoCornersManual] = useState(false);
+  const manualPhotoCorners = photoCornersManual ? photoCorners : null;
+  const [editingPhotoCorners, setEditingPhotoCorners] = useState(false);
+  const [correctedPhotoPreview, setCorrectedPhotoPreview] = useState<string | null>(null);
+  const [correctedPhotoPreviewBusy, setCorrectedPhotoPreviewBusy] = useState(false);
+  const draggedPhotoCornerRef = useRef<number | null>(null);
   const [padding, setPadding] = useState(6);
   const [gridWidth, setGridWidth] = useState(10);
   const [gridHeight, setGridHeight] = useState(10);
@@ -441,7 +458,7 @@ export function ImageView({
         warnings.push("this name repeats in the batch");
       }
       if (libraryIndex.sourceImages.has(item.file.name.trim().toLowerCase())) {
-        warnings.push("this screenshot file was already imported into the library");
+        warnings.push("this image file was already imported into the library");
       }
       if (warnings.length) {
         out.set(item.id, warnings);
@@ -519,6 +536,10 @@ export function ImageView({
               solve: solved,
               solveMs: typeof solved?.stats?.total_ms === "number" ? solved.stats.total_ms : null,
               archiveImportId: item.import_id,
+              sourceMode:
+                record?.processing?.source_mode === "camera" || record?.processing?.source_mode === "auto"
+                  ? record.processing.source_mode
+                  : "screenshot",
               error: item.error ?? item.solve_error,
               saveState: "idle"
             });
@@ -572,6 +593,11 @@ export function ImageView({
       setExpectedFlowCount(null);
       setTerminalCompleteness(null);
       setPipelineStatus(null);
+      setPhotoInfo(null);
+      setPhotoCorners(null);
+      setPhotoCornersManual(false);
+      setEditingPhotoCorners(false);
+      setCorrectedPhotoPreview(null);
       return;
     }
     setFile(next);
@@ -594,6 +620,11 @@ export function ImageView({
     setLevelType(null);
     setLevelTypeStatus(null);
     setPipelineStatus(null);
+    setPhotoInfo(null);
+    setPhotoCorners(null);
+    setPhotoCornersManual(false);
+    setEditingPhotoCorners(false);
+    setCorrectedPhotoPreview(null);
     setPipelineChecks({ classify: "idle", ocr: "idle", grid: "idle", terminals: "idle" });
   }, []);
   const refreshTemplates = useCallback(async () => {
@@ -675,6 +706,88 @@ export function ImageView({
     }
     return () => URL.revokeObjectURL(imageSrc);
   }, [imageSrc]);
+
+  useEffect(() => {
+    if (sourceMode !== "camera" || photoCorners || !photoInfo) {
+      return;
+    }
+    const selected = photoInfo.selected as { corners?: Array<{ x?: unknown; y?: unknown }> } | null | undefined;
+    const candidateCorners = selected?.corners;
+    if (
+      Array.isArray(candidateCorners) &&
+      candidateCorners.length === 4 &&
+      candidateCorners.every((point) => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)))
+    ) {
+      setPhotoCorners(candidateCorners.map((point) => ({ x: Number(point.x), y: Number(point.y) })));
+    }
+  }, [photoCorners, photoInfo, sourceMode]);
+
+  const updateDraggedPhotoCorner = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const index = draggedPhotoCornerRef.current;
+    if (index === null || !imageDims) {
+      return;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return;
+    }
+    const x = Math.max(0, Math.min(imageDims.width, ((event.clientX - bounds.left) / bounds.width) * imageDims.width));
+    const y = Math.max(0, Math.min(imageDims.height, ((event.clientY - bounds.top) / bounds.height) * imageDims.height));
+    setCorrectedPhotoPreview(null);
+    setPhotoCornersManual(true);
+    setPhotoCorners((current) => {
+      if (!current || current.length !== 4) {
+        return current;
+      }
+      return current.map((point, pointIndex) => (pointIndex === index ? { x, y } : point));
+    });
+  };
+
+  const startEditingPhotoCorners = () => {
+    if (!photoCorners && imageDims) {
+      const insetX = imageDims.width * 0.06;
+      const insetY = imageDims.height * 0.06;
+      setPhotoCorners([
+        { x: insetX, y: insetY },
+        { x: imageDims.width - insetX, y: insetY },
+        { x: imageDims.width - insetX, y: imageDims.height - insetY },
+        { x: insetX, y: imageDims.height - insetY }
+      ]);
+    }
+    setEditingPhotoCorners(true);
+  };
+
+  const resetPhotoCorners = () => {
+    draggedPhotoCornerRef.current = null;
+    setPhotoCorners(null);
+    setPhotoCornersManual(false);
+    setPhotoInfo(null);
+    setEditingPhotoCorners(false);
+    setCorrectedPhotoPreview(null);
+    setPipelineStatus("Automatic screen-corner detection will run on the next process.");
+  };
+
+  const previewCorrectedPhoto = async () => {
+    if (!file || sourceMode !== "camera" || correctedPhotoPreviewBusy) {
+      return;
+    }
+    setCorrectedPhotoPreviewBusy(true);
+    try {
+      const response = await prepareCameraPhoto({
+        file,
+        photoCorners: manualPhotoCorners,
+        crop: manualPhotoCorners ? null : getCropPixels(),
+        threshold,
+        invert
+      });
+      setPhotoInfo(response.photo);
+      setCorrectedPhotoPreview(response.preview_data_url);
+    } catch (error) {
+      setPipelineStatus(error instanceof Error ? error.message : "Could not prepare the camera photo.");
+    } finally {
+      setCorrectedPhotoPreviewBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (imgRef.current && completedCrop && previewCanvasRef.current) {
@@ -889,6 +1002,8 @@ export function ImageView({
     try {
       const res = await imageClassify({
         file,
+        sourceMode,
+        photoCorners: manualPhotoCorners,
         threshold,
         lineThreshold,
         invert,
@@ -896,6 +1011,7 @@ export function ImageView({
         levelHint: ocrSuggested ?? imageName,
         crop: cropOverride === undefined ? getCropPixels() : cropOverride
       });
+      setPhotoInfo(res.photo ?? null);
       setLevelType(res.level_type);
       setLevelTypeStatus(
         `Detected ${res.level_type.geometry} (${Math.round(res.level_type.confidence * 100)}% confidence).`
@@ -915,6 +1031,8 @@ export function ImageView({
       const builderType = getBuilderType(targetType, levelType);
       const res = await imageDetectGrid({
         file,
+        sourceMode,
+        photoCorners: manualPhotoCorners,
         targetType: builderType,
         threshold,
         lineThreshold,
@@ -922,6 +1040,7 @@ export function ImageView({
         crop: getCropPixels(),
         perspective
       });
+      setPhotoInfo(res.photo ?? null);
       if (!res.grid) {
         setGridStatus(res.message ?? "Grid detection failed.");
         return;
@@ -961,6 +1080,8 @@ export function ImageView({
       const builderType = getBuilderType(targetType, levelType);
       const res = await imageDetectTerminals({
         file,
+        sourceMode,
+        photoCorners: manualPhotoCorners,
         targetType: builderType,
         rows: gridHeight,
         cols: gridWidth,
@@ -973,6 +1094,7 @@ export function ImageView({
         crop: getCropPixels(),
         perspective
       });
+      setPhotoInfo(res.photo ?? null);
       const warnings = res.info?.warnings?.length ? res.info.warnings.join(" ") : "No warnings.";
       setTerminalStatus(`Detected ${res.terminals.length} terminals. ${warnings}`);
       setTerminalDetections(res.terminals);
@@ -1011,6 +1133,8 @@ export function ImageView({
       const effectiveGraphLayout = graphLayoutForDetection(levelType, graphLayout);
       const res = await imageGenerate({
         file,
+        sourceMode,
+        photoCorners: manualPhotoCorners,
         targetType,
         gridWidth,
         gridHeight,
@@ -1037,6 +1161,7 @@ export function ImageView({
         clusterThreshold,
         bgThreshold
       });
+      setPhotoInfo((res.detection?.photo as Record<string, unknown> | null | undefined) ?? null);
       setGeneratedName(res.name);
       setGeneratedText(res.text);
       setGeneratedImportId(res.import_id ?? null);
@@ -1285,6 +1410,8 @@ export function ImageView({
       if (pipelineUseOcr) {
         const ocrRes = await imageOcr({
           file,
+          sourceMode,
+          photoCorners: manualPhotoCorners,
           crop: ocrWholeImage ? null : crop,
           perspective
         });
@@ -1334,6 +1461,8 @@ export function ImageView({
       if (pipelineUseGrid && gridDrivenTarget) {
         const gridRes = await imageDetectGrid({
           file,
+          sourceMode,
+          photoCorners: manualPhotoCorners,
           targetType: builderType,
           threshold,
           lineThreshold,
@@ -1380,6 +1509,8 @@ export function ImageView({
       if (pipelineUseTerminals && gridDrivenTarget && onApplyGrid) {
         const termRes = await imageDetectTerminals({
           file,
+          sourceMode,
+          photoCorners: manualPhotoCorners,
           targetType: builderType,
           rows,
           cols,
@@ -1400,6 +1531,8 @@ export function ImageView({
       } else if ((pipelineUseTerminals || topologyDrivenTarget) && !gridDrivenTarget) {
         const graphRes = await imageGenerate({
           file,
+          sourceMode,
+          photoCorners: manualPhotoCorners,
           targetType: builderType,
           gridWidth: cols,
           gridHeight: rows,
@@ -1506,6 +1639,8 @@ export function ImageView({
       if (!onApplyGrid && !rawTopology) {
         const generated = await imageGenerate({
           file,
+          sourceMode,
+          photoCorners: manualPhotoCorners,
           targetType: builderType,
           gridWidth: cols,
           gridHeight: rows,
@@ -1595,7 +1730,7 @@ export function ImageView({
       const classificationNote = detectedLevelType ? ` (${detectedLevelType.geometry})` : "";
       setPipelineStatus(
         rawTopology
-          ? "Screenshot processed. Opening the solver…"
+          ? "Image processed. Opening the solver…"
           : `Pipeline applied to builder${classificationNote}.`
       );
     } catch (err) {
@@ -1607,7 +1742,7 @@ export function ImageView({
         terminals: prev.terminals === "pending" ? "fail" : prev.terminals
       }));
       setPipelineStatus(message);
-      void archiveImageImportFailure({ file, error: message, stage: "single-image-pipeline" }).catch(
+      void archiveImageImportFailure({ file, error: message, stage: "single-image-pipeline", sourceMode }).catch(
         () => undefined
       );
     } finally {
@@ -1654,12 +1789,15 @@ export function ImageView({
   // Full per-image pipeline: auto-crop -> classify -> OCR -> generate -> solve.
   async function processBatchItem(item: BatchItem): Promise<Partial<BatchItem>> {
     const batchFile = item.file;
+    const batchSourceMode = item.sourceMode;
     let crop: CropPixels | null = null;
-    try {
-      const res = await imageAutoCrop({ file: batchFile, threshold, invert, padding, crop: null });
-      crop = res.crop ?? null;
-    } catch {
-      // fall back to the full frame
+    if (batchSourceMode !== "camera") {
+      try {
+        const res = await imageAutoCrop({ file: batchFile, threshold, invert, padding, crop: null });
+        crop = res.crop ?? null;
+      } catch {
+        // fall back to the full frame
+      }
     }
 
     let detected: LevelType | null = null;
@@ -1667,6 +1805,8 @@ export function ImageView({
       try {
         const res = await imageClassify({
           file: batchFile,
+          sourceMode: batchSourceMode,
+          photoCorners: null,
           threshold,
           lineThreshold,
           invert,
@@ -1684,7 +1824,13 @@ export function ImageView({
     let expectedPairs: number | null = null;
     if (pipelineUseOcr) {
       try {
-        const ocr = await imageOcr({ file: batchFile, crop: ocrWholeImage ? null : crop, perspective });
+        const ocr = await imageOcr({
+          file: batchFile,
+          sourceMode: batchSourceMode,
+          photoCorners: null,
+          crop: ocrWholeImage ? null : crop,
+          perspective
+        });
         suggested = ocr.suggested_name ?? null;
         expectedPairs = ocr.expected_flow_count ?? null;
       } catch {
@@ -1706,6 +1852,8 @@ export function ImageView({
     if (pipelineUseGrid && gridDrivenTarget) {
       const gridRes = await imageDetectGrid({
         file: batchFile,
+        sourceMode: batchSourceMode,
+        photoCorners: null,
         targetType: builderType,
         threshold,
         lineThreshold,
@@ -1727,6 +1875,8 @@ export function ImageView({
 
     const gen = await imageGenerate({
       file: batchFile,
+      sourceMode: batchSourceMode,
+      photoCorners: null,
       replaceImportId: item.archiveImportId,
       targetType: builderType,
       gridWidth: detectedCols,
@@ -1795,6 +1945,8 @@ export function ImageView({
         try {
           const recovery = await imageGenerate({
             file: batchFile,
+            sourceMode: batchSourceMode,
+            photoCorners: null,
             replaceImportId: gen.import_id,
             targetType: "graph",
             gridWidth: detectedCols,
@@ -1888,7 +2040,12 @@ export function ImageView({
                 error: message,
                 stage: "screenshot-library"
               })
-            : archiveImageImportFailure({ file: item.file, error: message, stage: "screenshot-batch" });
+            : archiveImageImportFailure({
+                file: item.file,
+                error: message,
+                stage: "screenshot-batch",
+                sourceMode: item.sourceMode
+              });
           const archived = await archiveFailure.catch(() => undefined);
           if (archived) {
             updateBatchItem(item.id, { archiveImportId: archived.id });
@@ -1911,7 +2068,12 @@ export function ImageView({
     if (!targets.length || serverJobSubmitting) return;
     setServerJobSubmitting(true);
     try {
+      const batchSourceModes = Array.from(new Set(targets.map((item) => item.sourceMode)));
+      if (batchSourceModes.length !== 1) {
+        throw new Error("Submit screenshot and camera-photo batches separately so each uses the correct pipeline.");
+      }
       const options: Record<string, unknown> = {
+        source_mode: batchSourceModes[0],
         target_type: targetType,
         graph_layout: graphLayout,
         graph_nodes: graphNodes,
@@ -1951,7 +2113,7 @@ export function ImageView({
   const addBatchSources = (sources: BatchSource[]) => {
     // Batch replaces the single-image workflow; clear that state.
     selectImageFile(null);
-    const newItems: BatchItem[] = sources.map(({ file: batchFile, archiveImportId }, idx) => {
+    const newItems: BatchItem[] = sources.map(({ file: batchFile, archiveImportId, sourceMode: itemSourceMode }, idx) => {
       const url = URL.createObjectURL(batchFile);
       batchUrlsRef.current.push(url);
       return {
@@ -1960,6 +2122,7 @@ export function ImageView({
         previewUrl: url,
         status: "queued",
         name: batchFile.name.replace(/\.(png|jpe?g|webp)$/i, ""),
+        sourceMode: itemSourceMode ?? sourceMode,
         saveState: "idle",
         archiveImportId
       };
@@ -1970,8 +2133,8 @@ export function ImageView({
     }
   };
 
-  const addBatchFiles = (files: File[]) => {
-    addBatchSources(files.map((batchFile) => ({ file: batchFile })));
+  const addBatchFiles = (files: File[], selectedSourceMode: ImageSourceMode) => {
+    addBatchSources(files.map((batchFile) => ({ file: batchFile, sourceMode: selectedSourceMode })));
   };
 
   const clearBatch = () => {
@@ -1989,15 +2152,19 @@ export function ImageView({
 
   // Route incoming files: several at once (or adding while a batch exists)
   // goes to the batch list; a lone file uses the guided single-image flow.
-  const handleFilesSelected = (list: FileList | File[] | null) => {
+  const handleFilesSelected = (
+    list: FileList | File[] | null,
+    selectedSourceMode: ImageSourceMode = sourceMode
+  ) => {
     const files = Array.from(list ?? []).filter(
       (candidate) => candidate.type.startsWith("image/") || candidate.type === ""
     );
     if (!files.length) {
       return;
     }
+    setSourceMode(selectedSourceMode);
     if (allowBatch && (files.length > 1 || batchMode)) {
-      addBatchFiles(files);
+      addBatchFiles(files, selectedSourceMode);
     } else {
       selectImageFile(files[0]);
     }
@@ -2055,7 +2222,11 @@ export function ImageView({
       for (let index = 0; index < entries.length; index += 1) {
         const entry = entries[index];
         try {
-          sources.push({ file: await fetchImageImportFile(entry), archiveImportId: entry.id });
+          sources.push({
+            file: await fetchImageImportFile(entry),
+            archiveImportId: entry.id,
+            sourceMode: entry.source_mode ?? "screenshot"
+          });
         } catch (err) {
           failures.push(`${entry.original_name}: ${err instanceof Error ? err.message : "download failed"}`);
         }
@@ -2094,6 +2265,8 @@ export function ImageView({
     try {
       const res = await imageOcr({
         file,
+        sourceMode,
+        photoCorners: manualPhotoCorners,
         crop: ocrWholeImage ? null : getCropPixels(),
         perspective
       });
@@ -2621,13 +2794,13 @@ export function ImageView({
           }}
         >
           <CardContent sx={{ py: { xs: 2.5, sm: 3 } }}>
-            <Chip icon={<AutoAwesome />} label="Screenshot to solution" color="primary" size="small" sx={{ mb: 1.5 }} />
+            <Chip icon={<AutoAwesome />} label="Image to solution" color="primary" size="small" sx={{ mb: 1.5 }} />
             <Typography variant="h5" gutterBottom>
-              Solve a screenshot
+              Solve from an image
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 620 }}>
-              Drop in one or many screenshots. Each one is cropped, detected, and solved — a single
-              screenshot opens straight in the solver, a batch shows every solution in a list.
+              Drop in screenshots or camera photos. Each image is prepared, detected, and solved — a single
+              image opens straight in the solver, while a batch shows every solution in a list.
             </Typography>
           </CardContent>
         </Card>
@@ -2655,7 +2828,7 @@ export function ImageView({
               <Typography variant="overline" color="primary.main" fontWeight={700}>
                 Step 1
               </Typography>
-              <Typography variant="h6">Choose the screenshot</Typography>
+              <Typography variant="h6">Choose an image</Typography>
             </Box>
             <Box
               onDragEnter={(event) => {
@@ -2682,30 +2855,51 @@ export function ImageView({
               <UploadFile sx={{ fontSize: 34, color: "text.secondary", mb: 0.5 }} />
               <Typography variant="subtitle1" fontWeight={650}>
                 {batchMode
-                  ? `${batchItems.length} screenshot${batchItems.length === 1 ? "" : "s"} in the batch`
+                  ? `${batchItems.length} image${batchItems.length === 1 ? "" : "s"} in the batch`
                   : file
                     ? imageName
                     : allowBatch
-                      ? "Drop one or more screenshots here"
-                      : "Drop a screenshot here"}
+                      ? "Drop one or more images here"
+                      : "Drop an image here"}
               </Typography>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1.5 }}>
                 {allowBatch ? "PNG, JPEG, or WebP — select several to solve them in bulk" : "PNG, JPEG, or WebP"}
               </Typography>
+              <TextField
+                select
+                label="Image source"
+                value={sourceMode}
+                onChange={(event) => {
+                  const nextMode = event.target.value as ImageSourceMode;
+                  setSourceMode(nextMode);
+                  if (nextMode !== "camera") {
+                    setPhotoCorners(null);
+                    setPhotoCornersManual(false);
+                    setEditingPhotoCorners(false);
+                    setCorrectedPhotoPreview(null);
+                  }
+                }}
+                size="small"
+                sx={{ minWidth: 190, mb: 1.5, textAlign: "left" }}
+              >
+                <MenuItem value="screenshot">Screenshot</MenuItem>
+                <MenuItem value="camera">Camera photo</MenuItem>
+                <MenuItem value="auto">Detect automatically</MenuItem>
+              </TextField>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="center">
                 <Button
                   component="label"
                   variant={file || batchMode ? "outlined" : "contained"}
                   startIcon={<UploadFile />}
                 >
-                  {batchMode ? "Add screenshots" : file ? "Replace screenshot" : "Choose screenshots"}
+                  {batchMode ? "Add images" : file ? "Replace image" : "Choose images"}
                   <input
                     hidden
                     type="file"
                     multiple={allowBatch}
                     accept="image/png,image/jpeg,image/webp,image/*"
                     onChange={(event) => {
-                      handleFilesSelected(event.target.files);
+                      handleFilesSelected(event.target.files, sourceMode);
                       event.target.value = "";
                     }}
                   />
@@ -2718,7 +2912,7 @@ export function ImageView({
                     accept="image/*"
                     capture="environment"
                     onChange={(event) => {
-                      handleFilesSelected(event.target.files);
+                      handleFilesSelected(event.target.files, "camera");
                       event.target.value = "";
                     }}
                   />
@@ -2744,31 +2938,146 @@ export function ImageView({
                     Auto-crop
                   </Button>
                 </Box>
-                <ReactCrop
-                  crop={crop}
-                  onChange={(nextCrop) => setCrop(nextCrop)}
-                  onComplete={(pixelCrop) => setCompletedCrop(pixelCrop)}
-                  keepSelection
-                  ruleOfThirds
-                  style={{ maxWidth: "100%", width: "fit-content" }}
-                >
-                  <img
-                    ref={imgRef}
-                    alt="Crop preview"
-                    src={imageSrc}
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: 520,
-                      width: "auto",
-                      height: "auto",
-                      display: "block"
-                    }}
-                    onLoad={handleImageLoaded}
-                  />
-                </ReactCrop>
+                <Box sx={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+                  <ReactCrop
+                    crop={crop}
+                    onChange={(nextCrop) => setCrop(nextCrop)}
+                    onComplete={(pixelCrop) => setCompletedCrop(pixelCrop)}
+                    keepSelection
+                    ruleOfThirds
+                    style={{ maxWidth: "100%", width: "fit-content" }}
+                  >
+                    <img
+                      ref={imgRef}
+                      alt="Crop preview"
+                      src={imageSrc}
+                      style={{
+                        maxWidth: "100%",
+                        maxHeight: 520,
+                        width: "auto",
+                        height: "auto",
+                        display: "block"
+                      }}
+                      onLoad={handleImageLoaded}
+                    />
+                  </ReactCrop>
+                  {sourceMode === "camera" && imageDims && photoCorners?.length === 4 && (
+                    <svg
+                      viewBox={`0 0 ${imageDims.width} ${imageDims.height}`}
+                      preserveAspectRatio="none"
+                      onPointerMove={updateDraggedPhotoCorner}
+                      onPointerUp={() => {
+                        draggedPhotoCornerRef.current = null;
+                      }}
+                      onPointerCancel={() => {
+                        draggedPhotoCornerRef.current = null;
+                      }}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        pointerEvents: editingPhotoCorners ? "auto" : "none",
+                        touchAction: "none"
+                      }}
+                      aria-label="Photographed screen corner editor"
+                    >
+                      <polygon
+                        points={photoCorners.map((point) => `${point.x},${point.y}`).join(" ")}
+                        fill="rgba(33, 150, 243, 0.10)"
+                        stroke="#29b6f6"
+                        strokeWidth={Math.max(3, Math.min(imageDims.width, imageDims.height) * 0.006)}
+                        pointerEvents="none"
+                      />
+                      {photoCorners.map((point, index) => (
+                        <circle
+                          key={`${index}-${point.x}-${point.y}`}
+                          cx={point.x}
+                          cy={point.y}
+                          r={Math.max(12, Math.min(imageDims.width, imageDims.height) * 0.022)}
+                          fill="#0288d1"
+                          stroke="white"
+                          strokeWidth={Math.max(3, Math.min(imageDims.width, imageDims.height) * 0.005)}
+                          onPointerDown={(event) => {
+                            draggedPhotoCornerRef.current = index;
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                          }}
+                          style={{ cursor: editingPhotoCorners ? "grab" : "default" }}
+                        />
+                      ))}
+                    </svg>
+                  )}
+                </Box>
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
                   Auto-crop framed the board for you — adjust the handles if it missed, then process again.
                 </Typography>
+                {sourceMode === "camera" && (
+                  <Stack spacing={1} sx={{ mt: 1.5 }}>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                      <Button size="small" variant="outlined" onClick={startEditingPhotoCorners}>
+                        {editingPhotoCorners ? "Editing screen corners" : "Adjust screen corners"}
+                      </Button>
+                      {editingPhotoCorners && (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          onClick={() => {
+                            setEditingPhotoCorners(false);
+                            setPhotoCornersManual(Boolean(photoCorners && photoCorners.length === 4));
+                          }}
+                        >
+                          Use these corners
+                        </Button>
+                      )}
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => void previewCorrectedPhoto()}
+                        disabled={correctedPhotoPreviewBusy}
+                      >
+                        {correctedPhotoPreviewBusy ? "Preparing preview…" : "Preview correction"}
+                      </Button>
+                      <Button size="small" variant="text" onClick={resetPhotoCorners}>
+                        Detect corners again
+                      </Button>
+                    </Stack>
+                    <Alert
+                      severity={
+                        Array.isArray((photoInfo?.quality as { warnings?: unknown[] } | undefined)?.warnings) &&
+                        ((photoInfo?.quality as { warnings?: unknown[] }).warnings?.length ?? 0) > 0
+                          ? "warning"
+                          : "info"
+                      }
+                      sx={{ textAlign: "left" }}
+                    >
+                      {photoInfo
+                        ? (
+                            ((photoInfo.quality as { warnings?: string[] } | undefined)?.warnings ?? [
+                              "The photographed display and board were rectified successfully."
+                            ])
+                          ).join(" ")
+                        : "Camera mode will locate and straighten the photographed display before detecting the board."}
+                    </Alert>
+                    {correctedPhotoPreview && (
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                          Rectified board preview
+                        </Typography>
+                        <img
+                          src={correctedPhotoPreview}
+                          alt="Rectified photographed puzzle preview"
+                          style={{ maxWidth: "100%", maxHeight: 440, display: "block", borderRadius: 8 }}
+                        />
+                      </Box>
+                    )}
+                  </Stack>
+                )}
+                {sourceMode === "auto" && photoInfo && (
+                  <Alert severity="info" sx={{ mt: 1.5, textAlign: "left" }}>
+                    The image was recognized as a camera photo and rectified automatically. Switch the image
+                    source to Camera photo if you need to adjust its four screen corners.
+                  </Alert>
+                )}
               </Box>
             )}
           </Stack>
@@ -2786,7 +3095,7 @@ export function ImageView({
                   </Typography>
                   <Typography variant="h6">Solved puzzles</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Each screenshot is cropped, detected, and solved. Open any result in the solver or save it
+                    Each image is prepared, detected, and solved. Open any result in the solver or save it
                     to the library.
                   </Typography>
                 </Box>
@@ -3105,7 +3414,7 @@ export function ImageView({
               </Typography>
               <Typography variant="h6">Detect and solve</Typography>
               <Typography variant="body2" color="text.secondary">
-                Automatic works for most screenshots. Choose a board type only when detection needs a hint.
+                Automatic works for most images. Choose a board type only when detection needs a hint.
               </Typography>
             </Box>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
@@ -3157,9 +3466,9 @@ export function ImageView({
               sx={{ minHeight: 48 }}
             >
               {pipelineBusy
-                ? "Processing screenshot…"
+                ? "Processing image…"
                 : onApplyGrid
-                  ? "Process screenshot"
+                  ? "Process image"
                   : "Process & solve"}
             </Button>
             {pipelineBusy && <LinearProgress />}

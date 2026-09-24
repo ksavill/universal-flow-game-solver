@@ -93,6 +93,8 @@ export type GraphResponse = {
 
 export type LevelGeometry = "square" | "hex" | "circle" | "graph" | "cube" | "star" | "figure8";
 export type LevelModifier = "bridges" | "warps" | "walls";
+export type ImageSourceMode = "screenshot" | "camera" | "auto";
+export type PhotoCorner = { x: number; y: number };
 
 export type LevelTypeCandidate = {
   id: string;
@@ -119,18 +121,31 @@ export type ImageCropResponse = {
   message?: string;
 };
 
+export type CameraPhotoPreparationResponse = {
+  source_mode: "camera";
+  input: Record<string, unknown>;
+  photo: Record<string, unknown>;
+  perspective: Record<string, unknown>;
+  auto_crop: Record<string, unknown>;
+  preview_data_url: string;
+};
+
 export type ImageClassifyResponse = {
   level_type: LevelType;
   candidates: LevelTypeCandidate[];
   warnings: string[];
   signals: Record<string, unknown>;
   image_size: { width: number; height: number };
+  source_mode?: ImageSourceMode;
+  photo?: Record<string, unknown> | null;
   perspective?: Record<string, unknown> | null;
 };
 
 export type ImageGridResponse = {
   grid: { rows: number; cols: number; vertical_lines: number; horizontal_lines: number; mode?: string } | null;
   image_size: { width: number; height: number };
+  source_mode?: ImageSourceMode;
+  photo?: Record<string, unknown> | null;
   message?: string;
   perspective?: Record<string, unknown> | null;
   circle?: Record<string, unknown>;
@@ -138,6 +153,8 @@ export type ImageGridResponse = {
 
 export type ImageTerminalsResponse = {
   terminals: Array<{ row: number; col: number; letter: string; color: number[] }>;
+  source_mode?: ImageSourceMode;
+  photo?: Record<string, unknown> | null;
   info: { clusters: Array<{ color: number[]; count: number }>; candidates: number; warnings: string[] };
   perspective?: Record<string, unknown> | null;
   auto_crop?: Record<string, unknown> | null;
@@ -169,6 +186,7 @@ export type ImageGenerateResponse = {
     };
     warnings?: string[];
     perspective?: Record<string, unknown> | null;
+    photo?: Record<string, unknown> | null;
     level_type?: LevelType;
     level_type_candidates?: LevelTypeCandidate[];
     target_type_requested?: string;
@@ -189,6 +207,8 @@ export type ImageImportEntry = {
   content_type: string;
   byte_size: number;
   image_size: { width: number; height: number };
+  source_mode?: ImageSourceMode;
+  source_mode_effective?: "screenshot" | "camera";
   generated_name: string;
   geometry?: string | null;
   grid?: { rows?: number; cols?: number; [key: string]: unknown } | null;
@@ -428,11 +448,15 @@ export async function archiveImageImportFailure(params: {
   file: File;
   error: string;
   stage?: string;
+  sourceMode?: ImageSourceMode;
 }): Promise<ImageImportEntry> {
   const form = new FormData();
   form.append("file", params.file);
   form.append("error", params.error);
   form.append("stage", params.stage ?? "processing");
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
   return imageRequest<ImageImportEntry>("/image-imports/failed", form);
 }
 
@@ -550,11 +574,76 @@ export async function fetchImageImportFile(entry: ImageImportEntry): Promise<Fil
   });
 }
 
-async function imageRequest<T>(path: string, formData: FormData): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    method: "POST",
-    body: formData
+// A single import calls several pipeline stages with the same image. Upload
+// each File once and reference it by content hash afterwards.
+const UPLOAD_REUSE_PATHS = new Set([
+  "/image/crop/auto",
+  "/image/photo/prepare",
+  "/image/classify",
+  "/image/ocr",
+  "/image/grid/detect",
+  "/image/terminals/detect",
+  "/image/generate",
+  "/image-imports/failed"
+]);
+const uploadIds = new WeakMap<File, Promise<string>>();
+
+function uploadIdFor(file: File): Promise<string> {
+  let pending = uploadIds.get(file);
+  if (!pending) {
+    pending = (async () => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${API_URL}/image/uploads`, { method: "POST", body: form });
+      if (!res.ok) {
+        throw new Error(`Image upload failed (${res.status})`);
+      }
+      const body = (await res.json()) as { upload_id: string };
+      return body.upload_id;
+    })();
+    uploadIds.set(file, pending);
+    pending.catch(() => uploadIds.delete(file));
+  }
+  return pending;
+}
+
+function withUploadId(formData: FormData, uploadId: string): FormData {
+  const next = new FormData();
+  formData.forEach((value, key) => {
+    if (key !== "file") {
+      next.append(key, value);
+    }
   });
+  next.append("upload_id", uploadId);
+  return next;
+}
+
+function postForm(path: string, body: FormData): Promise<Response> {
+  return fetch(`${API_URL}${path}`, { method: "POST", body });
+}
+
+async function imageRequest<T>(path: string, formData: FormData): Promise<T> {
+  const file = formData.get("file");
+  let res: Response | null = null;
+  if (file instanceof File && UPLOAD_REUSE_PATHS.has(path)) {
+    for (let attempt = 0; attempt < 2 && res === null; attempt += 1) {
+      let uploadId: string;
+      try {
+        uploadId = await uploadIdFor(file);
+      } catch {
+        break; // Fall back to sending the file with this request.
+      }
+      const response = await postForm(path, withUploadId(formData, uploadId));
+      if (response.status === 410) {
+        uploadIds.delete(file); // Expired on the server; upload again.
+        continue;
+      }
+      res = response;
+    }
+  }
+  if (res === null) {
+    res = await postForm(path, formData);
+  }
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
     const message = (detail as { detail?: string }).detail ?? res.statusText;
@@ -584,6 +673,33 @@ export async function imageAutoCrop(params: {
   return imageRequest<ImageCropResponse>("/image/crop/auto", form);
 }
 
+export async function prepareCameraPhoto(params: {
+  file: File;
+  photoCorners?: PhotoCorner[] | null;
+  crop?: { x: number; y: number; width: number; height: number } | null;
+  threshold?: number;
+  invert?: boolean;
+}): Promise<CameraPhotoPreparationResponse> {
+  const form = new FormData();
+  form.append("file", params.file);
+  if (params.photoCorners) {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
+  if (params.crop) {
+    form.append("crop_x", String(params.crop.x));
+    form.append("crop_y", String(params.crop.y));
+    form.append("crop_width", String(params.crop.width));
+    form.append("crop_height", String(params.crop.height));
+  }
+  if (params.threshold !== undefined) {
+    form.append("threshold", String(params.threshold));
+  }
+  if (params.invert !== undefined) {
+    form.append("invert", String(params.invert));
+  }
+  return imageRequest<CameraPhotoPreparationResponse>("/image/photo/prepare", form);
+}
+
 export async function validatePuzzle(payload: {
   name: string;
   text: string;
@@ -600,6 +716,8 @@ export async function validatePuzzle(payload: {
 
 export async function imageDetectGrid(params: {
   file: File;
+  sourceMode?: ImageSourceMode;
+  photoCorners?: PhotoCorner[] | null;
   targetType?: string;
   threshold: number;
   lineThreshold: number;
@@ -609,6 +727,12 @@ export async function imageDetectGrid(params: {
 }): Promise<ImageGridResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
+  if (params.photoCorners && params.sourceMode === "camera") {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
   if (params.targetType) {
     form.append("target_type", params.targetType);
   }
@@ -629,6 +753,8 @@ export async function imageDetectGrid(params: {
 
 export async function imageClassify(params: {
   file: File;
+  sourceMode?: ImageSourceMode;
+  photoCorners?: PhotoCorner[] | null;
   threshold: number;
   lineThreshold: number;
   invert: boolean;
@@ -638,6 +764,12 @@ export async function imageClassify(params: {
 }): Promise<ImageClassifyResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
+  if (params.photoCorners && params.sourceMode === "camera") {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
   form.append("threshold", String(params.threshold));
   form.append("line_threshold", String(params.lineThreshold));
   form.append("invert", String(params.invert));
@@ -658,6 +790,8 @@ export async function imageClassify(params: {
 
 export async function imageDetectTerminals(params: {
   file: File;
+  sourceMode?: ImageSourceMode;
+  photoCorners?: PhotoCorner[] | null;
   targetType?: string;
   rows: number;
   cols: number;
@@ -672,6 +806,12 @@ export async function imageDetectTerminals(params: {
 }): Promise<ImageTerminalsResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
+  if (params.photoCorners && params.sourceMode === "camera") {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
   if (params.targetType) {
     form.append("target_type", params.targetType);
   }
@@ -697,6 +837,8 @@ export async function imageDetectTerminals(params: {
 
 export async function imageGenerate(params: {
   file: File;
+  sourceMode?: ImageSourceMode;
+  photoCorners?: PhotoCorner[] | null;
   replaceImportId?: string;
   targetType: string;
   gridWidth?: number;
@@ -728,6 +870,12 @@ export async function imageGenerate(params: {
 }): Promise<ImageGenerateResponse> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
+  if (params.photoCorners && params.sourceMode === "camera") {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
   if (params.replaceImportId) {
     form.append("replace_import_id", params.replaceImportId);
   }
@@ -804,11 +952,19 @@ export async function imageGenerate(params: {
 
 export async function imageOcr(params: {
   file: File;
+  sourceMode?: ImageSourceMode;
+  photoCorners?: PhotoCorner[] | null;
   crop?: { x: number; y: number; width: number; height: number } | null;
   perspective?: boolean;
 }): Promise<{ text: string; suggested_name?: string; expected_flow_count?: number | null; message?: string }> {
   const form = new FormData();
   form.append("file", params.file);
+  if (params.sourceMode) {
+    form.append("source_mode", params.sourceMode);
+  }
+  if (params.photoCorners && params.sourceMode === "camera") {
+    form.append("photo_corners_json", JSON.stringify(params.photoCorners));
+  }
   if (params.perspective !== undefined) {
     form.append("perspective", String(params.perspective));
   }
