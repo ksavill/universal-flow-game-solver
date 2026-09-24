@@ -98,6 +98,7 @@ def _generation_data(
         return data
 
     data: dict[str, str] = {
+        "source_mode": str(processing.get("source_mode") or "screenshot"),
         "target_type": str(processing.get("target_type") or "auto"),
         "auto_classify": str(bool(processing.get("auto_classify", True))).lower(),
         "auto_terminals": str(bool(processing.get("auto_terminals", True))).lower(),
@@ -107,6 +108,9 @@ def _generation_data(
     }
     if expected_flow_count is not None:
         data["expected_flow_count"] = str(expected_flow_count)
+    photo_corners = processing.get("photo_corners")
+    if isinstance(photo_corners, list) and len(photo_corners) == 4:
+        data["photo_corners_json"] = json.dumps(photo_corners, separators=(",", ":"))
     level_type = detection.get("level_type")
     if isinstance(level_type, dict):
         # The browser may classify first and then call /image/generate with

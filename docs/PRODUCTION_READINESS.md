@@ -86,6 +86,58 @@ so release decisions use the stored ratio thresholds rather than these numbers.
   and use `scripts/replay_reference_corpus.py` to compare the full image
   pipeline with reviewed stable-result baselines. It is backed up with mutable
   data but intentionally not part of CI.
+- `reference_camera_corpus/` is deliberately separate. Build deterministic
+  off-angle JPEG variants with `scripts/build_camera_photo_corpus.py` and run
+  them through the real API with `scripts/replay_camera_photo_corpus.py`.
+  Reports compare topology, grid, modifiers, and endpoint pairs while ignoring
+  harmless RGB sampling drift and pair-label ordering. Add labeled real photos
+  by device/capture session before expanding the supported quality envelope.
+
+The scene renderer (2026-09-24, `scene-v1`: 9 mock devices, 9 environments,
+modeled display/glass light and camera) is considerably harsher than the fixed
+variants. On 123 photos of 41 square-target screenshots with labeled screen
+corners: easy 37/50, medium 14/50, hard 0/23 (all flagged); 46/77 inside the
+supported envelope, with 3 wrong results left unflagged (a missed terminal
+pair without an advertised flow count, and swapped color pairs under a mild
+white-balance shift). With automatic corners: 25/123 overall, 23/77 inside
+the envelope, 1 unflagged. Graph-mode boards with walls or warps from photos
+matched 11/73 in the envelope with 16 unflagged errors, almost all from lost
+warp adjacencies; hex boards from photos matched 0/30 (region-graph detection
+finds no enclosed cells). A half-cell and a quarter-cell board-crop margin
+were tried for warps and rejected: they fixed 5 and 1 of 18 warp failures
+respectively while regressing the large-board set from 12/15 to 0/15 and 9/15.
+
+A follow-up pass on 2026-09-23 added pipeline-evidence `auto` selection,
+weak-outline candidate scoring, single uploads, HEIC decoding, real-photo
+harvest/calibration tooling, and a 60-photo realistic set (sensor noise,
+rotation, moire). With labeled corners the realistic set matched 58/60 (all
+three new effects 10/10); with automatic corners 47/60. `auto` misrouted 0 of
+219 screenshots and recognized 37 of 75 EXIF-less photos. All camera runs had
+zero unflagged wrong results. The screenshot replay again matched on 218 of
+219; the remaining graph board (`7679d40f3e188218`) exceeded the 60-second
+region-seam inference deadline because the machine was at 100% CPU, and
+committed `HEAD` produced the identical result under the same load. Large
+graph boards therefore depend on host load, which is a pre-existing issue.
+
+Camera-photo verification on 2026-09-23 (`camera-v3`) added a 15-photo set of
+10+ flow levels (white and gray terminals) and an automatic-corner replay. With
+labeled corners the main set matched 28/30 (mild 10/10, heavy blur/banding
+10/10, glare 8/10) and the large-flow set 12/15 (previously 0/15, with 7 wrong
+results left unflagged). With automatically detected corners the sets matched
+22/30 and 10/15. Every mismatch in all four runs was routed to review, so zero
+incorrect results were labeled high-confidence. Camera preparation takes a
+median 0.43 s and at most 1.6 s per photo (previously up to 6.2 s); repeated
+calls for the same upload return from cache in about 10 ms. The 219 retained
+screenshots again produced identical puzzle hashes and solve outcomes before
+and after the change.
+
+Camera-photo verification on 2026-08-03 used 10 reviewed square sources with
+three deterministic variants each. Mild perspective/blur/JPEG capture matched
+10/10 source puzzle structures. The complete blur/glare/banding stress set
+matched 25/30; all five mismatches required review, so zero incorrect results
+were labeled high-confidence. The unchanged screenshot path produced identical
+semantic signatures on all 219 locally retained screenshots before and after
+the camera work.
 
 Release verification on 2026-07-14 completed the following gates:
 

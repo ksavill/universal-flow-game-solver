@@ -9,3 +9,4 @@ uvicorn[standard]>=0.29.0
 z3-solver==4.14.0.0
 python-sat>=1.8.dev1,<2
 Pillow>=10.3.0
+pillow-heif>=0.18.0

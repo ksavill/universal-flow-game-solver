@@ -1220,19 +1220,42 @@ def _mean_color(pixels: List[Tuple[int, int, int]]) -> Tuple[float, float, float
     return (r, g, b)
 
 
+def _aligned_invalid_mask(
+    image: Image.Image,
+    invalid_mask: Optional[Image.Image],
+) -> Optional[Image.Image]:
+    """Return the mask only when it covers exactly the image being sampled."""
+
+    if not isinstance(invalid_mask, Image.Image):
+        return None
+    if invalid_mask.size != image.size:
+        raise ValueError(
+            f"invalid_mask size {invalid_mask.size} does not match image size {image.size}"
+        )
+    return invalid_mask.convert("L") if invalid_mask.mode != "L" else invalid_mask
+
+
 def _sample_region_color(
     region: Image.Image,
     *,
     sample_max_dim: int = 24,
+    invalid_mask: Optional[Image.Image] = None,
 ) -> Tuple[Tuple[float, float, float], float, float]:
     sample = region
+    mask_sample = invalid_mask
     if sample.width > sample_max_dim or sample.height > sample_max_dim:
         scale = min(sample_max_dim / sample.width, sample_max_dim / sample.height)
+        target_size = (max(1, int(sample.width * scale)), max(1, int(sample.height * scale)))
         sample = sample.resize(
-            (max(1, int(sample.width * scale)), max(1, int(sample.height * scale))),
+            target_size,
             Image.BILINEAR,
         )
+        if mask_sample is not None:
+            mask_sample = mask_sample.resize(target_size, Image.NEAREST)
     pixels = list(sample.getdata())
+    if mask_sample is not None:
+        mask_pixels = list(mask_sample.convert("L").getdata())
+        pixels = [pixel for pixel, invalid in zip(pixels, mask_pixels) if int(invalid) < 128]
     if not pixels:
         return (0.0, 0.0, 0.0), 0.0, 0.0
 
@@ -1392,8 +1415,10 @@ def detect_terminals(
     bg_threshold: float = 40.0,
     expected_pairs: Optional[int] = None,
     enforce_square_parity: bool = False,
+    invalid_mask: Optional[Image.Image] = None,
 ) -> Tuple[List[TerminalPlacement], Dict[str, Any]]:
     width, height = image.size
+    invalid_mask = _aligned_invalid_mask(image, invalid_mask)
     if rows <= 0 or cols <= 0 or width == 0 or height == 0:
         return [], {"warnings": ["Invalid grid size for terminal detection."]}
 
@@ -1408,6 +1433,8 @@ def detect_terminals(
     board_bottom = min(height, int(round(y_lines[-1])))
     if board_right > board_left and board_bottom > board_top:
         image = image.crop((board_left, board_top, board_right, board_bottom))
+        if isinstance(invalid_mask, Image.Image):
+            invalid_mask = invalid_mask.crop((board_left, board_top, board_right, board_bottom))
         width, height = image.size
     else:
         board_left = board_top = 0
@@ -1446,7 +1473,12 @@ def detect_terminals(
                 continue
 
             region = image.crop((x0, y0, x1, y1))
-            color, sat, bright = _sample_region_color(region)
+            invalid_region = (
+                invalid_mask.crop((x0, y0, x1, y1))
+                if isinstance(invalid_mask, Image.Image)
+                else None
+            )
+            color, sat, bright = _sample_region_color(region, invalid_mask=invalid_region)
             decision = _terminal_pixel_decision(
                 color,
                 bg_color=bg_color,
@@ -1622,8 +1654,10 @@ def detect_circle_terminals(
     bg_threshold: float = 40.0,
     circle_grid: Optional[CircleGridDetection] = None,
     expected_pairs: Optional[int] = None,
+    invalid_mask: Optional[Image.Image] = None,
 ) -> Tuple[List[TerminalPlacement], Dict[str, Any]]:
     width, height = image.size
+    invalid_mask = _aligned_invalid_mask(image, invalid_mask)
     if rings <= 0 or sectors <= 0 or width <= 0 or height <= 0:
         return [], {"warnings": ["Invalid circle dimensions for terminal detection."]}
 
@@ -1713,7 +1747,16 @@ def detect_circle_terminals(
             if x1 <= x0 or y1 <= y0:
                 continue
             region = image.crop((x0, y0, x1, y1))
-            color, sat, bright = _sample_region_color(region, sample_max_dim=max(12, sample_radius * 2))
+            invalid_region = (
+                invalid_mask.crop((x0, y0, x1, y1))
+                if isinstance(invalid_mask, Image.Image)
+                else None
+            )
+            color, sat, bright = _sample_region_color(
+                region,
+                sample_max_dim=max(12, sample_radius * 2),
+                invalid_mask=invalid_region,
+            )
             decision = _terminal_pixel_decision(
                 color,
                 bg_color=bg_color,
@@ -1964,8 +2007,10 @@ def detect_terminals_on_nodes(
     cluster_threshold: float,
     bg_threshold: float = 40.0,
     expected_pairs: Optional[int] = None,
+    invalid_mask: Optional[Image.Image] = None,
 ) -> Tuple[List[TerminalNodePlacement], Dict[str, Any]]:
     width, height = image.size
+    invalid_mask = _aligned_invalid_mask(image, invalid_mask)
     projected, proj_info = _project_nodes_to_pixels(image, nodes=nodes, margin_ratio=margin_ratio)
     if not projected:
         return [], {
@@ -2025,7 +2070,16 @@ def detect_terminals_on_nodes(
         if x1 <= x0 or y1 <= y0:
             continue
         region = image.crop((x0, y0, x1, y1))
-        color, sat, bright = _sample_region_color(region, sample_max_dim=max(12, sample_radius * 2))
+        invalid_region = (
+            invalid_mask.crop((x0, y0, x1, y1))
+            if isinstance(invalid_mask, Image.Image)
+            else None
+        )
+        color, sat, bright = _sample_region_color(
+            region,
+            sample_max_dim=max(12, sample_radius * 2),
+            invalid_mask=invalid_region,
+        )
         decision = _terminal_pixel_decision(
             color,
             bg_color=bg_color,

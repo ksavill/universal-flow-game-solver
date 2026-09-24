@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import asyncio
+from collections import OrderedDict
+import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -13,7 +16,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence, Tuple
@@ -26,8 +29,9 @@ if str(_ROOT) not in sys.path:
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
 from pydantic import BaseModel, Field
-from starlette.datastructures import Headers
+from starlette.datastructures import Headers, UploadFile as StarletteUploadFile
 
 from flow_solver.puzzle import Puzzle
 from flow_solver.migration import puzzle_to_spec
@@ -39,6 +43,18 @@ from flow_solver.validation import validate_puzzle
 from backend.acceleration import acceleration_capabilities
 from backend.file_lock import FileLockTimeout, InterProcessFileLock
 from backend.region_seams import infer_bounded_region_seams
+from backend.upload_store import UploadStore
+from backend.photo_preprocess import (
+    AMBIGUOUS_DISPLAY_MARGIN,
+    MIN_RELIABLE_CELL_PX,
+    BLUR_CELL_RATIO_REVIEW,
+    UnsupportedPhotoFormat,
+    _quad_tilt_degrees,
+    _spacing_regularity,
+    load_camera_image,
+    prepare_camera_photo,
+    strip_photo_metadata,
+)
 from backend.image_utils import (
     CropBox,
     apply_crop,
@@ -70,6 +86,21 @@ SUPPORTED_LEVEL_GEOMETRIES = {"square", "hex", "circle", "graph", "cube", "star"
 SUPPORTED_LEVEL_MODIFIERS = {"bridges", "warps", "walls"}
 FLOW_LEVEL_GEOMETRIES = {"square", "hex", "circle"}
 TOPOLOGY_LEVEL_GEOMETRIES = {"cube", "star", "figure8"}
+SUPPORTED_IMAGE_SOURCE_MODES = {"screenshot", "camera", "auto"}
+
+
+def _normalize_image_source_mode(raw: Any) -> str:
+    mode = str(raw or "screenshot").strip().lower()
+    if mode not in SUPPORTED_IMAGE_SOURCE_MODES:
+        raise ValueError("source_mode must be screenshot, camera, or auto")
+    return mode
+
+
+def _request_image_source_mode(raw: Any) -> str:
+    try:
+        return _normalize_image_source_mode(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _crop_templates_dir() -> Path:
@@ -120,6 +151,19 @@ def _image_imports_dir() -> Path:
         return _repo_root() / "data" / "image_imports"
     path = Path(configured).expanduser()
     return path if path.is_absolute() else _repo_root() / path
+
+
+def _image_upload_store() -> UploadStore:
+    configured = os.environ.get("FLOW_IMAGE_UPLOADS_DIR", "").strip()
+    root = _repo_root() / "data" / ".image_uploads"
+    if configured:
+        path = Path(configured).expanduser()
+        root = path if path.is_absolute() else _repo_root() / path
+    return UploadStore(
+        root,
+        ttl_seconds=float(os.environ.get("FLOW_IMAGE_UPLOAD_TTL_SECONDS", "1800")),
+        max_total_bytes=int(os.environ.get("FLOW_IMAGE_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024))),
+    )
 
 
 def _image_jobs_dir() -> Path:
@@ -176,6 +220,11 @@ def _image_import_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         summary["solver"] = stats.get("solver")
     runs = record.get("runs") if isinstance(record.get("runs"), list) else []
     summary["run_count"] = len(runs) + 1
+    processing = record.get("processing") if isinstance(record.get("processing"), dict) else {}
+    summary["source_mode"] = _normalize_image_source_mode(processing.get("source_mode"))
+    summary["source_mode_effective"] = str(
+        processing.get("source_mode_effective") or summary["source_mode"]
+    )
     return summary
 
 
@@ -481,12 +530,16 @@ def _set_image_import_flag(
         record["updated_at"] = updated_at
         if flagged:
             record["flagged_at"] = updated_at
+            record.pop("reviewed_at", None)
             normalized_reason = (reason or "").strip()
             if normalized_reason:
                 record["flag_reason"] = normalized_reason
         else:
             record.pop("flagged_at", None)
             record.pop("flag_reason", None)
+            # A person cleared the review, so the archived result is a
+            # human-confirmed label (used to build the real camera corpus).
+            record["reviewed_at"] = updated_at
         _write_image_import_record(import_id, record)
         return record
 
@@ -565,7 +618,10 @@ def _replace_image_import_locked(
     image_path = _image_import_dir(import_id) / image_file
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Stored screenshot not found")
-    if image_path.read_bytes() != data:
+    stored = image_path.read_bytes()
+    # Camera archives hold metadata-stripped bytes; accept either the stored
+    # file itself or an original upload that sanitizes to it.
+    if stored != data and stored != _archive_bytes_for_processing(data, processing)[0]:
         raise HTTPException(status_code=400, detail="Reprocessed image does not match the archived screenshot")
 
     runs = record.get("runs") if isinstance(record.get("runs"), list) else []
@@ -645,6 +701,29 @@ def _store_image_import_solve(
         return True
 
 
+_ARCHIVE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
+
+
+def _strips_photo_metadata(source_mode: Any) -> bool:
+    return str(source_mode or "screenshot").strip().lower() in {"camera", "auto"}
+
+
+def _archive_bytes_for_processing(data: bytes, processing: Dict[str, Any]) -> Tuple[bytes, Optional[str]]:
+    """Drop GPS/device metadata from camera uploads before they are persisted.
+
+    Screenshot-mode bytes are archived unchanged so existing replay baselines
+    stay byte-identical.
+    """
+
+    if not (
+        _strips_photo_metadata(processing.get("source_mode"))
+        or processing.get("source_mode_effective") == "camera"
+    ):
+        return data, None
+    sanitized = strip_photo_metadata(data)
+    return sanitized.data, sanitized.suffix
+
+
 def _store_image_import(
     *,
     data: bytes,
@@ -659,8 +738,11 @@ def _store_image_import(
     import_id = uuid.uuid4().hex
     created_at = time.time()
     suffix = Path(original_name).suffix.lower()
-    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+    if suffix not in _ARCHIVE_IMAGE_SUFFIXES:
         suffix = ".bin"
+    data, sanitized_suffix = _archive_bytes_for_processing(data, processing)
+    if sanitized_suffix:
+        suffix = sanitized_suffix
     image_file = f"source{suffix}"
     result_payload = result or {}
     detection = result_payload.get("detection") if isinstance(result_payload.get("detection"), dict) else {}
@@ -706,6 +788,7 @@ def _store_image_import(
 
 
 _IMAGE_JOB_OPTION_DEFAULTS: Dict[str, Any] = {
+    "source_mode": "screenshot",
     "target_type": "auto",
     "grid_width": None,
     "grid_height": None,
@@ -715,6 +798,7 @@ _IMAGE_JOB_OPTION_DEFAULTS: Dict[str, Any] = {
     "auto_terminals": True,
     "auto_classify": True,
     "expected_flow_count": None,
+    "photo_corners_json": None,
     "level_type_json": None,
     "edge_overrides_json": None,
     "metadata_json": None,
@@ -742,7 +826,8 @@ def _normalize_image_job_options(raw: Any) -> Dict[str, Any]:
     if unknown:
         raise ValueError(f"Unknown image job option(s): {', '.join(unknown)}")
     options = {**_IMAGE_JOB_OPTION_DEFAULTS, **raw}
-    for key in ("level_type_json", "edge_overrides_json", "metadata_json"):
+    options["source_mode"] = _normalize_image_source_mode(options["source_mode"])
+    for key in ("photo_corners_json", "level_type_json", "edge_overrides_json", "metadata_json"):
         if options[key] is not None and not isinstance(options[key], str):
             options[key] = json.dumps(options[key], separators=(",", ":"))
     if options["expected_flow_count"] is not None:
@@ -1434,6 +1519,366 @@ def _maybe_perspective(image: Image.Image, enabled: bool) -> Tuple[Image.Image, 
     if not enabled:
         return image, None
     return auto_perspective(image)
+
+
+# Auto mode without camera EXIF compares what the two pipelines produce.  On
+# the 219-screenshot corpus no screenshot fails the screenshot grid check and
+# none yields a confident board through a corroborated, tilted outline, so a
+# screenshot needs both independent checks to go wrong before it is misrouted.
+AUTO_SCREENSHOT_REGULARITY_MAX = 0.85
+AUTO_CAMERA_BOARD_SCORE_MIN = 0.70
+_AUTO_DECISION_LOCK = threading.Lock()
+_AUTO_DECISIONS: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+
+
+def _auto_source_decision(data: bytes, image: Image.Image) -> Dict[str, Any]:
+    """Choose the camera path for an EXIF-less upload only on pipeline evidence."""
+
+    key = _photo_cache_key(data)
+    with _AUTO_DECISION_LOCK:
+        cached = _AUTO_DECISIONS.get(key)
+        if cached is not None:
+            _AUTO_DECISIONS.move_to_end(key)
+            return dict(cached)
+
+    crop = auto_crop(image, threshold=230, invert=False, padding=max(8, int(min(image.size) * 0.01)))
+    grid = detect_grid(apply_crop(image, crop), threshold=230, line_threshold=0.6, invert=False)
+    regularity = (
+        min(_spacing_regularity(grid.x_lines), _spacing_regularity(grid.y_lines))
+        if grid is not None and len(grid.x_lines) >= 3 and len(grid.y_lines) >= 3
+        else 0.0
+    )
+    decision: Dict[str, Any] = {
+        "camera": False,
+        "screenshot_grid": grid is not None,
+        "screenshot_regularity": round(regularity, 4),
+    }
+    if regularity < AUTO_SCREENSHOT_REGULARITY_MAX:
+        prepared = prepare_camera_photo(image, detect_board=True, cache_key=key)
+        info = prepared.info
+        selected = info.get("selected") if isinstance(info.get("selected"), dict) else None
+        board = info.get("board") if isinstance(info.get("board"), dict) else {}
+        margin = info.get("selection_margin")
+        tilt = _quad_tilt_degrees([(point["x"], point["y"]) for point in selected["corners"]]) if selected else 0.0
+        ratio = float((selected or {}).get("metrics", {}).get("opposite_side_ratio", 1.0))
+        board_score = float(board.get("combined_score") or 0.0)
+        decision.update(
+            camera=bool(
+                selected
+                and board.get("selected") is not None
+                and int(info.get("selected_corroboration") or 0) >= 1
+                and (margin is None or float(margin) >= AMBIGUOUS_DISPLAY_MARGIN)
+                and board_score >= AUTO_CAMERA_BOARD_SCORE_MIN
+                and (tilt >= 2.0 or ratio <= 0.96)
+            ),
+            camera_board_score=round(board_score, 4),
+            display_tilt_degrees=round(tilt, 3),
+            display_opposite_side_ratio=round(ratio, 4),
+        )
+    with _AUTO_DECISION_LOCK:
+        _AUTO_DECISIONS[key] = decision
+        while len(_AUTO_DECISIONS) > 64:
+            _AUTO_DECISIONS.popitem(last=False)
+    return dict(decision)
+
+
+def _load_image_for_source_mode(
+    data: bytes,
+    source_mode: str,
+) -> Tuple[Image.Image, Dict[str, Any], str]:
+    if source_mode in {"camera", "auto"} and len(data) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Camera image exceeds the 50 MB upload limit")
+    if source_mode == "camera":
+        try:
+            image, info = load_camera_image(data)
+        except UnsupportedPhotoFormat as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Could not decode camera image: {exc}") from exc
+        info["effective_source_mode"] = "camera"
+        return image, info, "camera"
+    auto_evidence: Optional[Dict[str, Any]] = None
+    if source_mode == "auto":
+        try:
+            camera_image, camera_info = load_camera_image(data)
+        except UnsupportedPhotoFormat as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Could not decode image: {exc}") from exc
+        if float(camera_info.get("camera_likelihood", 0.0)) >= 0.65:
+            camera_info["effective_source_mode"] = "camera"
+            camera_info["auto_selection_reason"] = "camera_metadata"
+            return camera_image, camera_info, "camera"
+        auto_evidence = _auto_source_decision(data, camera_image)
+        if auto_evidence["camera"]:
+            camera_info["effective_source_mode"] = "camera"
+            camera_info["auto_selection_reason"] = "pipeline_evidence"
+            camera_info["auto_evidence"] = auto_evidence
+            return camera_image, camera_info, "camera"
+    image = load_image(data)
+    info: Dict[str, Any] = {
+        "format": "legacy",
+        "original_size": {"width": image.width, "height": image.height},
+        "oriented_size": {"width": image.width, "height": image.height},
+        "orientation_applied": False,
+        "effective_source_mode": "screenshot",
+        "auto_selection_reason": "screenshot_safe_default" if source_mode == "auto" else None,
+    }
+    if auto_evidence is not None:
+        info["auto_evidence"] = auto_evidence
+    return image, info, "screenshot"
+
+
+def _parse_photo_corners_json(
+    raw: Optional[str],
+    *,
+    image_size: Tuple[int, int],
+) -> Optional[List[List[float]]]:
+    if not raw:
+        return None
+    try:
+        decoded = json.loads(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid photo_corners_json: {exc}") from exc
+    if not isinstance(decoded, list) or len(decoded) != 4:
+        raise HTTPException(status_code=400, detail="photo_corners_json must contain four corners")
+    width, height = image_size
+    corners: List[List[float]] = []
+    for item in decoded:
+        if isinstance(item, dict):
+            values = (item.get("x"), item.get("y"))
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            values = (item[0], item[1])
+        else:
+            raise HTTPException(status_code=400, detail="Each photo corner must contain x and y")
+        try:
+            x, y = float(values[0]), float(values[1])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Photo corner coordinates must be numbers") from exc
+        if not math.isfinite(x) or not math.isfinite(y):
+            raise HTTPException(status_code=400, detail="Photo corner coordinates must be finite")
+        if not (-1.0 <= x <= width and -1.0 <= y <= height):
+            raise HTTPException(status_code=400, detail="Photo corner lies outside the source image")
+        corners.append([x, y])
+    return corners
+
+
+def _request_photo_corners(
+    raw: Optional[str],
+    *,
+    source_mode: str,
+    image_size: Tuple[int, int],
+) -> Optional[List[List[float]]]:
+    corners = _parse_photo_corners_json(raw, image_size=image_size)
+    if corners is not None and source_mode != "camera":
+        raise HTTPException(status_code=400, detail="Manual photo corners require source_mode=camera")
+    return corners
+
+
+@dataclass
+class CameraPipelineImages:
+    color: Image.Image
+    geometry: Image.Image
+    # Glare mask aligned with ``color``; terminal detectors skip masked pixels.
+    invalid_mask: Image.Image
+    # Straightened display before board correction, used for OCR.
+    display: Image.Image
+    perspective_info: Dict[str, Any]
+    auto_crop_info: Dict[str, Any]
+    photo_info: Dict[str, Any]
+
+
+def _photo_cache_key(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _prepare_camera_pipeline_images(
+    image: Image.Image,
+    *,
+    crop: Optional[CropBox],
+    threshold: int,
+    invert: bool,
+    manual_corners: Optional[Sequence[Sequence[float]]],
+    auto_board_crop: bool = True,
+    expected_grid: Optional[Tuple[int, int]] = None,
+    cache_key: Optional[str] = None,
+) -> CameraPipelineImages:
+    roi = (
+        (crop.x, crop.y, crop.width, crop.height)
+        if crop is not None and manual_corners is None
+        else None
+    )
+    try:
+        prepared = prepare_camera_photo(
+            image,
+            roi=roi,
+            manual_corners=manual_corners,
+            detect_board=auto_board_crop,
+            expected_grid=expected_grid,
+            cache_key=cache_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Could not prepare camera photo: {exc}") from exc
+
+    color_image = prepared.color_image
+    geometry_image = prepared.geometry_image
+    glare_mask = prepared.glare_mask
+    detected_board = (
+        prepared.info.get("board")
+        if isinstance(prepared.info.get("board"), dict)
+        else None
+    )
+    board_warp_applied = bool(detected_board and detected_board.get("selected") is not None)
+    board_crop = (
+        auto_crop(
+            color_image,
+            threshold=threshold,
+            invert=invert,
+            padding=max(8, int(min(color_image.width, color_image.height) * 0.01)),
+        )
+        if auto_board_crop and not board_warp_applied
+        else None
+    )
+    if board_crop is not None:
+        color_image = apply_crop(color_image, board_crop)
+        geometry_image = apply_crop(geometry_image, board_crop)
+        glare_mask = apply_crop(glare_mask, board_crop)
+
+    photo_info = dict(prepared.info)
+    photo_info["board_crop"] = (
+        {
+            "x": board_crop.x,
+            "y": board_crop.y,
+            "width": board_crop.width,
+            "height": board_crop.height,
+        }
+        if board_crop is not None
+        else None
+    )
+    photo_info["prepared_board_size"] = {
+        "width": color_image.width,
+        "height": color_image.height,
+    }
+    glare_histogram = glare_mask.histogram()
+    photo_info["glare_fraction_on_prepared_board"] = round(
+        (glare_mask.width * glare_mask.height - glare_histogram[0])
+        / float(max(1, glare_mask.width * glare_mask.height)),
+        6,
+    )
+    selected = photo_info.get("selected") if isinstance(photo_info.get("selected"), dict) else None
+    perspective_info = {
+        "mode": "camera-photo",
+        "selected": selected,
+        "width": color_image.width,
+        "height": color_image.height,
+    }
+    auto_crop_info = {
+        "applied": board_crop is not None or board_warp_applied,
+        "source": "camera-board-warp" if board_warp_applied else "camera-board",
+        "x": board_crop.x if board_crop is not None else 0,
+        "y": board_crop.y if board_crop is not None else 0,
+        "width": board_crop.width if board_crop is not None else color_image.width,
+        "height": board_crop.height if board_crop is not None else color_image.height,
+    }
+    return CameraPipelineImages(
+        color=color_image,
+        geometry=geometry_image,
+        invalid_mask=glare_mask,
+        display=prepared.display_image if prepared.display_image is not None else prepared.color_image,
+        perspective_info=perspective_info,
+        auto_crop_info=auto_crop_info,
+        photo_info=photo_info,
+    )
+
+
+# Review thresholds in one place so scripts/calibrate_camera_review.py can
+# sweep them against a labeled corpus without re-implementing the rules.
+CAMERA_REVIEW_THRESHOLDS: Dict[str, float] = {
+    "min_display_score": 0.45,
+    "ambiguous_display_margin": AMBIGUOUS_DISPLAY_MARGIN,
+    "blur_cell_ratio": BLUR_CELL_RATIO_REVIEW,
+    "min_cell_px": MIN_RELIABLE_CELL_PX,
+    "severe_glare_fraction": 0.10,
+    "glare_fraction": 0.02,
+    "min_board_side_px": 400.0,
+}
+
+
+def _camera_photo_review(
+    photo_info: Optional[Dict[str, Any]],
+    terminal_completeness: Optional[Dict[str, Any]] = None,
+    *,
+    thresholds: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    if not isinstance(photo_info, dict):
+        return {"required": False, "reasons": [], "confidence": 1.0}
+    limits = {**CAMERA_REVIEW_THRESHOLDS, **(thresholds or {})}
+    quality = photo_info.get("quality") if isinstance(photo_info.get("quality"), dict) else {}
+    rectified = (
+        photo_info.get("prepared_board_size")
+        if isinstance(photo_info.get("prepared_board_size"), dict)
+        else {}
+    )
+    selected = photo_info.get("selected") if isinstance(photo_info.get("selected"), dict) else None
+    reasons: List[str] = []
+    confidence = 1.0
+    if selected is None:
+        reasons.append("No confident display quadrilateral was detected.")
+        confidence -= 0.45
+    elif float(selected.get("score", 0.0)) < limits["min_display_score"]:
+        reasons.append("The detected display boundary has weak geometric evidence.")
+        confidence -= 0.25
+    else:
+        margin = photo_info.get("selection_margin")
+        if margin is not None and float(margin) < limits["ambiguous_display_margin"]:
+            reasons.append("Two different screen outlines fit almost equally well; confirm the four corners.")
+            confidence -= 0.25
+        elif photo_info.get("selected_corroboration") == 0:
+            reasons.append("Only one detector found this screen outline; confirm the four corners.")
+            confidence -= 0.20
+    blur_cell_ratio = quality.get("blur_cell_ratio")
+    if blur_cell_ratio is None and "blur_sigma_px" in quality:
+        reasons.append("Board sharpness could not be measured; no clear edges were found.")
+        confidence -= 0.35
+    elif blur_cell_ratio is not None and float(blur_cell_ratio) > limits["blur_cell_ratio"]:
+        reasons.append("The rectified board is too blurred for high-confidence color detection.")
+        confidence -= 0.35
+    elif blur_cell_ratio is None and float(quality.get("laplacian_variance", 999.0)) < 35.0:
+        # Records prepared before blur was measured relative to cell size.
+        reasons.append("The rectified board is too blurred for high-confidence color detection.")
+        confidence -= 0.35
+    cell_size = quality.get("cell_size_px")
+    if cell_size is not None and float(cell_size) < limits["min_cell_px"]:
+        reasons.append("Board cells are too small in the photo for reliable terminal colors.")
+        confidence -= 0.25
+    glare_fraction = float(quality.get("glare_fraction", 0.0))
+    if glare_fraction > limits["severe_glare_fraction"]:
+        reasons.append("Glare obscures more than 10% of the rectified image.")
+        confidence -= 0.30
+    elif glare_fraction > limits["glare_fraction"]:
+        reasons.append("Glare overlaps enough of the board to require terminal review.")
+        confidence -= 0.20
+    shortest_side = min(
+        int(rectified.get("width", 10_000) or 0),
+        int(rectified.get("height", 10_000) or 0),
+    )
+    if shortest_side < limits["min_board_side_px"]:
+        reasons.append("The prepared board is below the minimum reliable resolution.")
+        confidence -= 0.25
+    # Downstream evidence: without an advertised flow count, rejected
+    # near-terminal cells are the main sign that a photographed dot was lost.
+    if isinstance(terminal_completeness, dict):
+        if (
+            terminal_completeness.get("status") == "plausible"
+            and int(terminal_completeness.get("near_miss_count") or 0) > 0
+        ):
+            reasons.append("Some cells looked almost like terminals; check for missing endpoints.")
+            confidence -= 0.20
+    return {
+        "required": bool(reasons),
+        "reasons": reasons,
+        "confidence": round(max(0.0, min(1.0, confidence)), 4),
+    }
 
 
 def _ocr_image_text(image: Image.Image) -> Tuple[str, Optional[str]]:
@@ -2871,8 +3316,11 @@ async def create_image_job(
             if len(data) > 50 * 1024 * 1024 or total_bytes > 250 * 1024 * 1024:
                 raise ValueError("Image job exceeds the 50 MB/file or 250 MB total limit")
             suffix = Path(upload.filename or "image").suffix.lower()
-            if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+            if suffix not in _ARCHIVE_IMAGE_SUFFIXES:
                 suffix = ".bin"
+            data, sanitized_suffix = _archive_bytes_for_processing(data, options)
+            if sanitized_suffix:
+                suffix = sanitized_suffix
             stored_name = f"{index:04d}{suffix}"
             (job_dir / stored_name).write_bytes(data)
             items.append(
@@ -2979,15 +3427,65 @@ def retry_image_job(job_id: str, background_tasks: BackgroundTasks) -> Dict[str,
     return record
 
 
+MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
+@app.post("/image/uploads")
+async def create_image_upload(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Store an image once so later pipeline stages can reference it by id."""
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+    if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Image exceeds the 50 MB upload limit")
+    store = _image_upload_store()
+    stored = await asyncio.to_thread(
+        store.put,
+        data,
+        filename=Path(file.filename or "image").name,
+        content_type=file.content_type or "application/octet-stream",
+    )
+    return {
+        "upload_id": stored.upload_id,
+        "byte_size": len(data),
+        "expires_in_seconds": int(store.ttl_seconds),
+    }
+
+
+async def _resolve_image_input(file: Any, upload_id: Any) -> Tuple[Any, bytes]:
+    """Return (file-like with filename/content_type, bytes) from a file or an upload id.
+
+    Endpoints are also called directly (server jobs), where omitted parameters
+    arrive as FastAPI parameter objects rather than None.
+    """
+
+    if isinstance(upload_id, str) and upload_id.strip():
+        try:
+            stored = await asyncio.to_thread(_image_upload_store().get, upload_id.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if stored is None:
+            # 410 tells the browser to upload the image again and retry.
+            raise HTTPException(status_code=410, detail="upload_expired: upload the image again")
+        return stored, stored.data
+    if isinstance(file, StarletteUploadFile):
+        return file, await file.read()
+    raise HTTPException(status_code=400, detail="Provide an image file or an upload_id")
+
+
 @app.post("/image-imports/failed")
 async def archive_failed_image_import(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
     error: str = Form(...),
     stage: str = Form("processing"),
+    source_mode: str = Form("screenshot"),
 ) -> Dict[str, Any]:
-    data = await file.read()
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
     try:
-        image = load_image(data)
+        image, _input_info, effective_source_mode = _load_image_for_source_mode(data, source_mode)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid screenshot: {exc}") from exc
     try:
@@ -2997,7 +3495,11 @@ async def archive_failed_image_import(
             content_type=file.content_type,
             image_size=(image.width, image.height),
             result=None,
-            processing={"stage": stage},
+            processing={
+                "stage": stage,
+                "source_mode": source_mode,
+                "source_mode_effective": effective_source_mode,
+            },
             status="failed",
             error=error[:4000],
         )
@@ -3088,7 +3590,8 @@ def delete_image_import(import_id: str) -> Dict[str, Any]:
 @app.post("/image/crop/auto")
 @_offload_image_endpoint
 async def image_auto_crop(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
     crop_width: Optional[int] = Form(None),
@@ -3098,7 +3601,7 @@ async def image_auto_crop(
     padding: int = Form(6),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
+    file, data = await _resolve_image_input(file, upload_id)
     image = load_image(data)
     seed_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     image_for_crop = apply_crop(image, seed_crop)
@@ -3150,10 +3653,60 @@ async def image_auto_crop(
     return payload
 
 
+@app.post("/image/photo/prepare")
+@_offload_image_endpoint
+async def image_photo_prepare(
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    photo_corners_json: Optional[str] = Form(None),
+    crop_x: Optional[int] = Form(None),
+    crop_y: Optional[int] = Form(None),
+    crop_width: Optional[int] = Form(None),
+    crop_height: Optional[int] = Form(None),
+    threshold: int = Form(230),
+    invert: bool = Form(False),
+    _permit: None = Depends(_heavy_image_permit),
+) -> Dict[str, Any]:
+    file, data = await _resolve_image_input(file, upload_id)
+    image, input_info, _effective_source_mode = _load_image_for_source_mode(data, "camera")
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode="camera",
+        image_size=image.size,
+    )
+    crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
+    camera = _prepare_camera_pipeline_images(
+        image,
+        crop=crop,
+        threshold=threshold,
+        invert=invert,
+        manual_corners=photo_corners,
+        cache_key=_photo_cache_key(data),
+    )
+    perspective_info = camera.perspective_info
+    auto_crop_info = camera.auto_crop_info
+    photo_info = camera.photo_info
+    preview = camera.color.copy()
+    preview.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    preview.save(output, format="JPEG", quality=88, optimize=True)
+    return {
+        "source_mode": "camera",
+        "input": input_info,
+        "photo": photo_info,
+        "perspective": perspective_info,
+        "auto_crop": auto_crop_info,
+        "preview_data_url": f"data:image/jpeg;base64,{base64.b64encode(output.getvalue()).decode('ascii')}",
+    }
+
+
 @app.post("/image/classify")
 @_offload_image_endpoint
 async def image_classify(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    source_mode: str = Form("screenshot"),
+    photo_corners_json: Optional[str] = Form(None),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
     crop_width: Optional[int] = Form(None),
@@ -3165,15 +3718,35 @@ async def image_classify(
     level_hint: Optional[str] = Form(None),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
-    image = load_image(data)
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
+    image, input_info, effective_source_mode = _load_image_for_source_mode(data, source_mode)
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode=source_mode,
+        image_size=image.size,
+    )
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
+    photo_info: Optional[Dict[str, Any]] = None
     auto_crop_info: Dict[str, Any] = {
         "applied": False,
         "source": "manual" if manual_crop is not None else "auto",
     }
-    if crop is None:
+    if effective_source_mode == "camera":
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=threshold,
+            invert=invert,
+            manual_corners=photo_corners,
+            cache_key=_photo_cache_key(data),
+        )
+        warped = camera.color
+        perspective_info = camera.perspective_info
+        auto_crop_info = camera.auto_crop_info
+        photo_info = camera.photo_info
+    elif crop is None:
         inferred_crop = auto_crop(
             image,
             threshold=threshold,
@@ -3190,8 +3763,9 @@ async def image_classify(
                 "width": crop.width,
                 "height": crop.height,
             }
-    cropped = apply_crop(image, crop)
-    warped, perspective_info = _maybe_perspective(cropped, perspective)
+    if effective_source_mode != "camera":
+        cropped = apply_crop(image, crop)
+        warped, perspective_info = _maybe_perspective(cropped, perspective)
 
     hint = level_hint if level_hint else file.filename
     level_type = _classify_level_type_payload(
@@ -3207,6 +3781,10 @@ async def image_classify(
         "warnings": level_type.get("notes", []),
         "signals": level_type.get("signals", {}),
         "image_size": {"width": image.width, "height": image.height},
+        "source_mode": source_mode,
+        "source_mode_effective": effective_source_mode,
+        "input": input_info,
+        "photo": photo_info,
         "perspective": perspective_info,
         "auto_crop": auto_crop_info,
     }
@@ -3215,7 +3793,10 @@ async def image_classify(
 @app.post("/image/grid/detect")
 @_offload_image_endpoint
 async def image_grid_detect(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    source_mode: str = Form("screenshot"),
+    photo_corners_json: Optional[str] = Form(None),
     target_type: str = Form("square"),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
@@ -3227,15 +3808,36 @@ async def image_grid_detect(
     perspective: bool = Form(False),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
-    image = load_image(data)
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
+    image, input_info, effective_source_mode = _load_image_for_source_mode(data, source_mode)
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode=source_mode,
+        image_size=image.size,
+    )
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
+    photo_info: Optional[Dict[str, Any]] = None
     auto_crop_info: Dict[str, Any] = {
         "applied": False,
         "source": "manual" if manual_crop is not None else "auto",
     }
-    if crop is None:
+    if effective_source_mode == "camera":
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=threshold,
+            invert=invert,
+            manual_corners=photo_corners,
+            cache_key=_photo_cache_key(data),
+        )
+        warped = camera.color
+        geometry_warped = camera.geometry
+        perspective_info = camera.perspective_info
+        auto_crop_info = camera.auto_crop_info
+        photo_info = camera.photo_info
+    elif crop is None:
         inferred_crop = auto_crop(
             image,
             threshold=threshold,
@@ -3252,17 +3854,23 @@ async def image_grid_detect(
                 "width": crop.width,
                 "height": crop.height,
             }
-    cropped = apply_crop(image, crop)
-    warped, perspective_info = _maybe_perspective(cropped, perspective)
+    if effective_source_mode != "camera":
+        cropped = apply_crop(image, crop)
+        warped, perspective_info = _maybe_perspective(cropped, perspective)
+        geometry_warped = warped
     raw_target = str(target_type or "square").strip().lower()
     normalized_target = _normalize_level_geometry(raw_target, default="square")
 
     if normalized_target == "circle":
-        circle_grid, circle_info = detect_circle_grid(warped, min_sectors=3, max_sectors=32)
+        circle_grid, circle_info = detect_circle_grid(geometry_warped, min_sectors=3, max_sectors=32)
         if circle_grid is None:
             return {
                 "grid": None,
                 "image_size": {"width": image.width, "height": image.height},
+                "source_mode": source_mode,
+                "source_mode_effective": effective_source_mode,
+                "input": input_info,
+                "photo": photo_info,
                 "perspective": perspective_info,
                 "auto_crop": auto_crop_info,
                 "circle": circle_info,
@@ -3278,13 +3886,17 @@ async def image_grid_detect(
             },
             "circle": circle_info,
             "image_size": {"width": image.width, "height": image.height},
+            "source_mode": source_mode,
+            "source_mode_effective": effective_source_mode,
+            "input": input_info,
+            "photo": photo_info,
             "perspective": perspective_info,
             "auto_crop": auto_crop_info,
         }
 
-    grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+    grid = detect_grid(geometry_warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
     if grid is None and raw_target in {"auto", ""}:
-        circle_grid, circle_info = detect_circle_grid(warped, min_sectors=3, max_sectors=32)
+        circle_grid, circle_info = detect_circle_grid(geometry_warped, min_sectors=3, max_sectors=32)
         if circle_grid is not None:
             return {
                 "grid": {
@@ -3296,6 +3908,10 @@ async def image_grid_detect(
                 },
                 "circle": circle_info,
                 "image_size": {"width": image.width, "height": image.height},
+                "source_mode": source_mode,
+                "source_mode_effective": effective_source_mode,
+                "input": input_info,
+                "photo": photo_info,
                 "perspective": perspective_info,
                 "auto_crop": auto_crop_info,
             }
@@ -3303,6 +3919,10 @@ async def image_grid_detect(
         return {
             "grid": None,
             "image_size": {"width": image.width, "height": image.height},
+            "source_mode": source_mode,
+            "source_mode_effective": effective_source_mode,
+            "input": input_info,
+            "photo": photo_info,
             "perspective": perspective_info,
             "auto_crop": auto_crop_info,
             "message": "Grid detection failed.",
@@ -3316,6 +3936,10 @@ async def image_grid_detect(
             "mode": "rect",
         },
         "image_size": {"width": image.width, "height": image.height},
+        "source_mode": source_mode,
+        "source_mode_effective": effective_source_mode,
+        "input": input_info,
+        "photo": photo_info,
         "perspective": perspective_info,
         "auto_crop": auto_crop_info,
     }
@@ -3324,7 +3948,10 @@ async def image_grid_detect(
 @app.post("/image/terminals/detect")
 @_offload_image_endpoint
 async def image_terminals_detect(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    source_mode: str = Form("screenshot"),
+    photo_corners_json: Optional[str] = Form(None),
     target_type: str = Form("square"),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
@@ -3341,15 +3968,38 @@ async def image_terminals_detect(
     perspective: bool = Form(False),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
-    image = load_image(data)
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
+    image, input_info, effective_source_mode = _load_image_for_source_mode(data, source_mode)
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode=source_mode,
+        image_size=image.size,
+    )
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
+    photo_info: Optional[Dict[str, Any]] = None
     auto_crop_info: Dict[str, Any] = {
         "applied": False,
         "source": "manual" if manual_crop is not None else "auto",
     }
-    if crop is None:
+    invalid_mask: Optional[Image.Image] = None
+    if effective_source_mode == "camera":
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=230,
+            invert=False,
+            manual_corners=photo_corners,
+            expected_grid=(rows, cols),
+            cache_key=_photo_cache_key(data),
+        )
+        warped = camera.color
+        invalid_mask = camera.invalid_mask
+        perspective_info = camera.perspective_info
+        auto_crop_info = camera.auto_crop_info
+        photo_info = camera.photo_info
+    elif crop is None:
         inferred_crop = auto_crop(
             image,
             threshold=230,
@@ -3366,8 +4016,9 @@ async def image_terminals_detect(
                 "width": crop.width,
                 "height": crop.height,
             }
-    cropped = apply_crop(image, crop)
-    warped, perspective_info = _maybe_perspective(cropped, perspective)
+    if effective_source_mode != "camera":
+        cropped = apply_crop(image, crop)
+        warped, perspective_info = _maybe_perspective(cropped, perspective)
     normalized_target = _normalize_level_geometry(str(target_type or "square"), default="square")
     if normalized_target == "circle":
         circle_grid, circle_info = detect_circle_grid(
@@ -3386,6 +4037,7 @@ async def image_terminals_detect(
             cluster_threshold=cluster_threshold,
             bg_threshold=bg_threshold,
             circle_grid=circle_grid,
+            invalid_mask=invalid_mask,
         )
         if circle_info:
             info["circle_detection"] = circle_info
@@ -3400,6 +4052,7 @@ async def image_terminals_detect(
             margin_ratio=margin_ratio,
             cluster_threshold=cluster_threshold,
             bg_threshold=bg_threshold,
+            invalid_mask=invalid_mask,
         )
     return {
         "terminals": [
@@ -3412,6 +4065,10 @@ async def image_terminals_detect(
             for t in placements
         ],
         "info": info,
+        "source_mode": source_mode,
+        "source_mode_effective": effective_source_mode,
+        "input": input_info,
+        "photo": photo_info,
         "perspective": perspective_info,
         "auto_crop": auto_crop_info,
     }
@@ -3420,7 +4077,10 @@ async def image_terminals_detect(
 @app.post("/image/generate")
 @_offload_image_endpoint
 async def image_generate(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    source_mode: str = Form("screenshot"),
+    photo_corners_json: Optional[str] = Form(None),
     replace_import_id: Optional[str] = Form(None),
     target_type: str = Form("auto"),
     grid_width: Optional[int] = Form(None),
@@ -3450,27 +4110,63 @@ async def image_generate(
     perspective: bool = Form(False),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
     if output_schema_version not in {1, 2}:
         raise HTTPException(status_code=400, detail="output_schema_version must be 1 or 2")
     if expected_flow_count is not None and not 1 <= expected_flow_count <= 26:
         raise HTTPException(status_code=400, detail="expected_flow_count must be between 1 and 26")
-    image = load_image(data)
+    image, input_info, effective_source_mode = _load_image_for_source_mode(
+        data,
+        source_mode,
+    )
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode=source_mode,
+        image_size=image.size,
+    )
     expected_flow_source: Optional[str] = "request" if expected_flow_count is not None else None
     expected_flow_ocr_message: Optional[str] = None
-    if auto_terminals and expected_flow_count is None:
-        ocr_text, expected_flow_ocr_message = _ocr_image_text(image)
+
+    def apply_flow_count_ocr(ocr_source: Image.Image) -> None:
+        nonlocal expected_flow_count, expected_flow_source, expected_flow_ocr_message
+        ocr_text, expected_flow_ocr_message = _ocr_image_text(ocr_source)
         inferred_flow_count = parse_expected_flow_count(ocr_text)
         if inferred_flow_count is not None:
             expected_flow_count = inferred_flow_count
             expected_flow_source = "ocr"
+
+    if auto_terminals and expected_flow_count is None and effective_source_mode != "camera":
+        apply_flow_count_ocr(image)
     manual_crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
     crop = manual_crop
+    photo_info: Optional[Dict[str, Any]] = None
+    invalid_mask: Optional[Image.Image] = None
     auto_crop_info: Dict[str, Any] = {
         "applied": False,
         "source": "manual" if manual_crop is not None else "auto",
     }
-    if crop is None:
+    if effective_source_mode == "camera":
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=threshold,
+            invert=invert,
+            manual_corners=photo_corners,
+            expected_grid=(grid_height, grid_width) if grid_height and grid_width else None,
+            cache_key=_photo_cache_key(data),
+        )
+        warped = camera.color
+        geometry_warped = camera.geometry
+        invalid_mask = camera.invalid_mask
+        perspective_info = camera.perspective_info
+        auto_crop_info = camera.auto_crop_info
+        photo_info = camera.photo_info
+        if auto_terminals and expected_flow_count is None:
+            # The level header is readable once the display is straightened;
+            # the raw photo is skewed and includes the surroundings.
+            apply_flow_count_ocr(camera.display)
+    elif crop is None:
         inferred_crop = auto_crop(
             image,
             threshold=threshold,
@@ -3487,8 +4183,10 @@ async def image_generate(
                 "width": crop.width,
                 "height": crop.height,
             }
-    cropped = apply_crop(image, crop)
-    warped, perspective_info = _maybe_perspective(cropped, perspective)
+    if effective_source_mode != "camera":
+        cropped = apply_crop(image, crop)
+        warped, perspective_info = _maybe_perspective(cropped, perspective)
+        geometry_warped = warped
 
     extra_meta: Dict[str, str] = {}
     if metadata_json:
@@ -3513,6 +4211,8 @@ async def image_generate(
         crop=crop,
         base=extra_meta,
     )
+    if source_mode != "screenshot":
+        meta["source_mode"] = source_mode
 
     detection_info: Dict[str, Any] = {
         "perspective": perspective_info,
@@ -3520,10 +4220,22 @@ async def image_generate(
         "expected_flow_count": expected_flow_count,
         "expected_flow_count_source": expected_flow_source,
     }
+    if source_mode != "screenshot":
+        detection_info.update(
+            source_mode=source_mode,
+            source_mode_effective=effective_source_mode,
+            input=input_info,
+            photo=photo_info,
+        )
+    if effective_source_mode == "camera":
+        detection_info["photo_review"] = _camera_photo_review(photo_info)
     if expected_flow_ocr_message and expected_flow_count is None:
         detection_info["expected_flow_count_message"] = expected_flow_ocr_message
     requested_target = str(target_type or "auto").strip().lower() or "auto"
     classification_warnings: List[str] = []
+    if photo_info is not None:
+        quality = photo_info.get("quality") if isinstance(photo_info.get("quality"), dict) else {}
+        classification_warnings.extend(str(item) for item in quality.get("warnings", []) if str(item))
 
     if level_type_json:
         try:
@@ -3642,7 +4354,19 @@ async def image_generate(
     def finalize_generation(payload: Dict[str, Any]) -> Dict[str, Any]:
         acceleration = acceleration_capabilities()
         payload.setdefault("detection", {}).setdefault("acceleration", acceleration)
+        if effective_source_mode == "camera":
+            # Re-evaluate with terminal evidence, which exists only now.
+            payload["detection"]["photo_review"] = _camera_photo_review(
+                photo_info,
+                payload["detection"].get("terminal_completeness"),
+            )
         processing = {
+            "source_mode": source_mode,
+            "source_mode_effective": effective_source_mode,
+            "photo_corners": photo_corners,
+            "photo_preprocessing_version": (
+                photo_info.get("version") if isinstance(photo_info, dict) else None
+            ),
             "target_type": requested_target,
             "target_type_used": target_used,
             "output_schema_version": output_schema_version,
@@ -3701,6 +4425,19 @@ async def image_generate(
             )
             payload["review_flagged"] = True
             payload["flag_reason"] = flagged_record.get("flag_reason")
+        photo_review = payload.get("detection", {}).get("photo_review")
+        if (
+            not payload.get("review_flagged")
+            and isinstance(photo_review, dict)
+            and photo_review.get("required")
+        ):
+            reasons = photo_review.get("reasons") if isinstance(photo_review.get("reasons"), list) else []
+            flagged_record = _auto_flag_image_import(
+                str(record["id"]),
+                reason=f"Automated camera review: {str(reasons[0] if reasons else 'photo quality needs review')}",
+            )
+            payload["review_flagged"] = True
+            payload["flag_reason"] = flagged_record.get("flag_reason")
         return payload
 
     if target_used in {"square", "hex", "circle"}:
@@ -3711,7 +4448,7 @@ async def image_generate(
         if grid_width is None or grid_height is None:
             if target_used == "circle":
                 circle_grid, circle_grid_info = detect_circle_grid(
-                    warped,
+                    geometry_warped,
                     min_sectors=3,
                     max_sectors=32,
                 )
@@ -3731,7 +4468,12 @@ async def image_generate(
                 }
                 detection_info["circle_grid"] = circle_grid_info
             else:
-                grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+                grid = detect_grid(
+                    geometry_warped,
+                    threshold=threshold,
+                    line_threshold=line_threshold,
+                    invert=invert,
+                )
                 if grid is None:
                     raise HTTPException(status_code=400, detail="Grid size not provided and auto-detection failed.")
                 grid_width = grid.cols
@@ -3751,7 +4493,7 @@ async def image_generate(
             }
             if target_used == "circle":
                 circle_grid, circle_grid_info = detect_circle_grid(
-                    warped,
+                    geometry_warped,
                     min_sectors=max(3, min(int(grid_width), 12)),
                     max_sectors=max(int(grid_width) + 6, 24),
                 )
@@ -3781,6 +4523,7 @@ async def image_generate(
             if target_used == "circle":
                 placements, info = detect_circle_terminals(
                     warped,
+                    invalid_mask=invalid_mask,
                     rings=grid_height,
                     sectors=grid_width,
                     sat_threshold=sat_threshold,
@@ -3795,6 +4538,7 @@ async def image_generate(
             else:
                 placements, info = detect_terminals(
                     warped,
+                    invalid_mask=invalid_mask,
                     rows=grid_height,
                     cols=grid_width,
                     sat_threshold=sat_threshold,
@@ -3957,6 +4701,7 @@ async def image_generate(
             if auto_terminals:
                 node_placements, node_info = detect_terminals_on_nodes(
                     warped,
+                    invalid_mask=invalid_mask,
                     nodes=obj.get("space", {}).get("nodes", {}),
                     sat_threshold=sat_threshold,
                     brightness_min=brightness_min,
@@ -4045,6 +4790,7 @@ async def image_generate(
             if auto_terminals:
                 node_placements, node_info = detect_terminals_on_nodes(
                     warped,
+                    invalid_mask=invalid_mask,
                     nodes=nodes_obj,
                     sat_threshold=sat_threshold,
                     brightness_min=brightness_min,
@@ -4215,6 +4961,7 @@ async def image_generate(
             if auto_terminals:
                 node_placements, node_info = detect_terminals_on_nodes(
                     warped,
+                    invalid_mask=invalid_mask,
                     nodes=obj.get("space", {}).get("nodes", {}),
                     sat_threshold=sat_threshold,
                     brightness_min=brightness_min,
@@ -4245,7 +4992,12 @@ async def image_generate(
             name = f"{Path(meta.get('source_image', 'image')).stem}_line_{graph_nodes}.json"
         else:
             if grid_width is None or grid_height is None:
-                grid = detect_grid(warped, threshold=threshold, line_threshold=line_threshold, invert=invert)
+                grid = detect_grid(
+                    geometry_warped,
+                    threshold=threshold,
+                    line_threshold=line_threshold,
+                    invert=invert,
+                )
                 if grid is not None:
                     grid_width = grid.cols
                     grid_height = grid.rows
@@ -4307,6 +5059,7 @@ async def image_generate(
             if auto_terminals:
                 placements, term_info = detect_terminals(
                     warped,
+                    invalid_mask=invalid_mask,
                     rows=grid_height,
                     cols=grid_width,
                     sat_threshold=sat_threshold,
@@ -4440,7 +5193,10 @@ async def image_generate(
 @app.post("/image/ocr")
 @_offload_image_endpoint
 async def image_ocr(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    upload_id: Optional[str] = Form(None),
+    source_mode: str = Form("screenshot"),
+    photo_corners_json: Optional[str] = Form(None),
     crop_x: Optional[int] = Form(None),
     crop_y: Optional[int] = Form(None),
     crop_width: Optional[int] = Form(None),
@@ -4448,16 +5204,41 @@ async def image_ocr(
     perspective: bool = Form(False),
     _permit: None = Depends(_heavy_image_permit),
 ) -> Dict[str, Any]:
-    data = await file.read()
-    image = load_image(data)
+    source_mode = _request_image_source_mode(source_mode)
+    file, data = await _resolve_image_input(file, upload_id)
+    image, input_info, effective_source_mode = _load_image_for_source_mode(data, source_mode)
+    photo_corners = _request_photo_corners(
+        photo_corners_json,
+        source_mode=source_mode,
+        image_size=image.size,
+    )
     crop = _parse_crop_box(crop_x, crop_y, crop_width, crop_height)
-    cropped = apply_crop(image, crop)
-    warped, _perspective = _maybe_perspective(cropped, perspective)
+    photo_info: Optional[Dict[str, Any]] = None
+    if effective_source_mode == "camera":
+        # Reuses the cached preparation from the other pipeline stages; the
+        # level header lives on the straightened display, outside the board.
+        camera = _prepare_camera_pipeline_images(
+            image,
+            crop=crop,
+            threshold=230,
+            invert=False,
+            manual_corners=photo_corners,
+            cache_key=_photo_cache_key(data),
+        )
+        warped = camera.display
+        photo_info = camera.photo_info
+    else:
+        cropped = apply_crop(image, crop)
+        warped, _perspective = _maybe_perspective(cropped, perspective)
     text_clean, message = _ocr_image_text(warped)
     expected_flow_count = parse_expected_flow_count(text_clean)
     if message:
         return {
             "text": "",
+            "source_mode": source_mode,
+            "source_mode_effective": effective_source_mode,
+            "input": input_info,
+            "photo": photo_info,
             "suggested_name": None,
             "expected_flow_count": None,
             "message": message,
@@ -4474,6 +5255,10 @@ async def image_ocr(
 
     suggested = f"classic_level_{level_num}.flow" if level_num is not None else None
     return {
+        "source_mode": source_mode,
+        "source_mode_effective": effective_source_mode,
+        "input": input_info,
+        "photo": photo_info,
         "text": text_clean,
         "suggested_name": suggested,
         "expected_flow_count": expected_flow_count,

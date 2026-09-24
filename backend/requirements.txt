@@ -4,3 +4,4 @@ opencv-python-headless>=4.9.0.80
 pytesseract>=0.3.10
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
+pillow-heif>=0.18.0

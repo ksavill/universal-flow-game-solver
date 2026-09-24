@@ -58,11 +58,47 @@ The React UI centers on four destinations: **Screenshot**, **Create**,
 are modes of the Screenshot page. On phones these stay reachable from a
 persistent bottom navigation bar.
 
-### Import Screenshot
+### Import a Screenshot or Camera Photo
 
-This is the default starting point. Choose a screenshot from Photos or Files, crop to the board, and press **Process screenshot**. The guided pipeline reports progress for board type, level name, cells, and color pairs, then offers **Open in solver** or **Save to library**. Detection controls remain available under Advanced settings.
+This is the default starting point. Choose **Screenshot**, **Camera photo**, or
+**Detect automatically**, select an image, and press **Process image**.
+The camera button selects Camera photo automatically. The guided pipeline
+reports progress for board type, level name, cells, and color pairs, then
+offers **Open in solver** or **Save to library**. Detection controls remain
+available under Advanced settings.
 
 The screenshot may be portrait, landscape, square, letterboxed, or ultrawide and may use any practical resolution. Auto-crop and the detectors normalize against the recovered puzzle bounds, provided the complete board remains visible and has enough pixels to distinguish its cell boundaries.
+
+Camera mode is a separate preparation path, so it does not change screenshot
+processing. It applies EXIF orientation, finds and rectifies the photographed
+display and inner board, uses separate geometry and color views, masks glare,
+and then hands the prepared board to the established detectors. The detected
+screen outline and rectified preview are shown before processing. If the
+outline is wrong, choose **Adjust screen corners**, drag all four handles, and
+preview the correction without uploading again.
+
+For reliable camera imports, keep all four display corners visible, fill a
+reasonable part of the frame, and make sure grid boundaries and colored dots
+remain visually distinguishable. Mild blur and moderate off-angle capture are
+supported. Significant glare, blur that is large relative to the board's cells,
+cells too small in the photo, a prepared board below 400 pixels on its short
+side, or an ambiguous or uncorroborated screen outline produces a durable review
+flag and retake guidance instead of a high-confidence result. Automatically
+detected corners are only a starting point: the server keeps treating them as
+automatic until you drag a handle or choose **Use these corners**.
+
+Camera uploads are archived with location and device metadata removed; JPEG
+and PNG files are rewritten losslessly and keep only their orientation.
+`auto` mode takes the camera path when the file carries camera EXIF metadata,
+or, for images without it (for example photos forwarded through a messaging
+app), when the screenshot path cannot find a regular grid but the camera path
+finds a confident board inside a tilted, corroborated screen outline. HEIC/HEIF
+photos are decoded with `pillow-heif`.
+
+The browser uploads each image once per import (`POST /image/uploads`) and
+the later pipeline stages reference it by content hash. Uploads live in
+`data/.image_uploads/` (`FLOW_IMAGE_UPLOADS_DIR`) and expire after 30 minutes
+(`FLOW_IMAGE_UPLOAD_TTL_SECONDS`).
 
 Every completed or failed processing run is archived under `data/image_imports/`. The **Uploaded screenshots** section in Library can search and filter the retained corpus, reopen results, reprocess selected screenshots through the current pipeline, or delete selected source images. Reprocessing updates the stable archived sample instead of copying its source image and retains lightweight summaries of prior runs. A rebuildable SQLite summary index keeps archive filtering and pagination fast while `record.json` remains authoritative. Set `FLOW_IMAGE_IMPORTS_DIR` to move this durable archive elsewhere.
 
@@ -211,10 +247,10 @@ For arbitrary topologies, use JSON:
 
 ## Image Import Pipeline
 
-The UI can extract puzzles from screenshots:
+The UI can extract puzzles from screenshots and photographs of another screen:
 
-1. **Upload an image** (e.g., a Flow Free screenshot)
-2. **Crop** to the puzzle area (or use auto-crop / saved templates)
+1. **Upload an image** and select Screenshot, Camera photo, or Detect automatically
+2. **Prepare the board** with screenshot crop/templates or camera display rectification and optional four-corner correction
 3. **Run the pipeline**:
    - **OCR** detects level names/numbers and the advertised flow count (requires Tesseract)
    - **Grid detection** finds row/column lines
@@ -225,11 +261,17 @@ The UI can extract puzzles from screenshots:
 4. **Review the result** and open it directly in the solver, or apply it to the manual builder for corrections
 5. **Save** the generated puzzle to the searchable library
 
-Completed and failed processing attempts retain their source screenshot in the
+Completed and failed processing attempts retain their source image in the
 import archive. Failed entries include the pipeline stage and error so future
 detector improvements can be tested against the original sample. When OCR
 provides an expected flow count, an incomplete exact generated artifact is
 flagged and cannot be recorded as solved until it is reviewed or corrected.
+
+Camera-photo regression tooling is documented in
+[`reference_camera_corpus/README.md`](reference_camera_corpus/README.md). The
+synthetic gate adds perspective, blur, JPEG loss, glare, and display banding to
+reviewed screenshots, then compares puzzle structure rather than unstable
+sampled RGB values.
 
 ### OCR Setup (Optional)
 

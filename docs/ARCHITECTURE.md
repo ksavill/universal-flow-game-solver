@@ -157,18 +157,27 @@ Current single-node development medians (`scripts/benchmark_solver.py`) are
 approximately 7.5 ms (5×5), 54.7 ms (8×8), 129.8 ms (10×10), and 866.2 ms
 (15×15). CI compares ratios against the committed machine-specific baseline.
 
-## Screenshot detection pipeline
+## Screenshot and camera-photo detection pipeline
 
-The importer turns a phone screenshot into a solvable document. Every upload
-is archived first, so any screenshot can be reprocessed through a newer
+The importer turns a screenshot or a photograph of another display into a
+solvable document. Every upload is archived first, so any source image can be
+reprocessed through a newer
 pipeline later.
 
 ```mermaid
 flowchart TB
-    UP[Uploaded image] --> AC["Auto-crop<br/>edge- and color-based (OpenCV),<br/>optional saved crop template"]
+    UP[Uploaded image] --> MODE{source mode}
+    MODE -->|screenshot, default| AC["Auto-crop<br/>edge- and color-based (OpenCV),<br/>optional saved crop template"]
     AC --> PSP["Perspective correction<br/>(optional, quad detection)"]
-    PSP --> CLS["Level-type classifier<br/>geometry + modifier candidates<br/>with confidences"]
-    PSP --> OCR["OCR title strip<br/>suggested name, size hint,<br/>advertised flow count"]
+    MODE -->|camera| EXIF["EXIF orientation + decode limits"]
+    MODE -->|auto: camera metadata, or<br/>screenshot grid fails and camera board is confident| EXIF
+    EXIF --> QUAD["Display candidate beam<br/>contours + Hough lines<br/>or manual four corners"]
+    QUAD --> BOARD["Two-stage rectification<br/>display then lattice/board"]
+    BOARD --> VIEWS["Prepared color + geometry views<br/>glare mask + quality metrics"]
+    PSP --> PREP[prepared board]
+    VIEWS --> PREP
+    PREP --> CLS["Level-type classifier<br/>geometry + modifier candidates<br/>with confidences"]
+    PREP --> OCR["OCR title strip<br/>suggested name, size hint,<br/>advertised flow count"]
     CLS --> BR{geometry}
 
     BR -->|square / hex| GRID["Grid detection<br/>Hough lines to lattice inference,<br/>thick-line merging, spacing vote"]
@@ -197,6 +206,41 @@ flowchart TB
 
 Design rules the pipeline follows:
 
+- **Screenshot isolation.** `source_mode=screenshot` is the API and archive
+  default and still executes the legacy path. Camera preprocessing lives in a
+  separate versioned module and only feeds a rectified result into shared
+  downstream detectors.
+- **Camera evidence has two views.** Grid and contour work uses conservative
+  contrast/sharpening; terminal sampling uses rectified original color with
+  glare pixels excluded. The glare mask is passed explicitly to the terminal
+  detectors and never covers compact, cell-sized disks surrounded by dark
+  background, so the game's white and gray endpoints stay visible. Requested
+  grid dimensions only re-rank inner-board candidates when the unhinted
+  lattice disagrees with them, so preview, classify, and generate rectify a
+  photo identically.
+- **One upload and one preparation per photo.** The browser stores each image
+  once (`POST /image/uploads`, content-addressed, TTL-bound) and later stages
+  send its `upload_id`. Display rectification, board-candidate evaluation, and
+  final views are cached by that hash (`FLOW_CAMERA_PREP_CACHE_SIZE`, default
+  4), so the classify, OCR, grid, terminal, and generate calls of one import
+  share a single preparation.
+- **Weak outlines are decided downstream.** When the best display outline is
+  ambiguous or uncorroborated, the top three are each carried through board
+  detection and the one producing the most convincing board wins.
+- **Auto mode compares pipelines.** Without camera EXIF, `auto` switches to
+  the camera path only when the screenshot path's grid is missing or
+  irregular and the camera path finds a confident board through a
+  corroborated, tilted outline; the decision is cached per upload so every
+  stage agrees.
+- **Uncertainty becomes review.** Missing, ambiguous (near-tied), or
+  uncorroborated display outlines, blur measured relative to cell size,
+  diffuse or clipped glare, too-small cells, inadequate prepared resolution,
+  and near-miss terminals without an advertised flow count produce actionable
+  warnings and an automatic archive review flag. Manual corners and a
+  corrected preview are available before rerunning detection.
+- **Camera archives are sanitized.** Camera and auto-mode uploads are stored
+  without location/device metadata (lossless for JPEG/PNG, orientation kept);
+  screenshot-mode bytes are archived unchanged.
 - **Evidence over inference.** A warp adjacency requires both members of the
   paired border-break glyph; distance, glow, or a pack name is never enough.
 - **Detection settings are reproducible.** Crop templates store the crop
