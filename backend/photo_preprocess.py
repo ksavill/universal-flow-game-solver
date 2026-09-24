@@ -74,6 +74,8 @@ class PreparedPhoto:
     # Display-rectified color image before the board correction; OCR reads the
     # level header from this view.
     display_image: Optional[Image.Image] = None
+    # Board plus half a cell of surrounding pixels, for warp detection.
+    board_context_image: Optional[Image.Image] = None
 
 
 def load_camera_image(data: bytes) -> tuple[Image.Image, dict[str, Any]]:
@@ -881,6 +883,25 @@ class _BoardEvaluation:
     area_ratio: float
 
 
+def _display_is_board(lattice: dict[str, float]) -> bool:
+    """True when a regular lattice extrapolated by one pitch reaches all four edges."""
+
+    if float(lattice.get("score", 0.0)) < 0.5 or float(lattice.get("regularity", 0.0)) < 0.72:
+        return False
+    try:
+        pitch_x, pitch_y = float(lattice["pitch_x_fraction"]), float(lattice["pitch_y_fraction"])
+        x_min, x_max = float(lattice["x_min_fraction"]), float(lattice["x_max_fraction"])
+        y_min, y_max = float(lattice["y_min_fraction"]), float(lattice["y_max_fraction"])
+    except KeyError:
+        return False
+    return (
+        x_min <= 1.2 * pitch_x
+        and 1.0 - x_max <= 1.2 * pitch_x
+        and y_min <= 1.2 * pitch_y
+        and 1.0 - y_max <= 1.2 * pitch_y
+    )
+
+
 def _evaluate_board_candidates(image: Image.Image, *, cv2: Any, np: Any) -> list[_BoardEvaluation]:
     """Warp each plausible board quadrilateral once and measure its lattice.
 
@@ -936,6 +957,24 @@ def _evaluate_board_candidates(image: Image.Image, *, cv2: Any, np: Any) -> list
             )
     candidates = _deduplicate_candidates(proposals, image_size=image.size, limit=12)
     evaluations: list[_BoardEvaluation] = []
+    if _display_is_board(display_lattice):
+        # The display outline already sits on the board: its own lattice is
+        # regular and reaches every edge within about a cell.  Searching
+        # inside would drop the edge rows that line detection misses at the
+        # image border, so offer the whole display as a board candidate.
+        width, height = image.size
+        evaluations.append(
+            _BoardEvaluation(
+                candidate=PhotoQuadCandidate(
+                    corners=((0.0, 0.0), (width - 1.0, 0.0), (width - 1.0, height - 1.0), (0.0, height - 1.0)),
+                    score=1.0,
+                    source="display-is-board",
+                    metrics={"area_ratio": 1.0, "edge_support": 1.0, "opposite_side_ratio": 1.0, "rectangularity": 1.0},
+                ),
+                lattice=display_lattice,
+                area_ratio=1.0,
+            )
+        )
     for candidate in candidates:
         area_ratio = float(candidate.metrics.get("area_ratio", 0.0))
         if not 0.075 <= area_ratio <= 0.90:
@@ -997,6 +1036,52 @@ def _rank_board_candidates(
 
 def _board_ranking_is_confident(ranked: Sequence[tuple[float, PhotoQuadCandidate, dict[str, float]]]) -> bool:
     return bool(ranked) and ranked[0][0] >= 0.48 and float(ranked[0][2].get("score", 0.0)) >= 0.38
+
+
+# Warp detection only trusts border gaps when it can see at least 0.28 cells
+# outside the outer grid lines (image_utils.detect_warp_edges); the board
+# itself is cropped at those lines, so warps get their own padded view.
+BOARD_CONTEXT_MARGIN_CELLS = 0.5
+
+
+def _board_context_view(
+    display_image: Image.Image,
+    corners: Sequence[Sequence[float]],
+    lattice: dict[str, float],
+    board_size: tuple[int, int],
+    *,
+    cv2: Any,
+    np: Any,
+) -> Optional[Image.Image]:
+    """The rectified board plus half a cell of real surrounding pixels."""
+
+    pitch_x = float(lattice.get("pitch_x_fraction", 0.0))
+    pitch_y = float(lattice.get("pitch_y_fraction", 0.0))
+    if pitch_x <= 0.0 or pitch_y <= 0.0:
+        return None
+    margin_x, margin_y = BOARD_CONTEXT_MARGIN_CELLS * pitch_x, BOARD_CONTEXT_MARGIN_CELLS * pitch_y
+    quad = _order_points(np.asarray(corners, dtype=np.float32), np)
+    unit = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
+    to_display = cv2.getPerspectiveTransform(unit, quad)
+    local = np.float32(
+        [[-margin_x, -margin_y], [1 + margin_x, -margin_y], [1 + margin_x, 1 + margin_y], [-margin_x, 1 + margin_y]]
+    ).reshape(-1, 1, 2)
+    expanded = cv2.perspectiveTransform(local, to_display).reshape(-1, 2).astype(np.float32)
+    width = max(2, int(round(board_size[0] * (1 + 2 * margin_x))))
+    height = max(2, int(round(board_size[1] * (1 + 2 * margin_y))))
+    destination = np.float32([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]])
+    matrix = cv2.getPerspectiveTransform(expanded, destination)
+    # Constant black outside the display: replicated edges would smear the
+    # outer grid line into a fake solid border.
+    warped = cv2.warpPerspective(
+        np.asarray(display_image.convert("RGB")),
+        matrix,
+        (width, height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0),
+    )
+    return Image.fromarray(warped, mode="RGB")
 
 
 def _rectified_board(
@@ -1518,10 +1603,16 @@ def _copy_prepared(prepared: PreparedPhoto, *, cache_hit: bool) -> PreparedPhoto
         glare_mask=prepared.glare_mask.copy(),
         info=info,
         display_image=prepared.display_image.copy() if prepared.display_image is not None else None,
+        board_context_image=(
+            prepared.board_context_image.copy() if prepared.board_context_image is not None else None
+        ),
     )
 
 
-DISPLAY_BEAM_WIDTH = 3
+DISPLAY_BEAM_WIDTH = 5
+# Two outlines "agree" when their boards' corners are within this fraction of
+# the photo diagonal of each other.
+BOARD_AGREEMENT_FRACTION = 0.02
 
 
 def _selection_margin(
@@ -1534,8 +1625,7 @@ def _selection_margin(
     if selected is None or selected.source == "manual":
         return None
     if beam and len(beam) >= 2:
-        scores = sorted((float(entry["beam_score"]) for entry in beam), reverse=True)
-        return round(scores[0] - scores[1], 5)
+        return None  # board agreement (consensus_votes) replaces score margins
     if len(candidates) >= 2:
         return round(float(candidates[0].score - candidates[1].score), 5)
     return None
@@ -1608,23 +1698,51 @@ def _select_display_by_board_evidence(
                 _cache_put(_DISPLAY_CACHE, stage_key, stage)
         evaluations = _board_evaluations(stage.image, _board_cache_key(display_key, index), cv2=cv2, np=np)
         ranked = _rank_board_candidates(evaluations, None)
-        board_score = float(ranked[0][0]) if _board_ranking_is_confident(ranked) else 0.0
-        corroboration = display.corroborations[index] if display.corroborations else 0
-        score = candidate.score * 0.25 + board_score * 0.70 + min(corroboration, 3) * 0.05 / 3.0
+        confident = _board_ranking_is_confident(ranked)
+        board_score = float(ranked[0][0]) if confident else 0.0
+        # Where this outline would put the board, in photo coordinates.  An
+        # outline with no confident board falls back to the whole display.
+        board_quad_display = (
+            np.asarray(ranked[0][1].corners, dtype=np.float64)
+            if confident
+            else np.float64([[0, 0], [stage.image.width - 1, 0], [stage.image.width - 1, stage.image.height - 1], [0, stage.image.height - 1]])
+        )
+        board_quad = (
+            cv2.perspectiveTransform(board_quad_display.reshape(-1, 1, 2), np.asarray(stage.inverse, np.float64)).reshape(-1, 2)
+            if stage.inverse is not None
+            else board_quad_display
+        )
         beam.append(
             {
                 "index": index,
                 "source": candidate.source,
                 "display_score": round(float(candidate.score), 5),
                 "board_score": round(board_score, 5),
-                "corroboration": corroboration,
-                "beam_score": round(score, 5),
+                "corroboration": display.corroborations[index] if display.corroborations else 0,
+                "board_quad": _order_points(board_quad.astype(np.float32), np).tolist(),
             }
         )
         stages.append(stage)
     if not beam:
         return display, beam
-    best = max(range(len(beam)), key=lambda position: (beam[position]["beam_score"], -position))
+    # Different wrong outlines disagree about where the board is, while
+    # outlines around the right screen (or the board itself) converge on the
+    # same board.  Choose the outline whose board most others agree with.
+    diagonal = math.hypot(*display.source_size)
+    for entry in beam:
+        entry["votes"] = sum(
+            1
+            for other in beam
+            if other is not entry
+            and float(np.mean(np.linalg.norm(np.asarray(entry["board_quad"]) - np.asarray(other["board_quad"]), axis=1)))
+            <= BOARD_AGREEMENT_FRACTION * diagonal
+        )
+    # With no agreement at all the board score breaks the tie; keeping the
+    # detector's top outline instead measured worse (55 vs 58 of 77 boards).
+    # Either way consensus_votes == 0 sends the photo to review.
+    best = max(range(len(beam)), key=lambda position: (beam[position]["votes"], beam[position]["board_score"], -position))
+    for entry in beam:
+        entry["board_quad"] = [[round(float(x), 1), round(float(y), 1)] for x, y in entry["board_quad"]]
     return stages[best], beam
 
 
@@ -1695,13 +1813,10 @@ def prepare_camera_photo(
         )
         _cache_put(_DISPLAY_CACHE, display_key, display)
     beam: Optional[list[dict[str, Any]]] = None
-    weak_outline = len(display.candidates) > 1 and (
-        display.candidates[0].score - display.candidates[1].score < AMBIGUOUS_DISPLAY_MARGIN
-        or display.corroboration == 0
-    )
-    if detect_board and manual_corners is None and weak_outline:
-        # Only a weak outline is worth the extra board passes; a clear,
-        # corroborated winner keeps the single-candidate path.
+    if detect_board and manual_corners is None and len(display.candidates) > 1:
+        # Outline scores alone mislead (the photo frame and phone body often
+        # outrank the screen), so every shortlisted outline is judged by the
+        # board it produces.  Board results are cached per outline.
         display, beam = _select_display_by_board_evidence(
             source,
             display,
@@ -1722,6 +1837,7 @@ def prepare_camera_photo(
 
     display_rectified_size = {"width": color_image.width, "height": color_image.height}
     board_info: Optional[dict[str, Any]] = None
+    board_context: Optional[Image.Image] = None
     cell_size: Optional[float] = None
     if detect_board:
         started = time.perf_counter()
@@ -1742,6 +1858,14 @@ def prepare_camera_photo(
         timings["board_ms"] = (time.perf_counter() - started) * 1000.0
         if board_info.get("selected") is not None:
             lattice = board_info.get("lattice") or {}
+            board_context = _board_context_view(
+                color_image,
+                [(point["x"], point["y"]) for point in board_info["selected"]["corners"]],
+                lattice,
+                board_image.size,
+                cv2=cv2,
+                np=np,
+            )
             if float(lattice.get("pitch_x_fraction", 0.0)) > 0 and float(lattice.get("pitch_y_fraction", 0.0)) > 0:
                 cell_size = min(
                     float(lattice["pitch_x_fraction"]) * board_image.width,
@@ -1780,6 +1904,11 @@ def prepare_camera_photo(
         "selection_margin": _selection_margin(candidates, selected, beam),
         "selected_corroboration": display.corroboration,
         "display_beam": beam,
+        "consensus_votes": (
+            next((entry["votes"] for entry in beam if entry["index"] == display.selected_index), None)
+            if beam and len(beam) >= 2
+            else None
+        ),
         "candidates": [candidate.as_dict() for candidate in candidates],
         "quality": {**quality, "warnings": warnings},
         "display_rectified_size": display_rectified_size,
@@ -1796,6 +1925,7 @@ def prepare_camera_photo(
         glare_mask=glare_mask,
         info=info,
         display_image=display.image,
+        board_context_image=board_context,
     )
     _cache_put(_RESULT_CACHE, result_key, prepared)
     return _copy_prepared(prepared, cache_hit=False)

@@ -113,3 +113,24 @@ def test_splits_are_stable_per_source_screenshot() -> None:
     assert [_source_split(f"source-{index}", fractions) for index in range(300)] == splits
     assert 0.55 < splits.count("train") / 300 < 0.85
     assert splits.count("test") > 0 and splits.count("val") > 0
+
+
+def test_v2_screen_features_render_and_cracks_leave_the_envelope() -> None:
+    glare = {"shape": "ceiling", "u": 0.3, "v": 0.3, "size": 0.12, "aspect": 0.6, "angle": 10.0, "intensity": 0.8, "softness": 0.4}
+    protector = {"haze": 0.05, "reflectance": 0.01, "bubble": True, "bubble_u": 0.5, "bubble_v": 0.5}
+    scene = _scene(
+        device="curved-edge-silver",
+        second_glare=glare,
+        protector=protector,
+        cracks={"count": 2, "seed": 11},
+    )
+
+    rendered = synthetic_camera.render_scene(_screenshot(), scene, board_box=(40, 200, 320, 440))
+    image, _info = load_camera_image(rendered.payload)
+    board_center = _inset(rendered.board_corners, 1.0)[0]
+
+    assert "cracked screen" in rendered.envelope["reasons"]
+    assert rendered.envelope["in_envelope"] is False
+    assert _is_green(np.asarray(image)[int(round(board_center[1])), int(round(board_center[0]))])
+    summary = synthetic_camera.scene_summary(scene)
+    assert summary["protector"] and summary["cracks"] and summary["second_light"]

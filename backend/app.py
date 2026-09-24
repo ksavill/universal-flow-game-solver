@@ -1686,6 +1686,37 @@ class CameraPipelineImages:
     perspective_info: Dict[str, Any]
     auto_crop_info: Dict[str, Any]
     photo_info: Dict[str, Any]
+    # Board with half a cell of surrounding pixels (warp detection needs
+    # context outside the outer grid lines); None when no board warp ran.
+    warp_context: Optional[Image.Image] = None
+
+
+def _board_outline_in_photo(
+    photo_info: Dict[str, Any],
+    board_crop: Optional[CropBox],
+) -> Optional[List[Dict[str, float]]]:
+    """Map the prepared board's corners back into photo coordinates.
+
+    Lets the UI draw what was actually used as the board next to the screen
+    outline, so a wrong board choice is visible before processing.
+    """
+
+    inverse = photo_info.get("inverse_homography")
+    size = photo_info.get("rectified_size") if isinstance(photo_info.get("rectified_size"), dict) else None
+    if not isinstance(inverse, list) or not size:
+        return None
+    left, top = (board_crop.x, board_crop.y) if board_crop is not None else (0, 0)
+    right = left + (board_crop.width if board_crop is not None else int(size["width"]))
+    bottom = top + (board_crop.height if board_crop is not None else int(size["height"]))
+    outline: List[Dict[str, float]] = []
+    for x, y in ((left, top), (right, top), (right, bottom), (left, bottom)):
+        px = inverse[0][0] * x + inverse[0][1] * y + inverse[0][2]
+        py = inverse[1][0] * x + inverse[1][1] * y + inverse[1][2]
+        pw = inverse[2][0] * x + inverse[2][1] * y + inverse[2][2]
+        if abs(pw) < 1e-9:
+            return None
+        outline.append({"x": round(px / pw, 2), "y": round(py / pw, 2)})
+    return outline
 
 
 def _photo_cache_key(data: bytes) -> str:
@@ -1759,6 +1790,7 @@ def _prepare_camera_pipeline_images(
         "width": color_image.width,
         "height": color_image.height,
     }
+    photo_info["board_outline"] = _board_outline_in_photo(photo_info, board_crop)
     glare_histogram = glare_mask.histogram()
     photo_info["glare_fraction_on_prepared_board"] = round(
         (glare_mask.width * glare_mask.height - glare_histogram[0])
@@ -1788,6 +1820,7 @@ def _prepare_camera_pipeline_images(
         perspective_info=perspective_info,
         auto_crop_info=auto_crop_info,
         photo_info=photo_info,
+        warp_context=prepared.board_context_image if board_warp_applied else None,
     )
 
 
@@ -1801,7 +1834,62 @@ CAMERA_REVIEW_THRESHOLDS: Dict[str, float] = {
     "severe_glare_fraction": 0.10,
     "glare_fraction": 0.02,
     "min_board_side_px": 400.0,
+    # Closest RGB distance allowed between terminals of different pairs; on
+    # 347 synthetic replays, < 40 caught 29 of 176 wrong imports and 2 of 171
+    # correct ones.
+    "min_pair_color_separation": 40.0,
 }
+
+
+# Measured on the synthetic scene corpora: square boards are supported from
+# photos; warps (border markers are lost) and hex/region boards (region
+# detection fails) are not yet, so their results always go to review.
+CAMERA_UNSUPPORTED_GEOMETRIES = {"hex", "graph", "cube", "star", "figure8"}
+CAMERA_UNSUPPORTED_MODIFIERS = {"warps", "walls"}
+
+
+def _camera_unsupported_features(level_type: Dict[str, Any]) -> Optional[str]:
+    features: List[str] = []
+    geometry = str(level_type.get("geometry") or "").lower()
+    if geometry in CAMERA_UNSUPPORTED_GEOMETRIES:
+        features.append(f"{geometry} geometry")
+    modifiers = level_type.get("modifiers") if isinstance(level_type.get("modifiers"), list) else []
+    features.extend(sorted(str(item) for item in modifiers if str(item) in CAMERA_UNSUPPORTED_MODIFIERS))
+    return ", ".join(features) or None
+
+
+def _camera_terminal_review_reasons(detection: Dict[str, Any], limits: Dict[str, float]) -> List[str]:
+    """Terminal evidence that a photographed board was misread.
+
+    Every Flow color appears exactly twice.  Under a camera color cast two
+    similar colors can merge into one four-terminal cluster (a pair is then
+    silently dropped) or one color can split into two single terminals.
+    Different pairs whose colors are nearly equal can also be paired with the
+    wrong partner even when the pair count looks complete.
+    """
+
+    reasons: List[str] = []
+    info = detection.get("terminal_info") if isinstance(detection.get("terminal_info"), dict) else {}
+    clusters = info.get("clusters") if isinstance(info.get("clusters"), list) else []
+    counts = [int(cluster.get("count") or 0) for cluster in clusters if isinstance(cluster, dict)]
+    if any(count != 2 for count in counts):
+        reasons.append("Some terminal colors did not form exactly one pair; similar colors may have been merged or split.")
+    terminals = detection.get("terminals") if isinstance(detection.get("terminals"), list) else []
+    by_letter: Dict[str, List[Sequence[float]]] = {}
+    for terminal in terminals:
+        if isinstance(terminal, dict) and isinstance(terminal.get("color"), (list, tuple)):
+            by_letter.setdefault(str(terminal.get("letter")), []).append(terminal["color"])
+    closest = math.inf
+    for letter, colors in by_letter.items():
+        for color in colors:
+            for other_letter, other_colors in by_letter.items():
+                if other_letter == letter:
+                    continue
+                for other in other_colors:
+                    closest = min(closest, math.dist(color, other))
+    if closest < limits["min_pair_color_separation"]:
+        reasons.append("Two different terminal colors look nearly identical in the photo; check that pairs are matched correctly.")
+    return reasons
 
 
 def _camera_photo_review(
@@ -1809,6 +1897,7 @@ def _camera_photo_review(
     terminal_completeness: Optional[Dict[str, Any]] = None,
     *,
     thresholds: Optional[Dict[str, float]] = None,
+    detection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not isinstance(photo_info, dict):
         return {"required": False, "reasons": [], "confidence": 1.0}
@@ -1828,6 +1917,10 @@ def _camera_photo_review(
     elif float(selected.get("score", 0.0)) < limits["min_display_score"]:
         reasons.append("The detected display boundary has weak geometric evidence.")
         confidence -= 0.25
+    elif photo_info.get("consensus_votes") is not None:
+        if int(photo_info["consensus_votes"]) == 0:
+            reasons.append("The detected screen outlines disagree about where the board is; confirm the four corners.")
+            confidence -= 0.25
     else:
         margin = photo_info.get("selection_margin")
         if margin is not None and float(margin) < limits["ambiguous_display_margin"]:
@@ -1874,6 +1967,17 @@ def _camera_photo_review(
         ):
             reasons.append("Some cells looked almost like terminals; check for missing endpoints.")
             confidence -= 0.20
+    if isinstance(detection, dict):
+        for reason in _camera_terminal_review_reasons(detection, limits):
+            reasons.append(reason)
+            confidence -= 0.25
+        level_type = detection.get("level_type") if isinstance(detection.get("level_type"), dict) else {}
+        unsupported = _camera_unsupported_features(level_type)
+        if unsupported:
+            reasons.append(
+                f"Photos of boards with {unsupported} are not reliable yet; check the imported puzzle against the photo."
+            )
+            confidence -= 0.40
     return {
         "required": bool(reasons),
         "reasons": reasons,
@@ -4142,6 +4246,7 @@ async def image_generate(
     crop = manual_crop
     photo_info: Optional[Dict[str, Any]] = None
     invalid_mask: Optional[Image.Image] = None
+    warp_context: Optional[Image.Image] = None
     auto_crop_info: Dict[str, Any] = {
         "applied": False,
         "source": "manual" if manual_crop is not None else "auto",
@@ -4159,6 +4264,7 @@ async def image_generate(
         warped = camera.color
         geometry_warped = camera.geometry
         invalid_mask = camera.invalid_mask
+        warp_context = camera.warp_context
         perspective_info = camera.perspective_info
         auto_crop_info = camera.auto_crop_info
         photo_info = camera.photo_info
@@ -4359,6 +4465,7 @@ async def image_generate(
             payload["detection"]["photo_review"] = _camera_photo_review(
                 photo_info,
                 payload["detection"].get("terminal_completeness"),
+                detection=payload["detection"],
             )
         processing = {
             "source_mode": source_mode,
@@ -5011,7 +5118,9 @@ async def image_generate(
                 raise HTTPException(status_code=400, detail="Grid graphs need a valid width/height.")
             if "warps" in level_modifiers:
                 warp_edges, warp_info = detect_warp_edges(
-                    warped,
+                    # Warp markers are gaps in the outer border; the camera
+                    # board is cropped at that border, so use the padded view.
+                    warp_context if warp_context is not None else warped,
                     rows=grid_height,
                     cols=grid_width,
                 )
@@ -5136,6 +5245,16 @@ async def image_generate(
                 "completeness_status": graph_terminal_completeness["status"],
             }
         )
+        seam_inference = graph_terminal_info.get("seam_inference") if isinstance(graph_terminal_info, dict) else None
+        if isinstance(seam_inference, dict) and seam_inference.get("incomplete"):
+            # Without inferred seams the board is usually unsolvable; never let
+            # a budget, timeout, or solver failure pass as a confident import.
+            graph_terminal_warnings.extend(str(item) for item in seam_inference.get("warnings", []))
+            graph_terminal_completeness["review_required"] = True
+            graph_terminal_completeness["reason"] = (
+                f"{graph_terminal_completeness.get('reason') or ''} Region seam inference did not complete.".strip()
+            )
+            detection_info["region_seam_inference_incomplete"] = True
         if graph_terminal_completeness["review_required"]:
             graph_terminal_warnings.append(str(graph_terminal_completeness["reason"]))
         if modifier_info:

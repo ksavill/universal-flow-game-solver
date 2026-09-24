@@ -4083,7 +4083,6 @@ def detect_region_topology(
             # by 60 degrees.  Requiring all three rejects square grids and
             # arbitrary Shapes graphs that merely happen to have degree <= 6.
             best_phase: Optional[float] = None
-            best_residuals: List[float] = []
             best_residual_score = float("inf")
             for phase_step in range(240):
                 phase = phase_step * 0.25
@@ -4111,7 +4110,6 @@ def detect_region_topology(
                 if score < best_residual_score:
                     best_residual_score = score
                     best_phase = phase
-                    best_residuals = residuals
 
             direction_counts = [0, 0, 0]
             if best_phase is not None:

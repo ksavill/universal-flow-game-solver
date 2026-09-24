@@ -70,6 +70,7 @@ def _scene_entries(
     scenes: int,
     difficulty_mix: dict[str, float],
     split_fractions: dict[str, float],
+    full_resolution: bool = False,
 ) -> list[dict[str, Any]]:
     source_id = str(source_entry.get("id") or source_index)
     split = _source_split(source_id, split_fractions)
@@ -82,7 +83,12 @@ def _scene_entries(
         difficulty = str(rng.choice(names, p=weights / weights.sum()))
         # Held-out devices and environments only appear in the test split, so
         # test results also measure generalization to unseen hardware/rooms.
-        scene = synthetic_camera.sample_scene(rng, difficulty=difficulty, allow_holdout=split == "test")
+        scene = synthetic_camera.sample_scene(
+            rng,
+            difficulty=difficulty,
+            allow_holdout=split == "test",
+            full_resolution=full_resolution,
+        )
         rendered = synthetic_camera.render_scene(
             screenshot,
             scene,
@@ -322,6 +328,7 @@ def build_corpus(
     scenes_per_source: int = 4,
     difficulty_mix: dict[str, float] | None = None,
     split_fractions: dict[str, float] | None = None,
+    full_resolution: bool = False,
 ) -> dict[str, Any]:
     difficulty_mix = difficulty_mix or dict(DEFAULT_DIFFICULTY_MIX)
     split_fractions = split_fractions or dict(DEFAULT_SPLITS)
@@ -383,6 +390,7 @@ def build_corpus(
                     scenes=scenes_per_source,
                     difficulty_mix=difficulty_mix,
                     split_fractions=split_fractions,
+                    full_resolution=full_resolution,
                 )
             )
             continue
@@ -454,6 +462,11 @@ def main() -> int:
     )
     parser.add_argument("--splits", default="train=0.7,val=0.15,test=0.15")
     parser.add_argument("--preview", type=Path, help="Write a labeled contact sheet PNG of the first photos")
+    parser.add_argument(
+        "--full-resolution",
+        action="store_true",
+        help="Render at native 12 MP phone-camera sizes (about 3x slower, ~1.5 GB peak memory)",
+    )
     args = parser.parse_args()
 
     def weights(text: str) -> dict[str, float]:
@@ -479,6 +492,7 @@ def main() -> int:
         scenes_per_source=args.scenes_per_source,
         difficulty_mix=difficulty_mix,
         split_fractions=weights(args.splits),
+        full_resolution=args.full_resolution,
     )
     summary: dict[str, Any] = {"entries": len(manifest["entries"]), "output": str(args.output)}
     if args.renderer == "scene":

@@ -30,6 +30,10 @@ class SolverUnknownError(ValueError):
     """Z3 returned UNKNOWN for a reason other than the configured deadline."""
 
 
+class SolverBudgetExceededError(SolverUnknownError):
+    """A deterministic work budget (solver conflicts or rounds) was exhausted."""
+
+
 class SolverInvariantError(RuntimeError):
     """The internal model failed independent solution validation."""
 

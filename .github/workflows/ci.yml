@@ -34,6 +34,9 @@ jobs:
       - name: Frontend build
         working-directory: frontend
         run: npm ci && npm run build
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
       - name: Full screenshot archive sweep
         if: github.event_name == 'schedule'
         run: python scripts/validate_puzzles.py --include-imports --jobs 8 --quiet

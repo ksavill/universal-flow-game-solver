@@ -32,7 +32,7 @@ import numpy as np
 from PIL import Image
 
 
-RENDERER_VERSION = "scene-v1"
+RENDERER_VERSION = "scene-v2"
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,7 @@ class DeviceProfile:
     case_thickness: float
     home_button: bool = False
     holdout: bool = False  # only used for test-split sources
+    curved_edges: bool = False  # display falls off toward the long sides
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ DEVICES: tuple[DeviceProfile, ...] = (
     DeviceProfile("compact-black", 2.0, 0.04, 0.09, 0.09, 0.10, 0.04, "none", (0.03, 0.03, 0.035), (0.15, 0.15, 0.16), None, 0.0),
     DeviceProfile("tablet-gray", 1.33, 0.07, 0.07, 0.07, 0.08, 0.03, "none", (0.03, 0.03, 0.03), (0.45, 0.45, 0.47), (0.25, 0.25, 0.28), 0.05, holdout=True),
     DeviceProfile("clear-case-notch", 2.165, 0.035, 0.035, 0.035, 0.14, 0.10, "notch", (0.02, 0.02, 0.025), (0.60, 0.60, 0.62), (0.80, 0.82, 0.85), 0.04, holdout=True),
+    DeviceProfile("curved-edge-silver", 2.22, 0.012, 0.03, 0.03, 0.12, 0.09, "punch", (0.02, 0.02, 0.025), (0.74, 0.75, 0.78), None, 0.0, curved_edges=True),
 )
 
 ENVIRONMENTS: tuple[EnvironmentProfile, ...] = (
@@ -101,6 +103,7 @@ DIFFICULTIES: dict[str, dict[str, Any]] = {
         "hand": (0.1, 0.0), "exposure_bias": (-0.2, 0.2), "white_balance": 0.05,
         "messaging": (0.1, (1600, 2000)), "exif_rotate": 0.2, "exif_metadata": 0.7,
         "screen_brightness": (0.7, 1.2), "sharpen": (0.0, 0.4), "chromatic": (0.0, 0.0008),
+        "protector": 0.2, "cracks": 0.0, "second_light": 0.1,
     },
     "medium": {
         "yaw": 25.0, "pitch": 25.0, "roll": 15.0, "landscape": 0.05,
@@ -112,6 +115,7 @@ DIFFICULTIES: dict[str, dict[str, Any]] = {
         "hand": (0.3, 0.0), "exposure_bias": (-0.5, 0.4), "white_balance": 0.10,
         "messaging": (0.25, (1280, 1800)), "exif_rotate": 0.3, "exif_metadata": 0.6,
         "screen_brightness": (0.5, 1.3), "sharpen": (0.2, 0.7), "chromatic": (0.0005, 0.0015),
+        "protector": 0.3, "cracks": 0.03, "second_light": 0.25,
     },
     "hard": {
         "yaw": 38.0, "pitch": 38.0, "roll": 30.0, "landscape": 0.1,
@@ -123,10 +127,13 @@ DIFFICULTIES: dict[str, dict[str, Any]] = {
         "hand": (0.5, 0.35), "exposure_bias": (-0.9, 0.6), "white_balance": 0.15,
         "messaging": (0.4, (1280, 1600)), "exif_rotate": 0.3, "exif_metadata": 0.4,
         "screen_brightness": (0.4, 1.4), "sharpen": (0.3, 1.0), "chromatic": (0.001, 0.0025),
+        "protector": 0.4, "cracks": 0.12, "second_light": 0.45,
     },
 }
 
 PHOTO_SIZES = ((1500, 2000), (1800, 2400), (1350, 2400))
+# Native phone-camera resolutions (12 MP class); slower and memory-hungry.
+FULL_PHOTO_SIZES = ((3024, 4032), (3000, 4000), (2268, 4032))
 SKIN_TONES = ((0.95, 0.76, 0.62), (0.87, 0.64, 0.49), (0.70, 0.49, 0.36), (0.50, 0.33, 0.24), (0.33, 0.22, 0.16))
 
 
@@ -142,6 +149,7 @@ def sample_scene(
     *,
     difficulty: str,
     allow_holdout: bool,
+    full_resolution: bool = False,
 ) -> dict[str, Any]:
     """Draw every random choice for one photo as plain JSON data."""
 
@@ -151,7 +159,8 @@ def sample_scene(
     device = devices[int(rng.integers(len(devices)))]
     environment = environments[int(rng.integers(len(environments)))]
     landscape = bool(rng.random() < ranges["landscape"])
-    width, height = PHOTO_SIZES[int(rng.integers(len(PHOTO_SIZES)))]
+    sizes = FULL_PHOTO_SIZES if full_resolution else PHOTO_SIZES
+    width, height = sizes[int(rng.integers(len(sizes)))]
     if landscape:
         width, height = height, width
 
@@ -160,10 +169,10 @@ def sample_scene(
         return _uniform(rng, bounds) if rng.random() < probability else None
 
     glare_probability, glare_intensity, glare_size = ranges["glare"]
-    glare = None
-    if rng.random() < glare_probability:
-        glare = {
-            "shape": environment.light if environment.light in {"window", "lamp"} else "ceiling",
+
+    def light_reflection(shape: str) -> dict[str, Any]:
+        return {
+            "shape": shape,
             "u": _uniform(rng, (-0.1, 1.1)),
             "v": _uniform(rng, (0.0, 1.0)),
             "size": _uniform(rng, glare_size),
@@ -172,6 +181,9 @@ def sample_scene(
             "intensity": _uniform(rng, glare_intensity),
             "softness": _uniform(rng, (0.25, 0.6)),
         }
+
+    main_shape = environment.light if environment.light in {"window", "lamp"} else "ceiling"
+    glare = light_reflection(main_shape) if rng.random() < glare_probability else None
     hand_probability, intrusion_probability = ranges["hand"]
     hand = None
     if rng.random() < hand_probability:
@@ -182,6 +194,22 @@ def sample_scene(
             "intrusion": _uniform(rng, (0.02, 0.12)) if rng.random() < intrusion_probability else 0.0,
         }
     messaging = gated("messaging")
+    # Scene-v2 additions, drawn last so the draws above keep their order.
+    second_glare = light_reflection("ceiling") if rng.random() < ranges["second_light"] else None
+    protector = None
+    if rng.random() < ranges["protector"]:
+        protector = {
+            "haze": _uniform(rng, (0.02, 0.08)),
+            "reflectance": _uniform(rng, (0.005, 0.02)),
+            "bubble": bool(rng.random() < 0.3),
+            "bubble_u": _uniform(rng, (0.1, 0.9)),
+            "bubble_v": _uniform(rng, (0.05, 0.95)),
+        }
+    cracks = (
+        {"count": int(rng.integers(1, 5)), "seed": int(rng.integers(0, 2**31 - 1))}
+        if rng.random() < ranges["cracks"]
+        else None
+    )
     return {
         "renderer": RENDERER_VERSION,
         "difficulty": difficulty,
@@ -217,6 +245,9 @@ def sample_scene(
             "pwm_phase": _uniform(rng, (0.0, 2.0 * math.pi)),
         },
         "glare": glare,
+        "second_glare": second_glare,
+        "protector": protector,
+        "cracks": cracks,
         "hand": hand,
         "camera": {
             "exposure_bias": _uniform(rng, ranges["exposure_bias"]),
@@ -541,6 +572,14 @@ def _phone_layers(
         cut = _rounded_rect_mask(screen_h, screen_w, (screen_w * 0.36, screen_w * 0.025, screen_w * 0.64, screen_w * 0.085), screen_w * 0.03)
     emissive = ((screen_mask_local > 0) & (cut == 0)).astype(np.uint8) * 255
     display = display.copy()
+    if device.curved_edges:
+        # Curved glass: the display is seen at a grazing angle near the long
+        # edges, so it darkens and compresses toward them.
+        columns = np.arange(screen_w, dtype=np.float32)
+        edge = max(1.0, screen_w * 0.07)
+        ramp = np.clip(np.minimum(columns, screen_w - 1 - columns) / edge, 0.0, 1.0)
+        falloff = 0.35 + 0.65 * (ramp * ramp * (3.0 - 2.0 * ramp))
+        display = (display.astype(np.float32) * falloff[None, :, None]).astype(np.uint8)
     display[emissive == 0] = 0
     screen_layer = np.zeros((tex_h, tex_w, 3), np.uint8)
     screen_mask = np.zeros((tex_h, tex_w), np.uint8)
@@ -664,6 +703,54 @@ def _ellipse_points(center: Sequence[float], radii: Sequence[float], angle: floa
     return local @ rotation.T + np.asarray(center)
 
 
+def _glare_field(
+    glare: dict[str, Any],
+    unit_h: np.ndarray,
+    size: tuple[int, int],
+    device: DeviceProfile,
+    projected_width: float,
+) -> np.ndarray:
+    center_unit = (float(glare["u"]), float(glare["v"]) * device.screen_aspect)
+    radii = (float(glare["size"]), float(glare["size"]) * float(glare["aspect"]))
+    if glare["shape"] == "window":
+        half_w, half_h = radii
+        local = np.float32([[-half_w, -half_h], [half_w, -half_h], [half_w, half_h], [-half_w, half_h]])
+        angle = math.radians(glare["angle"])
+        rotation = np.array([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+        outline_units = local @ rotation.T + np.asarray(center_unit)
+    else:
+        outline_units = _ellipse_points(center_unit, radii, float(glare["angle"]))
+    field = _polygon_mask(_apply_h(unit_h, outline_units), size, projected_width * float(glare["size"]) * float(glare["softness"]))
+    return field * float(glare["intensity"])
+
+
+def _crack_mask(
+    cracks: dict[str, Any],
+    unit_h: np.ndarray,
+    size: tuple[int, int],
+    device: DeviceProfile,
+    projected_width: float,
+) -> np.ndarray:
+    """Branching crack lines radiating from an impact point on the glass."""
+
+    rng = np.random.default_rng(int(cracks["seed"]))
+    width, height = size
+    mask = np.zeros((height, width), np.float32)
+    impact = np.array([rng.uniform(0.1, 0.9), rng.uniform(0.1, 0.9) * device.screen_aspect])
+    thickness = max(1, int(round(projected_width * 0.002)))
+    for _ in range(int(cracks["count"]) * 3):
+        angle = rng.uniform(0, 2 * math.pi)
+        point = impact.copy()
+        points = [point.copy()]
+        for _ in range(int(rng.integers(4, 12))):
+            angle += rng.normal(0.0, 0.35)
+            point = point + np.array([math.cos(angle), math.sin(angle)]) * rng.uniform(0.04, 0.12)
+            points.append(point.copy())
+        photo_points = _apply_h(unit_h, np.asarray(points))
+        cv2.polylines(mask, [np.round(photo_points).astype(np.int32)], False, 1.0, thickness, cv2.LINE_AA)
+    return mask
+
+
 # ---------------------------------------------------------------- render
 
 
@@ -748,20 +835,29 @@ def render_scene(
         silhouette = _polygon_mask(_ellipse_points(center, (projected_width * 0.45, projected_width * 0.7), 0.0), size, projected_width * 0.12)
         reflection *= (1.0 - 0.85 * silhouette[:, :, None])
     glare_field = np.zeros((height, width), np.float32)
-    glare = scene["glare"]
-    if glare:
-        center_unit = (float(glare["u"]), float(glare["v"]) * device.screen_aspect)
-        radii = (float(glare["size"]), float(glare["size"]) * float(glare["aspect"]))
-        if glare["shape"] == "window":
-            half_w, half_h = radii
-            local = np.float32([[-half_w, -half_h], [half_w, -half_h], [half_w, half_h], [-half_w, half_h]])
-            rotation = np.array([[math.cos(math.radians(glare["angle"])), -math.sin(math.radians(glare["angle"]))], [math.sin(math.radians(glare["angle"])), math.cos(math.radians(glare["angle"]))]])
-            outline_units = local @ rotation.T + np.asarray(center_unit)
-        else:
-            outline_units = _ellipse_points(center_unit, radii, float(glare["angle"]))
-        outline = _apply_h(unit_h, outline_units)
-        glare_field = _polygon_mask(outline, size, projected_width * float(glare["size"]) * float(glare["softness"]))
-        glare_field *= float(glare["intensity"])
+    for glare in (scene["glare"], scene.get("second_glare")):
+        if glare:
+            glare_field = np.maximum(glare_field, _glare_field(glare, unit_h, size, device, projected_width))
+
+    protector = scene.get("protector")
+    if protector:
+        # A screen protector adds its own reflection and a faint haze that
+        # spreads bright content; trapped air shows as a bright ring.
+        haze = float(protector["haze"])
+        spread = cv2.GaussianBlur(emission, (0, 0), max(1.0, projected_width * 0.012))
+        emission = emission * (1.0 - haze) + spread * haze
+        reflection = reflection + room * float(lighting["ambient"]) * tint * float(protector["reflectance"])
+        if protector["bubble"]:
+            center = (float(protector["bubble_u"]), float(protector["bubble_v"]) * device.screen_aspect)
+            ring = _polygon_mask(_apply_h(unit_h, _ellipse_points(center, (0.09, 0.06), 20.0)), size, 0.0)
+            inner = _polygon_mask(_apply_h(unit_h, _ellipse_points(center, (0.08, 0.05), 20.0)), size, 0.0)
+            glare_field = np.maximum(glare_field, cv2.GaussianBlur(np.clip(ring - inner, 0, 1), (0, 0), 1.2) * 0.8)
+
+    cracks = scene.get("cracks")
+    if cracks:
+        crack_mask = _crack_mask(cracks, unit_h, size, device, projected_width)
+        emission *= (1.0 - 0.5 * crack_mask)[:, :, None]
+        glare_field = np.maximum(glare_field, crack_mask * 0.7)
     specular = glass[:, :, None] * (reflection + glare_field[:, :, None] * tint)
 
     hand = scene["hand"]
@@ -856,6 +952,9 @@ def render_scene(
         camera=camera,
         final_scale=final_scale,
     )
+    if scene.get("cracks"):
+        envelope["reasons"].append("cracked screen")
+        envelope["in_envelope"] = False
     payload = _encode(output, camera, device)
     return RenderedPhoto(
         payload=payload,
@@ -984,6 +1083,9 @@ def scene_summary(scene: dict[str, Any]) -> dict[str, Any]:
         "glare": bool(scene["glare"]),
         "hand": bool(scene["hand"]),
         "moire": bool(scene["screen"]["moire"]),
+        "second_light": bool(scene.get("second_glare")),
+        "protector": bool(scene.get("protector")),
+        "cracks": bool(scene.get("cracks")),
         "pwm_banding": bool(scene["screen"]["pwm"]),
         "defocus": bool(scene["camera"]["defocus"]),
         "motion_blur": bool(scene["camera"]["motion"]),

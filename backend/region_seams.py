@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 def infer_bounded_region_seams(
@@ -11,7 +11,13 @@ def infer_bounded_region_seams(
     terminals: Dict[str, List[str]],
     *,
     distance_ratio: float = 2.0,
-    timeout_ms: int = 60_000,
+    # The conflict budget, not the clock, bounds the work so the result does
+    # not depend on host load.  The corpus worst case uses about 85k
+    # conflicts and 186 connectivity rounds; the wall clock is only a safety
+    # net, and hitting any limit is reported as incomplete for review.
+    timeout_ms: int = 300_000,
+    max_conflicts: Optional[int] = 500_000,
+    max_validation_rounds: Optional[int] = 2_000,
     max_candidates: int = 400,
     initial_seam_budget: int = 4,
     max_seam_budget: int = 12,
@@ -119,8 +125,13 @@ def infer_bounded_region_seams(
         from pysat.solvers import Solver
 
         from flow_solver.puzzle import Puzzle
-        from flow_solver.solver.pysat_solver import _PySatSession
-        from flow_solver.solver.z3_solver import _Deadline, _prepare_puzzle
+        from flow_solver.solver.pysat_solver import ConflictBudget, _PySatSession
+        from flow_solver.solver.z3_solver import (
+            SolveTimeoutError,
+            SolverBudgetExceededError,
+            _Deadline,
+            _prepare_puzzle,
+        )
     except ImportError as exc:
         info["warnings"].append(f"Minimum-seam inference is unavailable: {exc}")
         return [], info
@@ -153,6 +164,7 @@ def infer_bounded_region_seams(
     }
     try:
         deadline = _Deadline(timeout_ms)
+        work = ConflictBudget(max_conflicts)
         puzzle = Puzzle.from_json(json.dumps(graph))
         prepared = _prepare_puzzle(puzzle, deadline=deadline, stats=stats)
         candidate_indices = {
@@ -167,6 +179,7 @@ def infer_bounded_region_seams(
         for budget in budgets:
             deadline.check("region seam optimization")
             session = _PySatSession(prepared, deadline=deadline, stats=stats)
+            session.work_budget = work
             try:
                 candidate_variables = [
                     variable
@@ -267,7 +280,8 @@ def infer_bounded_region_seams(
                     )
                     validation_session.solver_name = "glucose42"
                     validation_session.portfolio_engines = ()
-                    if validation_session.next_connected_solution() is None:
+                    validation_session.work_budget = work
+                    if validation_session.next_connected_solution(max_rounds=max_validation_rounds) is None:
                         continue
                 finally:
                     if validation_session is not None:
@@ -278,14 +292,30 @@ def infer_bounded_region_seams(
                 info["validation_cuts"] = int(
                     validation_stats.get("connectivity_cuts", 0)
                 )
+                info["conflicts"] = work.used
                 return selected, info
             finally:
                 session.close()
         info["warnings"].append(
             f"No solvable completion used at most {max_seam_budget} inferred seams."
         )
+        info["conflicts"] = work.used
+        return [], info
+    except SolverBudgetExceededError as exc:
+        info.update(incomplete=True, budget_exhausted=True)
+        info["warnings"].append(
+            f"Region seam inference stopped at its deterministic work budget ({exc}); the board needs review."
+        )
+        return [], info
+    except SolveTimeoutError:
+        info.update(incomplete=True, timed_out=True)
+        info["warnings"].append(
+            f"Region seam inference hit the {timeout_ms} ms wall-clock safety limit; "
+            "the result depends on host load and needs review."
+        )
         return [], info
     except Exception as exc:
+        info["incomplete"] = True
         info["warnings"].append(
             f"Region seam inference failed: {type(exc).__name__}: {exc}"
         )

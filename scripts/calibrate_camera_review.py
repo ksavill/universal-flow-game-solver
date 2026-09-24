@@ -48,6 +48,7 @@ def _evaluate(results: list[dict[str, Any]], thresholds: dict[str, float]) -> di
             inputs.get("photo") or None,
             inputs.get("terminal_completeness"),
             thresholds=thresholds,
+            detection=inputs.get("detection"),
         )
         is_flagged = bool(review["required"] or inputs.get("completeness_review"))
         flagged += int(is_flagged)

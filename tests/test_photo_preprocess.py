@@ -824,10 +824,21 @@ def test_display_beam_scores_shortlisted_outlines_by_their_board() -> None:
     )
 
     assert 1 <= len(beam) <= photo_preprocess.DISPLAY_BEAM_WIDTH
-    best = max(beam, key=lambda entry: entry["beam_score"])
+    # The chosen outline is the one whose board most other outlines agree on.
+    best = max(beam, key=lambda entry: (entry["votes"], entry["board_score"], -entry["index"]))
     assert chosen.selected == display.candidates[best["index"]]
     assert chosen.selected_index == best["index"]
+    assert all(len(entry["board_quad"]) == 4 for entry in beam)
     assert best["board_score"] > 0.0
+
+
+def test_camera_review_flags_outlines_that_disagree_about_the_board() -> None:
+    agreeing = {**_clean_photo_info(), "consensus_votes": 2, "selected_corroboration": 0}
+    disagreeing = {**_clean_photo_info(), "consensus_votes": 0}
+
+    assert _camera_photo_review(agreeing)["required"] is False
+    review = _camera_photo_review(disagreeing)
+    assert review["required"] and "disagree" in review["reasons"][0]
 
 
 def test_real_corpus_harvest_uses_reviewed_camera_imports(tmp_path: Path) -> None:
@@ -894,3 +905,47 @@ def test_review_calibration_counts_unflagged_errors() -> None:
     blur_rows = {row["value"]: row for row in report["sweeps"]["blur_cell_ratio"]["rows"]}
     assert blur_rows[max(blur_rows)]["unflagged_wrong"] == 1
     assert report["sweeps"]["blur_cell_ratio"]["suggested"] is not None
+
+
+def _clean_photo_info() -> dict:
+    return {
+        "selected": {"score": 0.62, "source": "canny-24-72:contour"},
+        "selected_corroboration": 2,
+        "selection_margin": 0.2,
+        "quality": {"blur_sigma_px": 0.8, "blur_cell_ratio": 0.01, "cell_size_px": 80.0, "glare_fraction": 0.0},
+        "prepared_board_size": {"width": 900, "height": 900},
+    }
+
+
+def test_camera_review_flags_colors_that_do_not_form_exact_pairs() -> None:
+    red, orange, yellow = [240, 40, 40], [243, 215, 88], [242, 245, 93]
+    paired = {
+        "terminals": [{"letter": "A", "color": red}, {"letter": "A", "color": red}],
+        "terminal_info": {"clusters": [{"color": red, "count": 2}]},
+    }
+    merged = {
+        # Orange shifted toward yellow merged into one four-terminal cluster.
+        "terminals": paired["terminals"],
+        "terminal_info": {"clusters": [{"color": red, "count": 2}, {"color": yellow, "count": 4}]},
+    }
+    lookalike = {
+        "terminals": [
+            {"letter": "A", "color": orange}, {"letter": "A", "color": orange},
+            {"letter": "B", "color": yellow}, {"letter": "B", "color": yellow},
+        ],
+        "terminal_info": {"clusters": [{"color": orange, "count": 2}, {"color": yellow, "count": 2}]},
+    }
+
+    assert _camera_photo_review(_clean_photo_info(), detection=paired)["required"] is False
+    merged_review = _camera_photo_review(_clean_photo_info(), detection=merged)
+    lookalike_review = _camera_photo_review(_clean_photo_info(), detection=lookalike)
+    assert merged_review["required"] and "exactly one pair" in merged_review["reasons"][0]
+    assert lookalike_review["required"] and "nearly identical" in lookalike_review["reasons"][0]
+
+
+def test_camera_review_flags_unsupported_photo_boards() -> None:
+    for level_type in ({"geometry": "hex", "modifiers": []}, {"geometry": "square", "modifiers": ["warps"]}):
+        review = _camera_photo_review(_clean_photo_info(), detection={"level_type": level_type})
+        assert review["required"] and "not reliable yet" in review["reasons"][0]
+    plain = _camera_photo_review(_clean_photo_info(), detection={"level_type": {"geometry": "square", "modifiers": ["bridges"]}})
+    assert plain["required"] is False

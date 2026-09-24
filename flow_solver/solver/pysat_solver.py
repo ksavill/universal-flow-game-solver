@@ -14,6 +14,7 @@ from .validation import validate_solution
 from .z3_solver import (
     PuzzleUnsolvableError,
     SolveTimeoutError,
+    SolverBudgetExceededError,
     SolverInvariantError,
     SolverUnknownError,
     _Deadline,
@@ -22,15 +23,31 @@ from .z3_solver import (
 )
 
 
+class ConflictBudget:
+    """Deterministic SAT work limit shared across the checks of one task.
+
+    Wall-clock deadlines make results depend on host load; a conflict count
+    does not.  ``None`` means unlimited.
+    """
+
+    def __init__(self, limit: Optional[int]) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def remaining(self) -> Optional[int]:
+        return None if self.limit is None else self.limit - self.used
+
+
 def _sat_worker(
     engine: str,
     clauses: list[list[int]],
     phase_hints: list[int],
     connection: Any,
+    conflict_budget: Optional[int] = None,
 ) -> None:
     """Run a native SAT engine behind a killable process boundary."""
 
-    def send_result(payload: tuple[bool | None, list[int] | None, str | None]) -> None:
+    def send_result(payload: tuple[bool | None, list[int] | None, str | None, int]) -> None:
         try:
             connection.send(payload)
         except (BrokenPipeError, EOFError, OSError):
@@ -45,10 +62,16 @@ def _sat_worker(
         with Solver(name=engine, bootstrap_with=clauses) as solver:
             if phase_hints:
                 solver.set_phases(phase_hints)
-            status = bool(solver.solve())
-            send_result((status, solver.get_model() if status else None, None))
+            if conflict_budget is None:
+                status: Optional[bool] = bool(solver.solve())
+            else:
+                # None from solve_limited means the conflict budget ran out.
+                solver.conf_budget(max(1, int(conflict_budget)))
+                status = solver.solve_limited()
+            conflicts = int((solver.accum_stats() or {}).get("conflicts", 0))
+            send_result((status, solver.get_model() if status else None, None, conflicts))
     except BaseException as exc:  # pragma: no cover - child process diagnostics
-        send_result((None, None, f"{type(exc).__name__}: {exc}"))
+        send_result((None, None, f"{type(exc).__name__}: {exc}", 0))
     finally:
         connection.close()
 
@@ -86,6 +109,8 @@ class _PySatSession:
         self.y: Dict[Tuple[int, Color], int] = {}
         self.clauses: list[list[int]] = []
         self._cut_keys: Set[Tuple[Color, frozenset[NodeId]]] = set()
+        # Optional deterministic conflict budget (see ConflictBudget).
+        self.work_budget: Optional[ConflictBudget] = None
         self._build()
         self.phase_hints = self._build_phase_hints()
 
@@ -314,6 +339,9 @@ class _PySatSession:
 
     def _check(self) -> Optional[Set[int]]:
         remaining_ms = self.deadline.remaining_ms("PySAT check")
+        budget = self.work_budget.remaining() if self.work_budget is not None else None
+        if budget is not None and budget <= 0:
+            raise SolverBudgetExceededError(f"SAT conflict budget of {self.work_budget.limit} exhausted")
         if self.portfolio_engines:
             started = time.perf_counter()
             context = multiprocessing.get_context("spawn")
@@ -328,6 +356,7 @@ class _PySatSession:
                         self.clauses,
                         [] if engine.startswith("cadical") else self.phase_hints,
                         child_connection,
+                        budget,
                     ),
                     daemon=True,
                 )
@@ -359,13 +388,16 @@ class _PySatSession:
                     if process.is_alive():
                         process.kill()
                         process.join(1.0)
-            status, raw_model, error = result
+            status, raw_model, error, conflicts = result
+            self._charge(conflicts)
             self.stats["check_ms"] += (time.perf_counter() - started) * 1000.0
             self.stats["sat_checks"] += 1
             self.stats["z3_checks"] = self.stats["sat_checks"]
             self.deadline.check("PySAT portfolio check")
             if error:
                 raise SolverUnknownError(f"SAT portfolio worker failed: {error}")
+            if status is None and budget is not None:
+                raise SolverBudgetExceededError(f"SAT conflict budget of {self.work_budget.limit} exhausted")
             if status is False:
                 return None
             if status is not True or raw_model is None:
@@ -378,7 +410,7 @@ class _PySatSession:
             parent_connection, child_connection = context.Pipe(duplex=False)
             process = context.Process(
                 target=_sat_worker,
-                args=("cadical195", self.clauses, [], child_connection),
+                args=("cadical195", self.clauses, [], child_connection, budget),
                 daemon=True,
             )
             process.start()
@@ -394,14 +426,17 @@ class _PySatSession:
             if not parent_connection.poll():
                 parent_connection.close()
                 raise SolverUnknownError("CaDiCaL worker exited without returning a result")
-            status, raw_model, error = parent_connection.recv()
+            status, raw_model, error, conflicts = parent_connection.recv()
             parent_connection.close()
+            self._charge(conflicts)
             self.stats["check_ms"] += (time.perf_counter() - started) * 1000.0
             self.stats["sat_checks"] += 1
             self.stats["z3_checks"] = self.stats["sat_checks"]
             self.deadline.check("PySAT check")
             if error:
                 raise SolverUnknownError(f"CaDiCaL worker failed: {error}")
+            if status is None and budget is not None:
+                raise SolverBudgetExceededError(f"SAT conflict budget of {self.work_budget.limit} exhausted")
             if status is False:
                 return None
             if status is not True or raw_model is None:
@@ -410,17 +445,28 @@ class _PySatSession:
 
         timer: Optional[threading.Timer] = None
         interruptible = not self.solver_name.startswith("cadical")
+        timed_out = threading.Event()
+
+        def interrupt_on_deadline() -> None:
+            timed_out.set()
+            self.solver.interrupt()
+
         if remaining_ms is not None and interruptible:
-            timer = threading.Timer(remaining_ms / 1000.0, self.solver.interrupt)
+            timer = threading.Timer(remaining_ms / 1000.0, interrupt_on_deadline)
             timer.daemon = True
             timer.start()
         started = time.perf_counter()
+        conflicts_before = int((self.solver.accum_stats() or {}).get("conflicts", 0)) if budget is not None else 0
         try:
-            status = (
-                self.solver.solve_limited(expect_interrupt=True)
-                if interruptible
-                else self.solver.solve()
-            )
+            if budget is not None:
+                self.solver.conf_budget(max(1, int(budget)))
+                status = self.solver.solve_limited(expect_interrupt=interruptible)
+            else:
+                status = (
+                    self.solver.solve_limited(expect_interrupt=True)
+                    if interruptible
+                    else self.solver.solve()
+                )
         finally:
             if timer is not None:
                 timer.cancel()
@@ -430,10 +476,14 @@ class _PySatSession:
                     clear_interrupt()
                 except NotImplementedError:
                     pass
+        if budget is not None:
+            self._charge(int((self.solver.accum_stats() or {}).get("conflicts", 0)) - conflicts_before)
         self.stats["check_ms"] += (time.perf_counter() - started) * 1000.0
         self.stats["sat_checks"] += 1
         self.stats["z3_checks"] = self.stats["sat_checks"]
         self.deadline.check("PySAT check")
+        if status is None and budget is not None and not timed_out.is_set():
+            raise SolverBudgetExceededError(f"SAT conflict budget of {self.work_budget.limit} exhausted")
         if status is None:
             raise SolveTimeoutError(
                 f"Exact SAT solver timed out after {self.deadline.timeout_ms}ms during SAT check"
@@ -591,8 +641,16 @@ class _PySatSession:
         self.stats["extraction_ms"] += (time.perf_counter() - started) * 1000.0
         return result
 
-    def next_connected_solution(self) -> Optional[_SatCandidate]:
+    def _charge(self, conflicts: int) -> None:
+        if self.work_budget is not None:
+            self.work_budget.used += max(0, int(conflicts))
+
+    def next_connected_solution(self, max_rounds: Optional[int] = None) -> Optional[_SatCandidate]:
+        rounds = 0
         while True:
+            rounds += 1
+            if max_rounds is not None and rounds > max_rounds:
+                raise SolverBudgetExceededError(f"Connectivity cut rounds exceeded {max_rounds}")
             model = self._check()
             if model is None:
                 return None

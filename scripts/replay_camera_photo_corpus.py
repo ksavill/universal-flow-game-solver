@@ -135,12 +135,22 @@ def _review_inputs(body: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "selected",
         "selection_margin",
+        "consensus_votes",
         "selected_corroboration",
         "quality",
         "prepared_board_size",
     )
+    terminal_info = detection.get("terminal_info") if isinstance(detection.get("terminal_info"), dict) else {}
     return {
         "photo": {key: photo.get(key) for key in keep if key in photo},
+        # Terminal and level evidence used by the camera review rules.
+        "detection": {
+            "terminals": detection.get("terminals"),
+            "terminal_info": {"clusters": terminal_info.get("clusters")},
+            "level_type": {
+                key: (detection.get("level_type") or {}).get(key) for key in ("geometry", "modifiers")
+            } if isinstance(detection.get("level_type"), dict) else None,
+        },
         "terminal_completeness": detection.get("terminal_completeness"),
         "completeness_review": bool(
             isinstance(detection.get("terminal_completeness"), dict)

@@ -322,6 +322,28 @@ export function ImageView({
   // reviewing) the display outline itself.
   const [photoCornersManual, setPhotoCornersManual] = useState(false);
   const manualPhotoCorners = photoCornersManual ? photoCorners : null;
+  const photoBoardOutline = useMemo(() => {
+    const outline = photoInfo?.board_outline as Array<{ x?: unknown; y?: unknown }> | null | undefined;
+    if (!Array.isArray(outline) || outline.length !== 4) {
+      return null;
+    }
+    const points = outline.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+    return points.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)) ? points : null;
+  }, [photoInfo]);
+  // Other screen outlines the detector found, so a wrong pick can be fixed
+  // with one click instead of dragging all four corners.
+  const alternatePhotoOutlines = useMemo(() => {
+    const candidates = photoInfo?.candidates as Array<{ corners?: Array<{ x?: unknown; y?: unknown }> }> | undefined;
+    if (!Array.isArray(candidates)) {
+      return [];
+    }
+    return candidates
+      .map((candidate) => (Array.isArray(candidate.corners) ? candidate.corners : []))
+      .filter((corners) => corners.length === 4)
+      .map((corners) => corners.map((point) => ({ x: Number(point.x), y: Number(point.y) })))
+      .filter((corners) => corners.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
+  }, [photoInfo]);
+  const [alternateOutlineIndex, setAlternateOutlineIndex] = useState(0);
   const [editingPhotoCorners, setEditingPhotoCorners] = useState(false);
   const [correctedPhotoPreview, setCorrectedPhotoPreview] = useState<string | null>(null);
   const [correctedPhotoPreviewBusy, setCorrectedPhotoPreviewBusy] = useState(false);
@@ -762,6 +784,7 @@ export function ImageView({
     setPhotoCorners(null);
     setPhotoCornersManual(false);
     setPhotoInfo(null);
+    setAlternateOutlineIndex(0);
     setEditingPhotoCorners(false);
     setCorrectedPhotoPreview(null);
     setPipelineStatus("Automatic screen-corner detection will run on the next process.");
@@ -2989,6 +3012,16 @@ export function ImageView({
                         strokeWidth={Math.max(3, Math.min(imageDims.width, imageDims.height) * 0.006)}
                         pointerEvents="none"
                       />
+                      {photoBoardOutline && (
+                        <polygon
+                          points={photoBoardOutline.map((point) => `${point.x},${point.y}`).join(" ")}
+                          fill="none"
+                          stroke="#ffd54f"
+                          strokeDasharray={`${Math.max(8, imageDims.width * 0.012)} ${Math.max(6, imageDims.width * 0.008)}`}
+                          strokeWidth={Math.max(2, Math.min(imageDims.width, imageDims.height) * 0.004)}
+                          pointerEvents="none"
+                        />
+                      )}
                       {photoCorners.map((point, index) => (
                         <circle
                           key={`${index}-${point.x}-${point.y}`}
@@ -3011,6 +3044,12 @@ export function ImageView({
                 <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
                   Auto-crop framed the board for you — adjust the handles if it missed, then process again.
                 </Typography>
+                {sourceMode === "camera" && (
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    Photo import is reliable for square boards. Hex boards and boards with warps or walls are
+                    imported but always flagged for review, so check them against the photo.
+                  </Typography>
+                )}
                 {sourceMode === "camera" && (
                   <Stack spacing={1} sx={{ mt: 1.5 }}>
                     <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
@@ -3037,6 +3076,21 @@ export function ImageView({
                       >
                         {correctedPhotoPreviewBusy ? "Preparing preview…" : "Preview correction"}
                       </Button>
+                      {alternatePhotoOutlines.length > 1 && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            const next = (alternateOutlineIndex + 1) % alternatePhotoOutlines.length;
+                            setAlternateOutlineIndex(next);
+                            setPhotoCorners(alternatePhotoOutlines[next]);
+                            setPhotoCornersManual(true);
+                            setCorrectedPhotoPreview(null);
+                          }}
+                        >
+                          Try next outline ({alternateOutlineIndex + 1}/{alternatePhotoOutlines.length})
+                        </Button>
+                      )}
                       <Button size="small" variant="text" onClick={resetPhotoCorners}>
                         Detect corners again
                       </Button>
