@@ -28,7 +28,7 @@ the full application into `dist`; static output is isolated in `dist-static`.
 `frontend/wrangler.jsonc` deploys only `dist-static`, with SPA fallback. There is
 no Worker script, `run_worker_first`, database, R2 bucket, or paid binding.
 Requests are served as static assets. The configured name is
-`flow-puzzle-solver`; change it before deploying if that is not the desired name.
+`flow-puzzle-solver`, with `flowpuzzlesolver.net` as its production custom domain.
 
 After authenticating to the intended Cloudflare account:
 
@@ -38,7 +38,8 @@ npm run deploy:static
 
 For Cloudflare Git integration, select `frontend` as the root directory and
 `npm run build:static` as the build command, then `npx wrangler deploy` as the
-deploy command. Use a compatible Node version in the build settings. No
+deploy command. Production builds follow `main`, with `NODE_VERSION=22` and
+preview builds disabled. No
 `VITE_API_URL` or API secrets are needed. Keep deployment credentials in the
 hosting provider's secrets, never in frontend environment variables.
 
@@ -147,6 +148,27 @@ Cloudflare references: [static billing](https://developers.cloudflare.com/worker
   late result. At a 390-pixel viewport, Stop during setup and a successful retry
   both pass. No browser warnings or errors were observed in these checks.
 
-This verifies local Cloudflare emulation, not an actual published HTTPS site or
-physical Safari/Android devices. Those remain release checks. No deployment has
-been published by this implementation task.
+## Published deployment (2026-09-30)
+
+Production is live at https://flowpuzzlesolver.net on Cloudflare Workers Static
+Assets, connected to `ksavill/universal-flow-game-solver` on GitHub. The initial
+deployment of commit `052a189` passed Cloudflare's Linux build and static audit.
+Pushes to `main` trigger production builds using the settings above.
+
+The zone's Always Use HTTPS setting redirects HTTP requests to HTTPS. A Single
+Redirect rule matches `www.flowpuzzlesolver.net` and redirects to the HTTPS apex,
+preserving the path and query string. Its proxied `www` A record uses Cloudflare's
+suggested placeholder `192.0.2.1`; the redirect runs before an origin is contacted.
+These two zone settings are managed in the Cloudflare dashboard. The apex custom
+domain is also recorded in `frontend/wrangler.jsonc` for subsequent deployments.
+
+Live verification:
+
+- HTTPS serves the required COOP, COEP and CSP headers. Create, Library and Help
+  direct URLs return the SPA with isolation headers.
+- HTTP apex and HTTP/HTTPS WWW requests return 301 redirects with path and query
+  preserved.
+- Edge detects and solves the demo, showing download sizes and stage statistics.
+- The in-app Chromium browser detects and solves the real
+  `reference_puzzle_images/IMG_3202.PNG` screenshot on the public HTTPS site.
+- Physical Safari/Android device testing remains a separate release check.
