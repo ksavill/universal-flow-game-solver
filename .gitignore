@@ -5,6 +5,9 @@ __pycache__/
 out/
 frontend/node_modules/
 frontend/dist/
+frontend/dist-static/
+frontend/.wrangler/
+frontend/public/local-runtime/
 frontend/.vite/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
@@ -24,6 +27,4 @@ reference_screenshot_corpus/results/
 reference_camera_corpus/*
 !reference_camera_corpus/README.md
 backups/
-
-
 

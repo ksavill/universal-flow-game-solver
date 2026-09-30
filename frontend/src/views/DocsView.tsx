@@ -99,7 +99,7 @@ function MermaidDiagram({ code }: { code: string }) {
   if (!svg) {
     return (
       <Box display="flex" justifyContent="center" py={4}>
-        <CircularProgress size={22} />
+        <CircularProgress size={22} aria-label="Loading diagram" />
       </Box>
     );
   }
@@ -269,7 +269,7 @@ export function DocsView({
         <CardContent sx={{ px: { xs: 2, sm: 3 } }}>
           {loading ? (
             <Box display="flex" justifyContent="center" py={8}>
-              <CircularProgress size={28} />
+              <CircularProgress size={28} aria-label="Loading documentation" />
             </Box>
           ) : (
             <Box sx={markdownSx}>
@@ -281,6 +281,8 @@ export function DocsView({
                     key={`${pageId}-md-${index}`}
                     remarkPlugins={[remarkGfm]}
                     components={{
+                      // Wide code blocks scroll; keyboard users need to focus them to do so.
+                      pre: ({ node: _node, ...props }) => <pre tabIndex={0} {...props} />,
                       a: ({ href, children }) => {
                         const target = href ? DOC_LINK_TO_PAGE[href.replace(/^\.\//, "")] : undefined;
                         if (target) {

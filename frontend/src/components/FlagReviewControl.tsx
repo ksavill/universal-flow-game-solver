@@ -101,7 +101,7 @@ export function FlagReviewControl({
         size={size}
         fullWidth={fullWidth}
         color={flagged ? "warning" : "inherit"}
-        variant={flagged ? "contained" : "outlined"}
+        variant="outlined"
         startIcon={
           busy ? (
             <CircularProgress size={16} color="inherit" />

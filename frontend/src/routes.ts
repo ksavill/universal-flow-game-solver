@@ -1,4 +1,4 @@
-export type PrimaryView = "import" | "new" | "library" | "flagged";
+export type PrimaryView = "import" | "new" | "library" | "flagged" | "local";
 export type LibrarySection = "puzzles" | "screenshots";
 export type DocPageId = "architecture" | "variants" | "production-readiness";
 
@@ -32,6 +32,7 @@ export function parseAppRoute(pathname: string): AppRoute {
   if (segments.length === 0) return { kind: "primary", view: "import" };
   if (segments.length === 1) {
     if (segments[0] === "screenshot") return { kind: "primary", view: "import" };
+    if (segments[0] === "local") return { kind: "primary", view: "local" };
     if (segments[0] === "create") return { kind: "primary", view: "new" };
     if (segments[0] === "library") return { kind: "library", section: "puzzles" };
     if (segments[0] === "flagged") return { kind: "primary", view: "flagged" };
@@ -84,6 +85,7 @@ export function appRoutePath(route: AppRoute): string {
     case "primary":
       if (route.view === "import") return "/screenshot";
       if (route.view === "new") return "/create";
+      if (route.view === "local") return "/local";
       return "/flagged";
     case "library":
       return route.section === "screenshots" ? "/library/screenshots" : "/library";

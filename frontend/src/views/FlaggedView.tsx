@@ -13,6 +13,8 @@ export function FlaggedView({ onOpenResult, onReprocess }: FlaggedViewProps) {
     <Stack spacing={2} sx={{ maxWidth: 1180, mx: "auto" }}>
       <Card
         sx={{
+          // Phones show the page title in the app bar.
+          display: { xs: "none", sm: "block" },
           background:
             "linear-gradient(135deg, rgba(255,183,77,0.18), rgba(255,82,82,0.08) 58%, rgba(22,26,34,0.96))"
         }}

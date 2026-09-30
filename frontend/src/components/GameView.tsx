@@ -1,5 +1,5 @@
 import { Box } from "@mui/material";
-import { useMemo } from "react";
+import { useMemo, type MouseEvent } from "react";
 import { SolveResponse } from "../api";
 import { GAME_PALETTE, buildTerminalColorMaps } from "../colors";
 import {
@@ -20,6 +20,19 @@ import {
   terminalShapeForPolygon
 } from "./gameViewGeometry";
 
+export type GameViewCell = { x: number; y: number };
+
+// Optional editing layer for lattice boards. `extent` keeps the full board in
+// view when edge cells are holes, which the graph itself omits.
+export type GameViewEditor = {
+  extent: { minX: number; maxX: number; minY: number; maxY: number };
+  onCellClick: (cell: GameViewCell) => void;
+  selected?: GameViewCell | null;
+  holes?: GameViewCell[];
+  flagged?: GameViewCell[];
+  label?: string;
+};
+
 type GameViewProps = {
   graph: SolveResponse["graph"];
   nodeColor?: Record<string, string | null> | null;
@@ -29,6 +42,10 @@ type GameViewProps = {
   height?: number;
   cellSize?: number;
   compact?: boolean;
+  editor?: GameViewEditor;
+  // Fixed on-screen width (for zooming inside a scroll container); by default
+  // the board scales down to fit its container.
+  displayWidth?: number;
 };
 
 type RenderNode = {
@@ -195,7 +212,9 @@ export function GameView({
   showSolution = false,
   height = 320,
   cellSize,
-  compact = false
+  compact = false,
+  editor,
+  displayWidth
 }: GameViewProps) {
   const { colorToHex, terminalNodeColor } = useMemo(
     () => buildTerminalColorMaps(graph, nodeColor, GAME_PALETTE),
@@ -235,7 +254,10 @@ export function GameView({
         height: compact ? 140 : height,
         scale: 24,
         cellMetric: 24,
-        boardBounds: undefined as RenderBounds | undefined
+        boardBounds: undefined as RenderBounds | undefined,
+        transform: undefined as
+          | { offsetX: number; offsetY: number; scale: number; minX: number; maxY: number }
+          | undefined
       };
     }
 
@@ -249,6 +271,13 @@ export function GameView({
     const geometryPoints = rawPolygons.length
       ? rawPolygons.flatMap((cell) => cell.points)
       : baseNodes.map((node) => ({ x: node.x, y: node.y }));
+    const editorExtent = editor?.extent;
+    if (editorExtent && !rawPolygons.length) {
+      geometryPoints.push(
+        { x: editorExtent.minX, y: editorExtent.minY },
+        { x: editorExtent.maxX, y: editorExtent.maxY }
+      );
+    }
     const minX = Math.min(...geometryPoints.map((point) => point.x));
     const maxX = Math.max(...geometryPoints.map((point) => point.x));
     const minY = Math.min(...geometryPoints.map((point) => point.y));
@@ -702,7 +731,8 @@ export function GameView({
       height: viewHeight,
       scale,
       cellMetric,
-      boardBounds
+      boardBounds,
+      transform: { offsetX, offsetY, scale, minX, maxY }
     };
   }, [
     graph,
@@ -713,7 +743,8 @@ export function GameView({
     height,
     cellSize,
     solutionEdgeColors,
-    adjacencyKinds
+    adjacencyKinds,
+    editor?.extent
   ]);
 
   const boardMode =
@@ -771,12 +802,37 @@ export function GameView({
     compact ? 2.8 : 3.8
   );
 
+  const transform = rendered.transform;
+  const toScreen = (cell: GameViewCell) =>
+    transform
+      ? {
+          x: transform.offsetX + (cell.x - transform.minX) * transform.scale,
+          y: transform.offsetY + (transform.maxY - cell.y) * transform.scale
+        }
+      : null;
+  const handleEditorClick = (event: MouseEvent<SVGSVGElement>) => {
+    const matrix = event.currentTarget.getScreenCTM();
+    if (!editor || !transform || !matrix) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    const x = Math.round(transform.minX + (point.x - transform.offsetX) / transform.scale);
+    const y = Math.round(transform.maxY - (point.y - transform.offsetY) / transform.scale);
+    const { extent } = editor;
+    if (x < extent.minX || x > extent.maxX || y < extent.minY || y > extent.maxY) return;
+    editor.onCellClick({ x, y });
+  };
+
   return (
-    <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", overflowX: "auto" }}>
+    <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%" }}>
       <svg
         width={rendered.width}
         height={rendered.height}
         viewBox={`0 0 ${rendered.width} ${rendered.height}`}
+        role={editor ? "group" : "img"}
+        aria-label={
+          editor?.label ??
+          `Puzzle board with ${Object.keys(graph.terminals ?? {}).length} colors${showSolution ? ", solved" : ""}`
+        }
+        onClick={editor ? handleEditorClick : undefined}
         data-game-board={boardMode ? "true" : "false"}
         data-game-layout={
           rendered.circleMode
@@ -796,7 +852,14 @@ export function GameView({
           background: "radial-gradient(circle at 50% 46%, #171721 0%, #050507 76%)",
           borderRadius: compact ? 6 : 10,
           border: "1px solid rgba(255,255,255,0.06)",
-          minWidth: rendered.width
+          // Scale down with the container instead of overflowing on phones.
+          display: "block",
+          width: displayWidth ?? "100%",
+          maxWidth: displayWidth ? "none" : rendered.width,
+          height: "auto",
+          flexShrink: 0,
+          cursor: editor ? "pointer" : undefined,
+          touchAction: editor ? "manipulation" : undefined
         }}
       >
         {boardMode &&
@@ -858,7 +921,6 @@ export function GameView({
           return (
             <g
               key={`edge-${edge.u}-${edge.v}`}
-              aria-label={`Warp connection from ${edge.u} to ${edge.v}`}
               data-game-warp=""
             >
               <title>Warp continues at the matching portal</title>
@@ -912,7 +974,7 @@ export function GameView({
                   boardMode ? rendered.boardBounds : undefined
                 );
               return (
-                <g key={`sol-${edge.u}-${edge.v}`} aria-label={`Solved warp from ${edge.u} to ${edge.v}`}>
+                <g key={`sol-${edge.u}-${edge.v}`}>
                   <title>Solution warps to the matching portal</title>
                   {stubs.map((stub, index) => (
                     <line
@@ -961,7 +1023,6 @@ export function GameView({
           return (
             <g
               key={`crossover-${crossover.id}-${crossover.u}-${crossover.v}`}
-              aria-label={`Crossover from ${crossover.u} to ${crossover.v} under the overlapping track`}
               data-game-crossover=""
               data-crossover-id={crossover.id}
               data-crossover-under={`${crossover.u},${crossover.v}`}
@@ -1054,7 +1115,6 @@ export function GameView({
           return (
             <g
               key={`bridge-${bridge.id}`}
-              aria-label={`Bridge cell ${bridge.id}`}
               data-game-bridge=""
             >
               <title>Two paths cross without connecting</title>
@@ -1101,7 +1161,6 @@ export function GameView({
           return (
             <g
               key={`barrier-${barrier.id}`}
-              aria-label={`Barrier between ${barrier.u} and ${barrier.v}`}
               data-game-wall=""
             >
               <title>Blocked path</title>
@@ -1162,6 +1221,64 @@ export function GameView({
             />
           );
         })}
+
+        {editor && transform && (
+          <g data-game-editor="" pointerEvents="none">
+            {(editor.holes ?? []).map((cell) => {
+              const center = toScreen(cell)!;
+              const half = transform.scale / 2;
+              const inset = transform.scale * 0.14;
+              return (
+                <g key={`hole-${cell.x},${cell.y}`} data-game-hole="">
+                  <rect
+                    x={center.x - half + inset}
+                    y={center.y - half + inset}
+                    width={transform.scale - inset * 2}
+                    height={transform.scale - inset * 2}
+                    rx={transform.scale * 0.12}
+                    fill="rgba(255,255,255,0.03)"
+                    stroke="rgba(255,255,255,0.28)"
+                    strokeWidth={innerGridWidth}
+                    strokeDasharray={`${innerGridWidth * 3} ${innerGridWidth * 2.5}`}
+                  />
+                </g>
+              );
+            })}
+            {(editor.flagged ?? []).map((cell) => {
+              const center = toScreen(cell)!;
+              return (
+                <circle
+                  key={`flag-${cell.x},${cell.y}`}
+                  data-game-flagged=""
+                  cx={center.x}
+                  cy={center.y}
+                  r={terminalRadius + clamp(metric * 0.08, 3, 7)}
+                  fill="none"
+                  stroke="#ffb74d"
+                  strokeWidth={clamp(metric * 0.05, 2, 4)}
+                  strokeDasharray={`${clamp(metric * 0.1, 4, 8)} ${clamp(metric * 0.06, 3, 5)}`}
+                />
+              );
+            })}
+            {editor.selected && (() => {
+              const center = toScreen(editor.selected)!;
+              const half = transform.scale / 2;
+              return (
+                <rect
+                  data-game-selected=""
+                  x={center.x - half + 1.5}
+                  y={center.y - half + 1.5}
+                  width={transform.scale - 3}
+                  height={transform.scale - 3}
+                  rx={transform.scale * 0.14}
+                  fill="rgba(255,255,255,0.08)"
+                  stroke="#ffffff"
+                  strokeWidth={clamp(metric * 0.06, 2, 4)}
+                />
+              );
+            })()}
+          </g>
+        )}
       </svg>
     </Box>
   );

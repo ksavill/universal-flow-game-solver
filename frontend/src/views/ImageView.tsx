@@ -2811,6 +2811,8 @@ export function ImageView({
       {!embedded && (
         <Card
           sx={{
+            // On phones the Solve mode switch above already introduces the page.
+            display: { xs: "none", sm: "block" },
             overflow: "hidden",
             background:
               "linear-gradient(135deg, rgba(255,82,82,0.18), rgba(130,177,255,0.1) 55%, rgba(22,26,34,0.95))"

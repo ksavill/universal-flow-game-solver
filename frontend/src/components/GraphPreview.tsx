@@ -53,7 +53,7 @@ export function GraphPreview({
 
   return (
     <Box>
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Puzzle graph">
         {graph.edges.map(([u, v]) => {
           const a = graph.nodes.find((n) => n.id === u);
           const b = graph.nodes.find((n) => n.id === v);
@@ -121,7 +121,7 @@ export function GraphPreview({
           const cx = (ax + bx) / 2;
           const cy = (ay + by) / 2;
           return (
-            <g key={`barrier-${barrier.id}`} aria-label={`Barrier between ${barrier.u} and ${barrier.v}`}>
+            <g key={`barrier-${barrier.id}`}>
               <title>Blocked path</title>
               <line
                 x1={cx - offsetX}

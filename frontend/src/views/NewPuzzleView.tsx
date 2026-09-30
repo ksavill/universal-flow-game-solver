@@ -28,6 +28,8 @@ import {
   parseEdgeOverrideTexts
 } from "../edgeOverrides";
 import { ImageView } from "./ImageView";
+import { SquareBoardEditor } from "../components/SquareBoardEditor";
+import { capitalized, colorName } from "../colorNames";
 
 type NewPuzzleViewProps = {
   onCreatePuzzle: (name: string, text: string, opts?: { autoSolve?: boolean }) => void;
@@ -908,43 +910,17 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
   const board = useMemo(() => {
     if (spaceType === "square") {
       return (
-        <Box
-          display="grid"
-          gridTemplateColumns={`repeat(${cols}, ${cellSize}px)`}
-          gap={0.6}
-          sx={{ maxWidth: "100%", overflowX: "auto", py: 1 }}
-        >
-          {grid.map((row, r) =>
-            row.map((cell, c) => {
-              const active = cell !== ".";
-              const bg = active ? letterColor(cell, detectedColors) : "rgba(255,255,255,0.06)";
-              const color = active ? "#0f1116" : "rgba(255,255,255,0.5)";
-              return (
-                <Box
-                  key={`${r}-${c}`}
-                  data-cell={`${r}-${c}`}
-                  onClick={() => handleGridCellClick(r, c)}
-                  sx={{
-                    width: cellSize,
-                    height: cellSize,
-                    borderRadius: 1,
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    backgroundColor: bg,
-                    color,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: Math.max(10, Math.floor(cellSize * 0.36)),
-                    cursor: "pointer",
-                    userSelect: "none"
-                  }}
-                >
-                  {cell !== "." ? cell : ""}
-                </Box>
-              );
-            })
-          )}
-        </Box>
+        <SquareBoardEditor
+          grid={grid}
+          colorOf={(letter) => letterColor(letter, detectedColors)}
+          onCellActivate={handleGridCellClick}
+          onPickColor={(letter) => setSelectedColor(letter)}
+          onErase={(row, col) => {
+            const next = grid.map((line) => line.slice());
+            next[row][col] = ".";
+            setGrid(next);
+          }}
+        />
       );
     }
 
@@ -1121,7 +1097,7 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
   }, [spaceType, cols, rows, cellSize, grid, graphNodeLetters, topologySpec, detectedColors, isMobile]);
 
   return (
-    <Stack spacing={3}>
+    <Stack spacing={3} useFlexGap>
       {isMobile && (
         <Tabs
           value={mobilePanel}
@@ -1151,14 +1127,18 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                   New Puzzle Builder
                 </Typography>
                 <Stack spacing={2}>
-                  <Box display="flex" flexWrap="wrap" gap={2}>
+                  <Box
+                    display="grid"
+                    gap={2}
+                    gridTemplateColumns={{ xs: "minmax(0, 1fr) minmax(0, 1fr)", sm: "170px 120px 120px" }}
+                  >
                     <TextField
                       label="Type"
                       select
                       value={spaceType}
                       onChange={(event) => setSpaceType(event.target.value as BuilderType)}
                       size="small"
-                      sx={{ width: 170 }}
+                      sx={{ gridColumn: { xs: "1 / -1", sm: "auto" } }}
                     >
                       <MenuItem value="square">square</MenuItem>
                       <MenuItem value="hex">hex</MenuItem>
@@ -1185,19 +1165,6 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                       inputProps={{ min: 1, max: 40 }}
                     />
                   </Box>
-                  <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
-                    <TextField
-                      label="Name"
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      size="small"
-                      sx={{ minWidth: 220 }}
-                    />
-                    <FormControlLabel
-                      control={<Switch checked={autoName} onChange={(event) => setAutoName(event.target.checked)} />}
-                      label="Auto name"
-                    />
-                  </Box>
                   <Box>
                     <Typography variant="subtitle2" gutterBottom>
                       Color palette
@@ -1208,10 +1175,12 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                         type="button"
                         onClick={() => setSelectedColor(null)}
                         aria-label="Eraser"
+                        aria-pressed={selectedColor === null}
                         title="Eraser"
                         sx={{
                           width: 38,
                           height: 38,
+                          "@media (pointer: coarse)": { width: 44, height: 44 },
                           borderRadius: "50%",
                           cursor: "pointer",
                           display: "flex",
@@ -1244,10 +1213,12 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                               component="button"
                               type="button"
                               onClick={() => setSelectedColor(letter)}
-                              aria-label={`Color ${letter}`}
+                              aria-label={`${capitalized(colorName(swatch))} (${letter})${count ? `, ${count} placed` : ""}`}
+                              aria-pressed={isSelected}
                               sx={{
                                 width: 38,
                                 height: 38,
+                                "@media (pointer: coarse)": { width: 44, height: 44 },
                                 borderRadius: "50%",
                                 cursor: "pointer",
                                 display: "flex",
@@ -1273,11 +1244,26 @@ export function NewPuzzleView({ onCreatePuzzle }: NewPuzzleViewProps) {
                     </Box>
                     <Typography variant="caption" color="text.secondary" display="block" mt={1}>
                       Tap two cells to place a pair — the palette advances to the next color automatically.
-                      Tap a placed cell (or use the eraser) to remove it.
+                      Tap a placed cell (or use the eraser) to remove it. On a keyboard, use the arrow keys and
+                      Enter.
                     </Typography>
                   </Box>
 
                   {board}
+
+                  <Box display="flex" flexWrap="wrap" gap={2} alignItems="center">
+                    <TextField
+                      label="Name"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      size="small"
+                      sx={{ minWidth: 220 }}
+                    />
+                    <FormControlLabel
+                      control={<Switch checked={autoName} onChange={(event) => setAutoName(event.target.checked)} />}
+                      label="Auto name"
+                    />
+                  </Box>
 
                   <Box>
                     {invalidColors.length > 0 ? (

@@ -53,6 +53,28 @@ and restore checks.
 
 ## Using the UI
 
+### Local browser prototype
+
+**Device-only Cloudflare build:** run `npm run build:static` in `frontend`, then
+`npm run preview:static` to verify it in Cloudflare's local runtime. See
+[Cloudflare static deployment](docs/CLOUDFLARE_STATIC.md) for packaging, routing,
+privacy boundaries and deployment instructions.
+
+Open **Solve** in the navigation and choose **This device**, or visit `/local`,
+to try processing without the Python API. Choose, drop or paste a JPEG/PNG,
+line up the board corners if the grid isn't found automatically, check the
+detected dots on the board (tap a cell to fix one), and solve locally with
+Z3 WebAssembly. An original demo image is included. This initial prototype
+handles regular square screenshots and manually corrected photo outlines;
+holes are supported by manual entry. Other variants and OCR still use the
+established importer.
+
+The local library uses IndexedDB. Problem reports have an explicit preview and
+optional resized, metadata-free image; they can be downloaded or saved in a
+bounded local inbox. No feedback collection endpoint is connected. See
+[Browser prototype](docs/BROWSER_PROTOTYPE.md) for scope, runtime setup,
+verification, and the next migration steps.
+
 The React UI centers on four destinations: **Screenshot**, **Create**,
 **Library**, and **Flagged**. Single-image and durable background batch import
 are modes of the Screenshot page. On phones these stay reachable from a

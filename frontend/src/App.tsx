@@ -17,6 +17,7 @@ import {
 import { useTheme } from "@mui/material/styles";
 import { AddCircleOutline, Flag, LibraryBooks, MenuBookOutlined, PhotoCamera } from "@mui/icons-material";
 import { getImageImport, getPuzzle, type ImageImportEntry } from "./api";
+import { SolveModeSwitch, readSolveMode, writeSolveMode, type SolveMode } from "./components/SolveModeSwitch";
 import {
   AppRoute,
   DocPageId,
@@ -48,6 +49,9 @@ const DocsView = lazy(async () => ({
 }));
 const NotFoundView = lazy(async () => ({
   default: (await import("./views/NotFoundView")).NotFoundView
+}));
+const LocalView = lazy(async () => ({
+  default: (await import("./views/LocalView")).LocalView
 }));
 
 const DEFAULT_TEXT = `# type: square
@@ -99,7 +103,7 @@ function loadSolveDraft(): {
 function ViewFallback() {
   return (
     <Box sx={{ py: 8, display: "flex", justifyContent: "center" }}>
-      <CircularProgress size={28} />
+      <CircularProgress size={28} aria-label="Loading" />
     </Box>
   );
 }
@@ -143,6 +147,14 @@ export default function App() {
       options?: { replace?: boolean; state?: Record<string, unknown> }
     ) => {
       const path = appRoutePath(nextRoute);
+      const enteringLocal = nextRoute.kind === "primary" && nextRoute.view === "local";
+      const leavingLocal = /^\/local\/?$/.test(window.location.pathname);
+      if (enteringLocal !== leavingLocal) {
+        // Browser isolation is attached to a document, not a history URL.
+        if (options?.replace) window.location.replace(path);
+        else window.location.assign(path);
+        return;
+      }
       const method = options?.replace ? "replaceState" : "pushState";
       window.history[method](options?.state ?? null, "", path);
       setRoute(nextRoute);
@@ -295,10 +307,18 @@ export default function App() {
     navigateRoute(nextRoute, { state: { origin: tab } });
   };
 
+  // "Solve" opens whichever processing mode the user last chose.
+  const solveRoute = () => primaryRoute(readSolveMode() === "device" ? "local" : "import");
+  const switchSolveMode = (mode: SolveMode) => {
+    writeSolveMode(mode);
+    navigateRoute(primaryRoute(mode === "device" ? "local" : "import"));
+  };
+
   const handleTabChange = (_: unknown, value: PrimaryView) => {
     if (view === "solve") clearSolveDraft();
-    navigateRoute(primaryRoute(value));
+    navigateRoute(value === "import" ? solveRoute() : primaryRoute(value));
   };
+  const navValue = view === "docs" || view === "not-found" ? false : tab === "local" ? "import" : tab;
 
   // Library hands archived screenshots to the importer's batch pipeline.
   const handleReprocessImports = (entries: ImageImportEntry[]) => {
@@ -307,16 +327,19 @@ export default function App() {
   };
 
   const viewLabel: Record<PrimaryView, string> = {
-    import: "Solve a screenshot",
+    import: "Solve",
     new: "Create puzzle",
     library: "Puzzle library",
-    flagged: "Flagged reviews"
+    flagged: "Flagged reviews",
+    local: "Solve on device"
   };
   const librarySection: LibrarySection =
     route.kind === "library" ? route.section : "puzzles";
   const docsPageId: DocPageId = route.kind === "docs" ? route.pageId : "architecture";
   const mobileTitle =
-    view === "solve"
+    view === "import" || view === "local"
+      ? "Solve"
+      : view === "solve"
       ? "Solver"
       : view === "docs"
         ? "Docs"
@@ -357,7 +380,7 @@ export default function App() {
           <Button
             aria-label="Home"
             color="inherit"
-            onClick={() => navigateRoute(primaryRoute("import"))}
+            onClick={() => navigateRoute(solveRoute())}
             sx={{
               justifyContent: "flex-start",
               textTransform: "none",
@@ -377,12 +400,12 @@ export default function App() {
           </Button>
           {!isMobile && (
             <Tabs
-              value={view === "docs" || view === "not-found" ? false : tab}
+              value={navValue}
               onChange={handleTabChange}
               textColor="inherit"
               scrollButtons={false}
             >
-              <Tab value="import" icon={<PhotoCamera fontSize="small" />} iconPosition="start" label="Screenshot" />
+              <Tab value="import" icon={<PhotoCamera fontSize="small" />} iconPosition="start" label="Solve" />
               <Tab value="new" icon={<AddCircleOutline fontSize="small" />} iconPosition="start" label="Create" />
               <Tab value="library" icon={<LibraryBooks fontSize="small" />} iconPosition="start" label="Library" />
               <Tab value="flagged" icon={<Flag fontSize="small" />} iconPosition="start" label="Flagged" />
@@ -390,7 +413,8 @@ export default function App() {
           )}
           <Button
             aria-label="Documentation"
-            color={view === "docs" ? "primary" : "inherit"}
+            color="inherit"
+            aria-current={view === "docs" ? "page" : undefined}
             startIcon={<MenuBookOutlined />}
             onClick={() => {
               if (view === "solve") clearSolveDraft();
@@ -399,7 +423,7 @@ export default function App() {
                 { state: { origin: tab } }
               );
             }}
-            sx={{ ml: 0.5, whiteSpace: "nowrap", flexShrink: 0 }}
+            sx={{ ml: 0.5, whiteSpace: "nowrap", flexShrink: 0, color: view === "docs" ? "primary.main" : undefined }}
           >
             Docs
           </Button>
@@ -407,11 +431,13 @@ export default function App() {
       </AppBar>
       <Container maxWidth="xl" sx={{ pb: isMobile ? 12 : 4, pt: isMobile ? 2 : 3 }}>
         <Suspense fallback={<ViewFallback />}>
+          {view === "local" && <LocalView onSwitchMode={switchSolveMode} />}
           {/* Keep the importer mounted while its puzzle is open in the solver so a
               processed batch isn't lost when opening one of its results. */}
           {(view === "import" ||
             ((view === "solve" || view === "route-loading") && tab === "import")) && (
             <Box sx={{ maxWidth: 860, mx: "auto", display: view === "import" ? "block" : "none" }}>
+              <SolveModeSwitch mode="server" onChange={switchSolveMode} />
               <ImageView
                 onGenerated={(name, text, importId) =>
                   handleLoadPuzzle(name, text, { autoSolve: true, importId })
@@ -503,11 +529,11 @@ export default function App() {
           }}
         >
           <BottomNavigation
-            value={view === "docs" || view === "not-found" ? false : tab}
+            value={navValue}
             onChange={handleTabChange}
             showLabels
           >
-            <BottomNavigationAction value="import" label="Screenshot" icon={<PhotoCamera />} />
+            <BottomNavigationAction value="import" label="Solve" icon={<PhotoCamera />} />
             <BottomNavigationAction value="new" label="Create" icon={<AddCircleOutline />} />
             <BottomNavigationAction value="library" label="Library" icon={<LibraryBooks />} />
             <BottomNavigationAction value="flagged" label="Flagged" icon={<Flag />} />

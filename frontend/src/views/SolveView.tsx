@@ -334,7 +334,7 @@ export function SolveView({
                   justifyContent: "center"
                 }}
               >
-                <CircularProgress size={28} />
+                <CircularProgress size={28} aria-label="Solving" />
               </Box>
             ) : (
               <Typography variant="body2" color="text.secondary" sx={{ py: 6, textAlign: "center" }}>
@@ -365,11 +365,15 @@ export function SolveView({
                       key={path.color}
                       label={`${path.color} · ${path.length}`}
                       size="small"
-                      sx={{
-                        backgroundColor: `${path.hex}26`,
-                        border: `1px solid ${path.hex}`,
-                        color: path.hex
-                      }}
+                      variant="outlined"
+                      // Text stays neutral for contrast; the dot and border carry the color.
+                      icon={
+                        <Box
+                          component="span"
+                          sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: path.hex, ml: "6px !important" }}
+                        />
+                      }
+                      sx={{ borderColor: path.hex }}
                     />
                   ))}
                 </Box>

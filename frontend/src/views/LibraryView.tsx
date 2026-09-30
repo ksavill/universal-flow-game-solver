@@ -1,3 +1,4 @@
+import type { HTMLAttributes } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -330,16 +331,17 @@ export function LibraryView({
         <CardContent>
           <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems={{ sm: "center" }}>
             <Box sx={{ flex: 1 }}>
-              <Box display="flex" gap={1} alignItems="center" mb={0.5}>
+              {/* Phones already show the page title in the app bar. */}
+              <Box display={{ xs: "none", sm: "flex" }} gap={1} alignItems="center" mb={0.5}>
                 <LibraryBooks color="secondary" />
                 <Typography variant="h5" fontWeight={750}>
                   Puzzle library
                 </Typography>
               </Box>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="text.secondary" display={{ xs: "none", sm: "block" }}>
                 Open an example, continue one of your saved puzzles, or import a new screenshot.
               </Typography>
-              <Box display="flex" gap={1} flexWrap="wrap" mt={1.5}>
+              <Box display="flex" gap={1} flexWrap="wrap" mt={{ xs: 0, sm: 1.5 }}>
                 <Chip label={`${entries.length} total`} size="small" />
                 <Chip label={`${userCount} saved by you`} size="small" color="secondary" variant="outlined" />
               </Box>
@@ -386,8 +388,18 @@ export function LibraryView({
         <>
       <Card>
         <CardContent sx={{ py: 2 }}>
-          <Stack direction={{ xs: "column", md: "row" }} gap={1.25} alignItems={{ md: "center" }}>
+          <Box
+            sx={{
+              display: "grid",
+              gap: 1.25,
+              alignItems: "center",
+              gridTemplateColumns: { xs: "minmax(0, 1fr) minmax(0, 1fr)", md: "minmax(0, 1fr) auto auto auto auto auto" },
+              "& > .library-search": { gridColumn: { xs: "1 / -1", md: "auto" } }
+            }}
+          >
         <TextField
+          className="library-search"
+          inputProps={{ "aria-label": "Search puzzles" }}
           placeholder="Search names, packs, or tags"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -408,23 +420,37 @@ export function LibraryView({
             ) : undefined
           }}
         />
-        <Select size="small" value={typeFilter} onChange={handleTypeChange} sx={{ minWidth: 150 }}>
+        <Select
+          size="small"
+          value={typeFilter}
+          onChange={handleTypeChange}
+          sx={{ minWidth: { md: 150 } }}
+          SelectDisplayProps={{ "aria-label": "Puzzle type" } as HTMLAttributes<HTMLDivElement>}
+        >
           {types.map((type) => (
             <MenuItem key={type} value={type}>
               {type === "all" ? "All types" : type}
             </MenuItem>
           ))}
         </Select>
-        <Select size="small" value={sizeFilter} onChange={handleSizeChange} sx={{ minWidth: 130 }}>
+        <Select
+          size="small"
+          value={sizeFilter}
+          onChange={handleSizeChange}
+          sx={{ minWidth: { md: 130 } }}
+          SelectDisplayProps={{ "aria-label": "Board size" } as HTMLAttributes<HTMLDivElement>}
+        >
           {sizes.map((size) => (
             <MenuItem key={size} value={size}>
               {size === "all" ? "All sizes" : size}
             </MenuItem>
           ))}
         </Select>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ gridColumn: { xs: "1 / -1", md: "auto" } }}>
             {effectiveViewMode === "grid" && (
               <BoardViewToggle value={boardViewMode} onChange={setBoardViewMode} />
             )}
+            <Box sx={{ flex: 1, display: { md: "none" } }} />
             {!isMobile && (
               <ToggleButtonGroup
                 exclusive
@@ -444,7 +470,8 @@ export function LibraryView({
                 </IconButton>
               </span>
             </Tooltip>
-          </Stack>
+            </Stack>
+          </Box>
           <Box display="flex" gap={1} alignItems="center" flexWrap="wrap" mt={1.5}>
             <Typography variant="caption" color="text.secondary">
               Showing {filtered.length} of {entries.length}
@@ -465,7 +492,7 @@ export function LibraryView({
           <CardContent>
             {loading ? (
               <Box display="flex" justifyContent="center" py={4}>
-                <CircularProgress />
+                <CircularProgress aria-label="Loading puzzles" />
               </Box>
           ) : (
               <Table size="small">
@@ -503,7 +530,7 @@ export function LibraryView({
                       <TableCell>{entry.source}</TableCell>
                       <TableCell align="right">
                         <Box display="flex" gap={1} justifyContent="flex-end">
-                          <Button variant="contained" size="small" onClick={() => handleLoad(entry, { autoSolve: true })}>
+                          <Button variant="outlined" size="small" onClick={() => handleLoad(entry, { autoSolve: true })}>
                             Solve
                           </Button>
                           <Button variant="outlined" size="small" onClick={() => handleLoad(entry)}>
@@ -548,8 +575,7 @@ export function LibraryView({
         <Box
           display="grid"
           gridTemplateColumns={{
-            xs: "1fr",
-            sm: "repeat(2, minmax(0, 1fr))",
+            xs: "repeat(2, minmax(0, 1fr))",
             lg: "repeat(3, minmax(0, 1fr))",
             xl: "repeat(4, minmax(0, 1fr))"
           }}
@@ -569,11 +595,11 @@ export function LibraryView({
                 }}
               >
                 <CardActionArea onClick={() => handleLoad(entry)}>
-                  <CardContent>
+                  <CardContent sx={{ p: { xs: 1.25, sm: 2 } }}>
                     <Box
                       sx={{
                         width: "100%",
-                        minHeight: 160,
+                        minHeight: { xs: 120, sm: 160 },
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center"
@@ -628,11 +654,11 @@ export function LibraryView({
                     </Box>
                   </CardContent>
                 </CardActionArea>
-                <CardActions sx={{ px: 2, pb: 1.5, pt: 0, justifyContent: "space-between" }}>
+                <CardActions sx={{ px: { xs: 1.25, sm: 2 }, pb: 1.5, pt: 0, justifyContent: "space-between", flexWrap: "wrap", gap: 0.5 }}>
                   <Box display="flex" gap={0.5}>
                     <Button
                       size="small"
-                      variant="contained"
+                      variant="outlined"
                       startIcon={<AutoAwesome fontSize="small" />}
                       onClick={() => handleLoad(entry, { autoSolve: true })}
                     >

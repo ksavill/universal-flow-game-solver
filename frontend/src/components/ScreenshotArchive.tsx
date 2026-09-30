@@ -354,8 +354,8 @@ export function ScreenshotArchive({
 
   return (
     <Stack spacing={1.5}>
-      <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
-        <Typography variant="body2" color="text.secondary">
+      <Box display="flex" alignItems="center" justifyContent={{ xs: "flex-end", sm: "space-between" }} gap={1}>
+        <Typography variant="body2" color="text.secondary" sx={{ display: { xs: "none", sm: "block" } }}>
           {flaggedOnly
             ? "These screenshots were explicitly marked for follow-up. Review the input, stored errors, and any generated solution before unflagging them."
             : "Every uploaded screenshot is retained once and can be reprocessed through the current pipeline at any time."}
@@ -369,8 +369,16 @@ export function ScreenshotArchive({
           Refresh
         </Button>
       </Box>
-      <Stack direction={{ xs: "column", md: "row" }} spacing={1}>
+      <Box
+        sx={{
+          display: "grid",
+          gap: 1,
+          gridTemplateColumns: { xs: "minmax(0, 1fr) minmax(0, 1fr)", md: "minmax(0, 1fr) auto auto" },
+          "& > .archive-search": { gridColumn: { xs: "1 / -1", md: "auto" } }
+        }}
+      >
         <TextField
+          className="archive-search"
           label="Search screenshots"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -383,7 +391,7 @@ export function ScreenshotArchive({
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
           size="small"
-          sx={{ minWidth: 140 }}
+          sx={{ minWidth: { md: 140 } }}
         >
           <MenuItem value="all">All</MenuItem>
           <MenuItem value="solved">Solved</MenuItem>
@@ -396,12 +404,12 @@ export function ScreenshotArchive({
           value={sortOrder}
           onChange={(event) => setSortOrder(event.target.value as SortOrder)}
           size="small"
-          sx={{ minWidth: 160 }}
+          sx={{ minWidth: { md: 160 } }}
         >
           <MenuItem value="newest">Newest first</MenuItem>
           <MenuItem value="oldest">Oldest first</MenuItem>
         </TextField>
-      </Stack>
+      </Box>
       <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
         <FormControlLabel
           control={
@@ -477,8 +485,8 @@ export function ScreenshotArchive({
                 sx={{
                   display: "grid",
                   gridTemplateColumns: {
-                    xs: "32px 64px minmax(0, 1fr)",
-                    sm: "32px 72px minmax(0, 1fr) auto"
+                    xs: "auto 64px minmax(0, 1fr)",
+                    sm: "auto 72px minmax(0, 1fr) auto"
                   },
                   alignItems: "center",
                   gap: 1.25,
@@ -614,7 +622,7 @@ export function ScreenshotArchive({
                   )}
                   <Button
                     size="small"
-                    variant="contained"
+                    variant="outlined"
                     onClick={() => void handleOpen(entry)}
                     disabled={busyId === entry.id || bulkBusy !== null || entry.status === "failed"}
                   >
@@ -651,7 +659,7 @@ export function ScreenshotArchive({
                     <Collapse in={expanded} unmountOnExit>
                       {solve === "loading" || solve === undefined ? (
                         <Box display="flex" justifyContent="center" py={2}>
-                          <CircularProgress size={20} />
+                          <CircularProgress size={20} aria-label="Loading solution" />
                         </Box>
                       ) : solve === "error" ? (
                         <Typography variant="caption" color="error.main" display="block" py={1}>
