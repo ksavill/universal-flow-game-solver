@@ -21,6 +21,9 @@ let started = false;
 // Deliberately do not remember this opt-in: no Google requests or automatic
 // consent overlays on a fresh page visit, and no requests at all on the solver.
 if (advertising.enabled && production && aside) aside.hidden = false;
+document.getElementById("keep-disabled")?.addEventListener("click", () => {
+  if (aside) aside.hidden = true;
+});
 document.getElementById("enable-ad")?.addEventListener("click", () => {
   if (started || !advertising.enabled || !production || !slot || !intro || !status || !disable) return;
   started = true;

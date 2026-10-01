@@ -9,7 +9,9 @@ guide unit is `7269853953` (Flow Puzzle Solver — Guide — 300x250).
 - `/guide/` is a separate, static informational document with one ad placement.
   It is beside the article on desktop and below the article on phones. Below
   340 CSS pixels the placement is hidden to avoid horizontal scrolling.
-- Visitors explicitly select **Show optional ad** to load the Google tag. That
+- Visitors select **Allow advertising services** in neutral privacy preferences
+  to load the Google tag, or **Keep disabled** to dismiss them. Do not ask users
+  to support the site by viewing or clicking ads. The service-loading
   choice is not persisted. Fresh visits make no Google advertising requests,
   so a consent dialog cannot unexpectedly interrupt reading or puzzle solving.
 - Google's published European and US privacy messages are delivered through
