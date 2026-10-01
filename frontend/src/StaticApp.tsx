@@ -75,7 +75,7 @@ export default function StaticApp() {
     </Container>
     <Stack component="footer" alignItems="center" spacing={1} sx={{ px: 2, pt: 2, pb: 20 }}>
       <Typography variant="body2" color="text.secondary">
-        Created by <Box component="a" href="https://bit-universe.net/" target="_blank" rel="noopener noreferrer" sx={{ color: "inherit", textUnderlineOffset: "3px" }}>Kevin Savill</Box>
+        Created by Kevin Savill
       </Typography>
       <Stack direction="row" justifyContent="center" spacing={2}>
         <Button component="a" href="/guide/" target="_blank" rel="noopener noreferrer" color="inherit">Puzzle guide ↗</Button>
