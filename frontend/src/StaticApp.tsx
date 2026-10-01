@@ -69,8 +69,13 @@ export default function StaticApp() {
         <Typography variant="h6" component="h2">Browser requirements</Typography>
         <Typography>Use a current browser with WebAssembly, shared memory and gzip decompression support. Large puzzles may need more time and memory, especially on phones. If local storage is unavailable, export your puzzle instead.</Typography>
         <Button onClick={() => navigate("solve")} sx={{ alignSelf: "flex-start" }}>Back to solver</Button>
+        <Button component="a" href="/guide/" target="_blank" rel="noopener noreferrer" sx={{ alignSelf: "flex-start" }}>Read the full puzzle guide (opens a new tab)</Button>
       </Stack>}
       {route === "not-found" && <NotFoundView requestedPath={path} message="This page is not available in the device-only edition. Open a .flow file or choose a puzzle saved in this browser." onBack={() => window.history.length > 1 ? window.history.back() : navigate("solve")} onHome={() => navigate("solve")} />}
     </Container>
+    <Stack component="footer" direction="row" justifyContent="center" spacing={2} sx={{ px: 2, pt: 2, pb: 20 }}>
+      <Button component="a" href="/guide/" target="_blank" rel="noopener noreferrer" color="inherit">Puzzle guide ↗</Button>
+      <Button component="a" href="/privacy/" target="_blank" rel="noopener noreferrer" color="inherit">Privacy ↗</Button>
+    </Stack>
   </Box>;
 }

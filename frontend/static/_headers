@@ -13,3 +13,12 @@
 
 /local-runtime/manifest.json
   Cache-Control: no-cache
+
+# These are separate informational documents, not solver SPA routes.
+/guide/*
+  ! Cross-Origin-Embedder-Policy
+  ! Content-Security-Policy
+  X-Frame-Options: DENY
+
+/privacy/*
+  ! Cross-Origin-Embedder-Policy

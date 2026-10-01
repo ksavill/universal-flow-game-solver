@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 function isolateLocalPrototype(request: IncomingMessage, response: ServerResponse, next: () => void) {
   const path = request.url?.split("?")[0];
@@ -18,6 +19,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
   const deviceOnly = mode === "static";
   const isolation = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+    if (/^\/(guide|privacy)(\/|$)/.test(request.url?.split("?")[0] ?? "")) {
+      next();
+      return;
+    }
     if (deviceOnly) {
       response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
       response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
@@ -31,6 +36,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), {
       name: "isolate-local-prototype",
+      transformIndexHtml() {
+        if (!deviceOnly) return;
+        return [{ tag: "meta", attrs: { name: "google-adsense-account", content: "ca-pub-9792422128121970" }, injectTo: "head" }];
+      },
       configureServer(server) { server.middlewares.use(isolation); },
       configurePreviewServer(server) { server.middlewares.use(isolation); },
       generateBundle(_options, bundle) {
@@ -45,7 +54,14 @@ export default defineConfig(({ mode }) => {
     }],
     worker: { format: "es" },
     define: { global: "globalThis" },
-    build: { outDir: deviceOnly ? "dist-static" : "dist", manifest: deviceOnly },
+    build: {
+      outDir: deviceOnly ? "dist-static" : "dist", manifest: deviceOnly,
+      rollupOptions: deviceOnly ? { input: {
+        app: fileURLToPath(new URL("./index.html", import.meta.url)),
+        guide: fileURLToPath(new URL("./guide/index.html", import.meta.url)),
+        privacy: fileURLToPath(new URL("./privacy/index.html", import.meta.url))
+      } } : undefined
+    },
     server: {
       port: 5173,
       host: true,

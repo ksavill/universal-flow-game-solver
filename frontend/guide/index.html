@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://*.googlesyndication.com https://*.google.com https://*.gstatic.com https://*.doubleclick.net; frame-src https:; connect-src https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' https:; object-src 'none'; base-uri 'self'; form-action 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Learn how to import, check and solve a Flow-style puzzle privately in your browser, with tips for screenshots, photos and saved puzzles." />
+  <meta name="theme-color" content="#11131b" />
+  <link rel="canonical" href="https://flowpuzzlesolver.net/guide/" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <title>Puzzle guide · Flow Puzzle Solver</title>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to guide</a>
+  <header><a class="brand" href="/">Flow Puzzle Solver</a><nav aria-label="Main navigation"><a href="/">Solver</a><a href="/guide/" aria-current="page">Guide</a><a href="/privacy/">Privacy</a></nav></header>
+  <main id="content">
+    <div class="intro"><p class="eyebrow">A little help, when you need it</p><h1>From screenshot<br>to solved puzzle.</h1><p class="lead">Check the dots, connect the pairs, and see the path forward. Your puzzle images are processed on your device.</p><a class="button" href="/">Open the solver <span aria-hidden="true">↗</span></a></div>
+    <div class="reading-layout">
+      <article>
+        <section><h2>Start with a clear board</h2><p>Choose a JPEG or PNG screenshot of an unplayed puzzle. Include the entire grid and every colored dot. On a phone, you can also take a photo of another screen. A screenshot usually gives the cleanest result because it avoids glare and perspective distortion.</p><ol><li>Open the solver and select <strong>Choose image</strong>, take a photo, or paste a screenshot from your clipboard.</li><li>If the outline needs adjustment, move its four corners to the board edges. Count the rows and columns before continuing.</li><li>Compare the detected dots with the original image. Tap a cell to correct its color or remove an extra dot.</li><li>Once each color has exactly two dots, select <strong>Solve</strong>.</li></ol><p>Try the included demo first if you want to see the process before importing your own image.</p></section>
+        <section><h2>What makes a valid puzzle?</h2><p>Each color needs two endpoints. A solution connects each pair using horizontal and vertical steps, without two paths occupying the same cell. When filling is required, every available cell must belong to a path. A hole is an unavailable cell, not a blank square that a path must cover.</p><p>The browser edition supports square and rectangular grids from 2 × 2 to 20 × 20, including holes entered manually. It does not yet support bridges, walls, warps, hexagonal boards, circular boards or text recognition. A screenshot of an unsupported variant may look plausible after detection but represent different rules.</p></section>
+        <section><h2>Check the dots before solving</h2><p>An extra dot, a missing endpoint or an incorrect row count can turn a solvable board into an impossible one. Review all pairs, especially similar colors and dots close to bright reflections. The editor highlights colors that do not have exactly two endpoints.</p><p>If a photograph is hard to read, take another with the screen facing the camera, reduce reflections and include all four corners. If a screenshot includes drawn paths, clear the puzzle in its original game before capturing it again.</p></section>
+        <section><h2>When a solve takes longer</h2><p>The first solve downloads the solver. After that, the search time depends on the arrangement of endpoints and the amount of empty space, not just the board size. A larger board can sometimes be easier than a smaller one.</p><p>A timeout means the search ran out of time; it does not prove there is no solution. Recheck the board and try again with more time if available. <strong>Stop</strong> ends the current operation and leaves your board available for another attempt. Processing details show the current stage and elapsed time; the search has no reliable percentage-complete estimate.</p></section>
+        <section><h2>Save a puzzle for later</h2><p>Saved puzzles stay in this browser on this device. Use the Library to reopen them, or export a <code>.flow</code> file to keep a separate copy. Import that file on another device to continue there. Clearing site data can erase the local library, so export anything you want to keep.</p><p>You can also start with <strong>Blank board</strong> instead of an image. Set its dimensions, place both dots for each color and mark any holes, then solve.</p></section>
+        <section><h2>Privacy and problem reports</h2><p>The solver processes images locally and does not send your puzzle images to a solving server. Optional problem reports can be previewed, saved locally or downloaded. They are not submitted automatically.</p><p>Advertising, when enabled on this guide, is separate from the solver and never unlocks a puzzle or a result. Read our <a href="/privacy/">privacy and advertising information</a> for details.</p></section>
+        <section class="end-note"><h2>Ready to try it?</h2><p>Start with the demo or bring your own screenshot.</p><a class="button" href="/">Solve a puzzle <span aria-hidden="true">↗</span></a></section>
+      </article>
+      <aside class="ad-space" aria-label="Advertisement" hidden>
+        <span class="ad-label">Advertisement</span>
+        <div id="ad-intro"><p>Help support this free tool with an optional ad.</p><p class="muted">Google may ask for privacy choices. Reading and solving are always available.</p><button id="enable-ad" type="button">Show optional ad</button></div>
+        <div id="guide-ad"></div>
+        <p id="ad-status" role="status" class="muted"></p>
+        <button id="privacy-choices" class="text-button" type="button" hidden>Privacy choices</button>
+        <button id="disable-ad" class="text-button" type="button" hidden>Turn off ads</button>
+      </aside>
+    </div>
+  </main>
+  <footer><span>An independent tool for Flow / Numberlink-style puzzles.</span><a href="/privacy/">Privacy &amp; advertising</a><a href="https://github.com/ksavill/universal-flow-game-solver/issues" rel="noopener noreferrer">Report an issue</a></footer>
+  <script type="module" src="/src/publishing/guide.ts"></script>
+</body>
+</html>

@@ -34,6 +34,26 @@ for (const file of files.filter(file => file.path.endsWith(".js"))) {
 }
 const viteManifest = JSON.parse(readFileSync(join(root, ".vite/manifest.json"), "utf8"));
 assert(Object.keys(viteManifest).some(key => key.endsWith("StaticApp.tsx")), "Static application entry is missing.");
+// Regressions here could put third-party code beside locally saved puzzle data
+// or remove the shared-memory security boundary needed by the solver.
+const visited = new Set();
+function auditSolverEntry(key) {
+  if (visited.has(key)) return;
+  visited.add(key);
+  const entry = viteManifest[key];
+  assert(entry, `Missing solver dependency: ${key}`);
+  assert(!/guide|privacy|publishing|advertising/i.test(key), `Publishing code leaked into the solver: ${key}`);
+  const code = readFileSync(join(root, entry.file), "utf8");
+  assert(!/adsbygoogle|googlesyndication|googlefc/.test(code), `Advertising runtime leaked into ${entry.file}`);
+  for (const child of [...(entry.imports || []), ...(entry.dynamicImports || [])]) auditSolverEntry(child);
+}
+auditSolverEntry("index.html");
+for (const page of ["index.html", "guide/index.html", "privacy/index.html"]) {
+  const html = readFileSync(join(root, page), "utf8");
+  assert(html.includes('name="google-adsense-account" content="ca-pub-9792422128121970"'), `Missing publisher verification in ${page}`);
+}
+assert.equal(readFileSync(join(root, "ads.txt"), "utf8").trim(), "google.com, pub-9792422128121970, DIRECT, f08c47fec0942fa0");
+assert(readFileSync(join(root, "guide/index.html"), "utf8").includes('http-equiv="Content-Security-Policy"'), "Guide needs its own CSP when its response policy is detached.");
 const largest = [...files].sort((a, b) => b.size - a.size)[0];
 console.log(JSON.stringify({
   files: files.length,
