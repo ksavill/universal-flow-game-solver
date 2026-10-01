@@ -9,7 +9,7 @@ import struct
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Hashable, Iterable, Optional, Sequence, Tuple
 
 from PIL import Image, ImageOps
@@ -23,7 +23,7 @@ else:  # pragma: no cover - depends on the optional package
     HEIF_DECODER_AVAILABLE = True
 
 
-PHOTO_PREPROCESSING_VERSION = "camera-v3"
+PHOTO_PREPROCESSING_VERSION = "camera-v4"
 MAX_CAMERA_DECODE_PIXELS = 80_000_000
 # Quality metrics are measured after resampling the prepared board to this
 # short side so thresholds do not drift with camera resolution.
@@ -589,6 +589,169 @@ def _hough_candidate(
     return PhotoQuadCandidate(full, score, "hough-lines", metrics)
 
 
+# A board outline needs this many neighbouring same-sized cells.
+BOARD_OUTLINE_MIN_CELLS = 6
+# Grow the traced cell hull (a fraction of the board per side) so the outer
+# grid lines sit inside the rectified board, where lattice detection sees them.
+BOARD_OUTLINE_EXPANSION = 0.015
+
+
+def _fit_board_quad(points: Any, *, cv2: Any, np: Any) -> Optional[Any]:
+    """Four corners of the convex hull of ``points``.
+
+    When a corner cell is missing the hull has a short cut across that
+    corner; intersecting the four longest hull edges restores it.
+    """
+
+    hull = cv2.convexHull(np.asarray(points, dtype=np.float32).reshape(-1, 1, 2))
+    perimeter = float(cv2.arcLength(hull, True))
+    for epsilon_ratio in (0.01, 0.02, 0.03, 0.045):
+        approx = cv2.approxPolyDP(hull, epsilon_ratio * perimeter, True).reshape(-1, 2)
+        if len(approx) == 4:
+            return approx.astype(np.float32)
+        if len(approx) < 4:
+            break
+    polygon = cv2.approxPolyDP(hull, 0.01 * perimeter, True).reshape(-1, 2).astype(np.float64)
+    count = len(polygon)
+    if count < 4:
+        return None
+    lengths = sorted(
+        ((_line_length(polygon[index], polygon[(index + 1) % count]), index) for index in range(count)),
+        reverse=True,
+    )
+    sides = sorted(index for _length, index in lengths[:4])
+    lines = [
+        (polygon[index][0], polygon[index][1], polygon[(index + 1) % count][0], polygon[(index + 1) % count][1])
+        for index in sides
+    ]
+    corners = [_line_intersection(lines[index], lines[(index + 1) % 4]) for index in range(4)]
+    if any(point is None for point in corners):
+        return None
+    return np.asarray(corners, dtype=np.float32)
+
+
+def _board_outline_candidates(
+    rgb: Any,
+    *,
+    offset_x: float,
+    offset_y: float,
+    source_scale: float,
+    cv2: Any,
+    np: Any,
+) -> list[PhotoQuadCandidate]:
+    """Board outlines traced from the grid cells themselves, one per line mask.
+
+    On black-front phones the app's black background meets a black bezel, so
+    the screen outline is never proposed.  The board's cells are still dark
+    quadrilaterals of one size enclosed by brighter grid lines, and the hull
+    of the largest group of neighbouring same-sized cells is the board.
+    """
+
+    height, width = rgb.shape[:2]
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    short_side = min(height, width)
+    min_cell_area = (short_side * 0.025) ** 2
+    max_cell_area = (short_side * 0.3) ** 2
+    smoothed = cv2.GaussianBlur(gray, (3, 3), 0)
+    block = max(11, int(short_side * 0.02) | 1)
+    line_masks: list[tuple[str, Any]] = [
+        (f"adaptive{offset}", cv2.adaptiveThreshold(smoothed, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, offset))
+        for offset in (-3, -6)
+    ]
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    line_masks.append(
+        ("canny", cv2.dilate(cv2.Canny(cv2.GaussianBlur(clahe, (5, 5), 0), 24, 72), np.ones((3, 3), np.uint8)))
+    )
+    support_edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 24, 72)
+
+    candidates: list[PhotoQuadCandidate] = []
+    for mask_name, lines in line_masks:
+        contours, _hierarchy = cv2.findContours(cv2.bitwise_not(lines), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        centers: list[Any] = []
+        areas: list[float] = []
+        hulls: list[Any] = []
+        for contour in contours:
+            area = float(cv2.contourArea(contour))
+            if not min_cell_area <= area <= max_cell_area:
+                continue
+            (center_x, center_y), (rect_width, rect_height), _angle = cv2.minAreaRect(contour)
+            if rect_width <= 0 or rect_height <= 0 or min(rect_width, rect_height) / max(rect_width, rect_height) < 0.5:
+                continue
+            hull = cv2.convexHull(contour)
+            if area / (rect_width * rect_height) < 0.72 or area / max(1.0, float(cv2.contourArea(hull))) < 0.85:
+                continue
+            if len(cv2.approxPolyDP(hull, 0.06 * cv2.arcLength(hull, True), True)) != 4:
+                continue
+            centers.append((center_x, center_y))
+            areas.append(area)
+            hulls.append(hull.reshape(-1, 2))
+        if len(centers) < BOARD_OUTLINE_MIN_CELLS:
+            continue
+        # Group neighbouring cells of similar size (union-find).
+        center_array = np.asarray(centers, dtype=np.float32)
+        area_array = np.asarray(areas, dtype=np.float32)
+        parent = list(range(len(centers)))
+
+        def root(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        for index in range(len(centers)):
+            distance = np.linalg.norm(center_array - center_array[index], axis=1)
+            ratio = area_array / area_array[index]
+            reach = 1.6 * math.sqrt(float(area_array[index]))
+            for other in np.nonzero((distance > 0) & (distance < reach) & (ratio > 0.55) & (ratio < 1.8))[0]:
+                parent[root(int(other))] = root(index)
+        groups: dict[int, list[int]] = {}
+        for index in range(len(centers)):
+            groups.setdefault(root(index), []).append(index)
+        cells = max(groups.values(), key=len)
+        if len(cells) < BOARD_OUTLINE_MIN_CELLS:
+            continue
+        quad = _fit_board_quad(np.concatenate([hulls[index] for index in cells]), cv2=cv2, np=np)
+        if quad is None:
+            continue
+        ordered = _order_points(quad, np)
+        unit = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
+        grow = BOARD_OUTLINE_EXPANSION
+        ordered = cv2.perspectiveTransform(
+            np.float32([[-grow, -grow], [1 + grow, -grow], [1 + grow, 1 + grow], [-grow, 1 + grow]]).reshape(-1, 1, 2),
+            cv2.getPerspectiveTransform(unit, ordered),
+        ).reshape(-1, 2).astype(np.float32)
+        score, metrics = _candidate_metrics(
+            ordered,
+            edges=support_edges,
+            image_width=width,
+            image_height=height,
+            contour_area=None,
+            cv2=cv2,
+            np=np,
+        )
+        if score <= 0.0:
+            # Too small or faint for a display outline; the cells still
+            # describe the board, so keep it with no display score.
+            metrics = {"area_ratio": abs(float(cv2.contourArea(ordered.reshape(-1, 1, 2)))) / float(max(1, width * height))}
+            score = 0.0
+        else:
+            # A board is much smaller than a display, so its evidence is the
+            # number of cells traced rather than the outline's area.
+            score += 0.28 * (min(1.0, len(cells) / 16.0) - min(1.0, float(metrics["area_ratio"]) / 0.58))
+        candidates.append(
+            PhotoQuadCandidate(
+                corners=tuple(
+                    (float(point[0]) / source_scale + offset_x, float(point[1]) / source_scale + offset_y)
+                    for point in ordered
+                ),
+                score=score,
+                source=f"board-cells-{mask_name}",
+                metrics={**metrics, "cells": float(len(cells))},
+            )
+        )
+    return candidates
+
+
 def _corner_distance(first: PhotoQuadCandidate, second: PhotoQuadCandidate) -> float:
     return sum(
         math.hypot(a[0] - b[0], a[1] - b[1])
@@ -1038,6 +1201,298 @@ def _board_ranking_is_confident(ranked: Sequence[tuple[float, PhotoQuadCandidate
     return bool(ranked) and ranked[0][0] >= 0.48 and float(ranked[0][2].get("score", 0.0)) >= 0.38
 
 
+# Snapping a board outline onto exactly the requested number of grid lines.
+# Hough runs miss faint board borders (warp boards draw them dashed) and pick
+# up decorative lines past them (warp "shadow" extensions, header glyphs), so
+# the lattice envelope is often one cell short, long, or shifted.  With the
+# grid size known, fit rows+1 / cols+1 evenly spaced lines to per-line edge
+# evidence in a padded, rectified view instead.
+GRID_SNAP_CELL_PX = 40.0
+GRID_SNAP_MARGIN_CELLS = 1.5
+GRID_SNAP_PITCH_TOLERANCE = 0.15
+GRID_SNAP_TOP_CANDIDATES = 4
+# A low percentile of ridge contrast along a line lands in the gaps of a
+# dashed line but stays on the stroke of a solid one.
+GRID_SNAP_CONTRAST_PERCENTILE = 25.0
+# Every fitted line needs this much edge coverage, and each axis this mean.
+GRID_SNAP_MIN_LINE_EVIDENCE = 0.30
+GRID_SNAP_MIN_MEAN_EVIDENCE = 0.55
+# Lower-ranked outlines must fit much more cleanly than the top one.
+GRID_SNAP_STRICT_LINE_EVIDENCE = 0.50
+GRID_SNAP_STRICT_MEAN_EVIDENCE = 0.85
+# Best fit must beat any fit shifted by half a pitch or more by this much
+# summed evidence; otherwise the placement is ambiguous and is left alone.
+GRID_SNAP_MIN_MARGIN = 0.10
+# Keep the original outline when the snap only moves it by sub-cell noise so
+# the hinted and unhinted boards stay identical.
+GRID_SNAP_KEEP_WITHIN_CELLS = 0.25
+
+
+def _grid_line_profiles(
+    gray: Any,
+    edges: Any,
+    valid: Any,
+    span: tuple[float, float],
+    *,
+    vertical: bool,
+    cv2: Any,
+    np: Any,
+) -> tuple[Any, Any]:
+    """Per-position line evidence across ``span``.
+
+    Returns (coverage, contrast): the fraction of the span with an edge within
+    two pixels, and a low percentile of ridge contrast.  Dashed lines still produce
+    edges along most of their length, but their gaps pull a low contrast
+    percentile far below that of solid lines, which is what separates a warp board's dashed border from
+    its solid interior lines.
+    """
+
+    if not vertical:
+        gray, edges, valid = gray.T, edges.T, valid.T
+    start = int(max(0, math.floor(span[0])))
+    stop = int(min(gray.shape[0], math.ceil(span[1])))
+    if stop - start < 4:
+        zeros = np.zeros(gray.shape[1], dtype=np.float64)
+        return zeros, zeros
+    inside = valid[start:stop, :] > 0
+    counted = inside.sum(axis=0)
+    hits = cv2.dilate(np.ascontiguousarray(edges), np.ones((1, 5), np.uint8))[start:stop, :] > 0
+    coverage = (hits & inside).sum(axis=0) / np.maximum(1, counted)
+    coverage[counted < 0.5 * (stop - start)] = 0.0
+    padded = np.pad(coverage.astype(np.float64), 1)
+    coverage = np.maximum(np.maximum(padded[:-2], padded[1:-1]), padded[2:])
+
+    values = gray.astype(np.float32)
+    ridge = np.abs(values - 0.5 * (np.roll(values, 3, axis=1) + np.roll(values, -3, axis=1)))
+    ridge = np.maximum(np.maximum(np.roll(ridge, 1, axis=1), ridge), np.roll(ridge, -1, axis=1))
+    # Per-column low percentile over on-display pixels only (sorting once is
+    # an order of magnitude faster than np.nanpercentile here).
+    ordered = np.sort(np.where(inside, ridge[start:stop, :], np.inf), axis=0)
+    rank = np.floor((GRID_SNAP_CONTRAST_PERCENTILE / 100.0) * np.maximum(0, counted - 1)).astype(int)
+    contrast = ordered[rank, np.arange(ordered.shape[1])].astype(np.float64)
+    contrast[counted == 0] = 0.0
+    return coverage, contrast
+
+
+def _fit_grid_lines(
+    coverage: Any,
+    contrast: Any,
+    cells: int,
+    pitch_estimate: float,
+    *,
+    np: Any,
+) -> Optional[tuple[float, float, Any, float]]:
+    """Fit ``cells + 1`` evenly spaced lines; returns (origin, pitch, evidence, margin)."""
+
+    size = int(coverage.shape[0])
+    steps = np.arange(cells + 1)
+    best: Optional[tuple[float, float, float]] = None
+    table: list[tuple[Any, Any]] = []
+    for pitch in np.linspace(
+        pitch_estimate * (1.0 - GRID_SNAP_PITCH_TOLERANCE),
+        pitch_estimate * (1.0 + GRID_SNAP_PITCH_TOLERANCE),
+        31,
+    ):
+        origins = np.arange(0.0, size - 1 - pitch * cells, 1.0)
+        if origins.size == 0:
+            continue
+        index = np.rint(origins[:, None] + pitch * steps[None, :]).astype(int)
+        score = coverage[index].sum(axis=1)
+        if cells >= 3:
+            # Interior lines are solid on every board; a window shifted onto
+            # a dashed border or shadow line loses contrast inside.
+            inner = contrast[index[:, 1:-1]]
+            reference = np.median(inner, axis=1, keepdims=True)
+            score = score + np.clip(inner / np.maximum(reference, 1e-6), 0.0, 1.0).sum(axis=1)
+        table.append((origins, score))
+        position = int(np.argmax(score))
+        if best is None or float(score[position]) > best[0] + 1e-9:
+            best = (float(score[position]), float(origins[position]), float(pitch))
+    if best is None:
+        return None
+    best_score, origin, pitch = best
+    runner_up = 0.0
+    for origins, score in table:
+        away = np.abs(origins - origin) >= 0.5 * pitch
+        if away.any():
+            runner_up = max(runner_up, float(score[away].max()))
+    margin = best_score - runner_up
+    # The contrast term picks which lines form the board; place them on the
+    # edge evidence alone so the result is not biased by the ridge filter.
+    polished: Optional[tuple[float, float, float]] = None
+    for candidate_pitch in np.linspace(pitch * 0.97, pitch * 1.03, 13):
+        origins = np.arange(origin - 0.25 * pitch, origin + 0.25 * pitch + 0.5, 0.5)
+        origins = origins[(origins >= 0) & (origins + candidate_pitch * cells <= size - 1)]
+        if origins.size == 0:
+            continue
+        index = np.rint(origins[:, None] + candidate_pitch * steps[None, :]).astype(int)
+        score = coverage[index].sum(axis=1)
+        position = int(np.argmax(score))
+        if polished is None or float(score[position]) > polished[0] + 1e-9:
+            polished = (float(score[position]), float(origins[position]), float(candidate_pitch))
+    if polished is not None:
+        origin, pitch = polished[1], polished[2]
+    index = np.rint(origin + pitch * steps).astype(int)
+    return origin, pitch, coverage[index], margin
+
+
+def _snap_board_to_expected_grid(
+    image: Image.Image,
+    corners: Sequence[Sequence[float]],
+    lattice: dict[str, float],
+    expected_grid: tuple[int, int],
+    *,
+    cv2: Any,
+    np: Any,
+) -> Optional[tuple[list[tuple[float, float]], dict[str, float]]]:
+    """Corners of exactly ``expected_grid`` cells near ``corners``, or None."""
+
+    rows, cols = int(expected_grid[0]), int(expected_grid[1])
+    if rows < 2 or cols < 2:
+        return None
+    pitch_x = float(lattice.get("pitch_x_fraction", 0.0) or 0.0)
+    pitch_y = float(lattice.get("pitch_y_fraction", 0.0) or 0.0)
+    if pitch_x <= 0.0 or pitch_y <= 0.0:
+        pitch_x, pitch_y = 1.0 / cols, 1.0 / rows
+    cells_x, cells_y = 1.0 / pitch_x, 1.0 / pitch_y
+    if not (0.5 * cols <= cells_x <= 1.6 * cols + 2 and 0.5 * rows <= cells_y <= 1.6 * rows + 2):
+        return None
+    # Pad by the missing cells plus a margin so a board found one or two
+    # cells short (or shifted) still has its true border inside the view.
+    pad_x = max(0.0, cols - cells_x) + GRID_SNAP_MARGIN_CELLS
+    pad_y = max(0.0, rows - cells_y) + GRID_SNAP_MARGIN_CELLS
+    cell = GRID_SNAP_CELL_PX
+    width = int(round((cells_x + 2 * pad_x) * cell))
+    height = int(round((cells_y + 2 * pad_y) * cell))
+    quad = _order_points(np.asarray(corners, dtype=np.float32), np)
+    unit = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
+    to_display = cv2.getPerspectiveTransform(unit, quad)
+    local = np.float32(
+        [
+            [-pad_x * pitch_x, -pad_y * pitch_y],
+            [1 + pad_x * pitch_x, -pad_y * pitch_y],
+            [1 + pad_x * pitch_x, 1 + pad_y * pitch_y],
+            [-pad_x * pitch_x, 1 + pad_y * pitch_y],
+        ]
+    ).reshape(-1, 1, 2)
+    expanded = cv2.perspectiveTransform(local, to_display).reshape(-1, 2).astype(np.float32)
+    view_corners = np.float32([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]])
+    matrix = cv2.getPerspectiveTransform(expanded, view_corners)
+    rgb = np.asarray(image.convert("RGB"))
+    view = cv2.warpPerspective(rgb, matrix, (width, height), flags=cv2.INTER_AREA, borderMode=cv2.BORDER_REPLICATE)
+    # Pixels outside the display are ignored rather than read as a border.
+    valid = cv2.warpPerspective(
+        np.full(rgb.shape[:2], 255, np.uint8),
+        matrix,
+        (width, height),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    valid = cv2.erode(valid, np.ones((7, 7), np.uint8))
+    gray = cv2.cvtColor(view, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 22, 85)
+
+    x_span = (pad_x * cell, (pad_x + cells_x) * cell)
+    y_span = (pad_y * cell, (pad_y + cells_y) * cell)
+    fit_x = fit_y = None
+    # Each axis measures its lines across the other axis's current extent.
+    for _ in range(2):
+        fit_x = _fit_grid_lines(
+            *_grid_line_profiles(gray, edges, valid, y_span, vertical=True, cv2=cv2, np=np), cols, cell, np=np
+        )
+        if fit_x is None:
+            return None
+        x_span = (fit_x[0], fit_x[0] + cols * fit_x[1])
+        fit_y = _fit_grid_lines(
+            *_grid_line_profiles(gray, edges, valid, x_span, vertical=False, cv2=cv2, np=np), rows, cell, np=np
+        )
+        if fit_y is None:
+            return None
+        y_span = (fit_y[0], fit_y[0] + rows * fit_y[1])
+    evidence_x, evidence_y = fit_x[2], fit_y[2]
+    info = {
+        "min_line_evidence": round(float(min(evidence_x.min(), evidence_y.min())), 4),
+        "mean_evidence": round(float(min(evidence_x.mean(), evidence_y.mean())), 4),
+        "margin": round(float(min(fit_x[3], fit_y[3])), 4),
+        "pitch_ratio": round(float(fit_x[1] / fit_y[1]), 4),
+    }
+    if (
+        info["min_line_evidence"] < GRID_SNAP_MIN_LINE_EVIDENCE
+        or info["mean_evidence"] < GRID_SNAP_MIN_MEAN_EVIDENCE
+        or info["margin"] < GRID_SNAP_MIN_MARGIN
+        or not 0.85 <= info["pitch_ratio"] <= 1.18  # cells are square
+    ):
+        return None
+    points = np.float32(
+        [[x_span[0], y_span[0]], [x_span[1], y_span[0]], [x_span[1], y_span[1]], [x_span[0], y_span[1]]]
+    ).reshape(-1, 1, 2)
+    snapped = cv2.perspectiveTransform(points, np.linalg.inv(matrix)).reshape(-1, 2)
+    return [(float(x), float(y)) for x, y in snapped], info
+
+
+def _snapped_board_choice(
+    image: Image.Image,
+    ranked: Sequence[tuple[float, PhotoQuadCandidate, dict[str, float]]],
+    expected_grid: tuple[int, int],
+    *,
+    cv2: Any,
+    np: Any,
+) -> Optional[tuple[float, PhotoQuadCandidate, dict[str, float], dict[str, float]]]:
+    """Snap the best-ranked outlines to the expected grid and keep the cleanest fit."""
+
+    rows, cols = int(expected_grid[0]), int(expected_grid[1])
+    best: Optional[tuple[float, float, PhotoQuadCandidate, dict[str, float], dict[str, float]]] = None
+    for position, (combined, candidate, lattice) in enumerate(ranked[:GRID_SNAP_TOP_CANDIDATES]):
+        result = _snap_board_to_expected_grid(image, candidate.corners, lattice, expected_grid, cv2=cv2, np=np)
+        if result is None:
+            continue
+        corners, info = result
+        if position > 0 and (
+            info["mean_evidence"] < GRID_SNAP_STRICT_MEAN_EVIDENCE
+            or info["min_line_evidence"] < GRID_SNAP_STRICT_LINE_EVIDENCE
+        ):
+            continue
+        if best is not None and info["mean_evidence"] <= best[0] + 0.02:
+            continue
+        snapped = PhotoQuadCandidate(
+            corners=tuple(corners),
+            score=candidate.score,
+            source=f"{candidate.source}+grid-snap",
+            metrics=dict(candidate.metrics),
+        )
+        snapped_lattice = dict(lattice)
+        snapped_lattice.update(
+            {
+                "vertical_lines": float(cols + 1),
+                "horizontal_lines": float(rows + 1),
+                "pitch_x_fraction": 1.0 / cols,
+                "pitch_y_fraction": 1.0 / rows,
+                "x_min_fraction": 0.0,
+                "x_max_fraction": 1.0,
+                "y_min_fraction": 0.0,
+                "y_max_fraction": 1.0,
+                "x_coverage": 1.0,
+                "y_coverage": 1.0,
+                "regularity": max(0.55, float(lattice.get("regularity", 0.0))),
+                "target_aspect_ratio": float(cols) / float(rows),
+            }
+        )
+        best = (info["mean_evidence"], combined, snapped, snapped_lattice, {**info, "rank": float(position)})
+    if best is None:
+        return None
+    _quality, combined, snapped, snapped_lattice, info = best
+    original = _order_points(np.asarray(ranked[0][1].corners, dtype=np.float32), np).astype(np.float64)
+    moved = np.asarray(snapped.corners, dtype=np.float64)
+    cell = min(
+        float(np.linalg.norm(moved[1] - moved[0])) / cols,
+        float(np.linalg.norm(moved[3] - moved[0])) / rows,
+    )
+    if float(np.abs(moved - original).max()) < GRID_SNAP_KEEP_WITHIN_CELLS * cell:
+        return None
+    return combined, snapped, snapped_lattice, info
+
+
 # Warp detection only trusts border gaps when it can see at least 0.28 cells
 # outside the outer grid lines (image_utils.detect_warp_edges); the board
 # itself is cropped at those lines, so warps get their own padded view.
@@ -1084,7 +1539,256 @@ def _board_context_view(
     return Image.fromarray(warped, mode="RGB")
 
 
+# Minimum fraction of each fitted grid line's length that must show a thin
+# bright ridge (weakest line) and on average, for an expected-grid lattice fit
+# to replace the quadrilateral board choice.
+EXPECTED_LATTICE_MIN_WEAKEST_SUPPORT = 0.12
+EXPECTED_LATTICE_MIN_MEAN_SUPPORT = 0.25
+
+
+def _ridge_profile(gray: Any, *, vertical: bool, span: tuple[int, int], radius: int, np: Any) -> Any:
+    """Per column (vertical lines) or row, the fraction of pixels on a thin bright ridge.
+
+    Only pixels inside ``span`` along the other axis count.  A ridge pixel is
+    brighter than both neighbors ``radius`` pixels away, so thick bright walls,
+    terminals, and glare gradients contribute little while one-pixel grid
+    lines that run the length of the board dominate.
+    """
+
+    values = gray if vertical else gray.T
+    left = np.roll(values, radius, axis=1)
+    right = np.roll(values, -radius, axis=1)
+    ridge = (values - np.maximum(left, right)) > 6.0
+    ridge[:, :radius] = False
+    ridge[:, -radius:] = False
+    low, high = span
+    band = ridge[max(0, low) : max(low + 1, high), :]
+    profile = band.mean(axis=0) if band.size else np.zeros(values.shape[1])
+    return np.maximum(profile, np.maximum(np.roll(profile, 1), np.roll(profile, -1)))
+
+
+def _fit_lattice_axis(
+    profile: Any,
+    cells: int,
+    *,
+    pitch_range: tuple[float, float],
+    np: Any,
+) -> Optional[tuple[float, float, float, float]]:
+    """Origin and pitch of exactly ``cells + 1`` evenly spaced lines.
+
+    Returns (origin, pitch, weakest line support, mean line support).
+    """
+
+    extent = int(profile.shape[0])
+    low, high = pitch_range
+    if high <= low or cells <= 0:
+        return None
+    steps = np.arange(cells + 1, dtype=np.float64)
+    samples = np.arange(extent, dtype=np.float64)
+    best: Optional[tuple[float, float, float, float, float]] = None
+    for pitch in np.arange(low, high, 0.25):
+        span = float(pitch) * cells
+        if span >= extent - 2:
+            break
+        origins = np.arange(1.0, extent - 1.0 - span, 0.5)
+        if origins.size == 0:
+            continue
+        support = np.interp(origins[:, None] + steps[None, :] * pitch, samples, profile)
+        mean = support.mean(axis=1)
+        weakest = support.min(axis=1)
+        # Every line of the board must be present: a run that swaps one
+        # board edge for a header baseline or a decorative stroke outside
+        # the board keeps a high mean but loses its weakest line.
+        score = mean + 0.5 * weakest
+        index = int(np.argmax(score))
+        if best is None or float(score[index]) > best[0] + 1e-9:
+            best = (
+                float(score[index]),
+                float(origins[index]),
+                float(pitch),
+                float(weakest[index]),
+                float(mean[index]),
+            )
+    if best is None:
+        return None
+    return best[1], best[2], best[3], best[4]
+
+
+def _fit_expected_lattice(
+    image: Image.Image,
+    expected_grid: tuple[int, int],
+    *,
+    np: Any,
+) -> Optional[dict[str, float]]:
+    """Fit a ``rows x cols`` square-cell lattice in the straightened display.
+
+    The display is already perspective corrected, so the board is an
+    axis-aligned lattice of known size.  Fitting that model directly recovers
+    boards whose quadrilateral candidates stop one row short, run into the
+    level header, or follow thick wall strokes instead of the board edge.
+    """
+
+    rows, cols = (int(value) for value in expected_grid)
+    if rows <= 0 or cols <= 0:
+        return None
+    scale = min(1.0, 1400.0 / float(max(image.size)))
+    work = image
+    if scale < 1.0:
+        work = image.resize(
+            (max(2, int(round(image.width * scale))), max(2, int(round(image.height * scale)))),
+            Image.Resampling.LANCZOS,
+        )
+    gray = np.asarray(work.convert("L"), dtype=np.float32)
+    height, width = gray.shape
+    radius = max(2, int(round(min(width / float(cols), height / float(rows)) / 14.0)))
+    y_span = (0, height)
+    fit_x = fit_y = None
+    for _ in range(3):
+        fit_x = _fit_lattice_axis(
+            _ridge_profile(gray, vertical=True, span=y_span, radius=radius, np=np),
+            cols,
+            pitch_range=(max(6.0, 0.35 * width / cols), width / float(cols)),
+            np=np,
+        )
+        if fit_x is None:
+            return None
+        x0, pitch_x = fit_x[0], fit_x[1]
+        fit_y = _fit_lattice_axis(
+            _ridge_profile(
+                gray,
+                vertical=False,
+                span=(int(x0), int(math.ceil(x0 + pitch_x * cols))),
+                radius=radius,
+                np=np,
+            ),
+            rows,
+            # Flow cells are square.
+            pitch_range=(pitch_x * 0.9, pitch_x * 1.1),
+            np=np,
+        )
+        if fit_y is None:
+            return None
+        next_span = (int(fit_y[0]), int(math.ceil(fit_y[0] + fit_y[1] * rows)))
+        if next_span == y_span:
+            break
+        y_span = next_span
+    x0, pitch_x, weakest_x, mean_x = fit_x
+    y0, pitch_y, weakest_y, mean_y = fit_y
+    return {
+        "x_min": x0 / scale,
+        "y_min": y0 / scale,
+        "x_max": (x0 + pitch_x * cols) / scale,
+        "y_max": (y0 + pitch_y * rows) / scale,
+        "weakest_line_support": min(weakest_x, weakest_y),
+        "mean_line_support": min(mean_x, mean_y),
+    }
+
+
+def _expected_lattice_board(
+    image: Image.Image,
+    expected_grid: tuple[int, int],
+    *,
+    max_output_dim: int,
+    replaced: dict[str, Any],
+    cv2: Any,
+    np: Any,
+) -> Optional[tuple[Image.Image, PhotoQuadCandidate, dict[str, Any], Any, Any]]:
+    fit = _fit_expected_lattice(image, expected_grid, np=np)
+    if (
+        fit is None
+        or fit["weakest_line_support"] < EXPECTED_LATTICE_MIN_WEAKEST_SUPPORT
+        or fit["mean_line_support"] < EXPECTED_LATTICE_MIN_MEAN_SUPPORT
+    ):
+        return None
+    rows, cols = (int(value) for value in expected_grid)
+    left, top, right, bottom = fit["x_min"], fit["y_min"], fit["x_max"], fit["y_max"]
+    candidate = PhotoQuadCandidate(
+        corners=((left, top), (right, top), (right, bottom), (left, bottom)),
+        score=1.0,
+        source="expected-grid-lattice-fit",
+        metrics={
+            "weakest_line_support": fit["weakest_line_support"],
+            "mean_line_support": fit["mean_line_support"],
+        },
+    )
+    aspect = cols / float(rows)
+    board, matrix, inverse = _warp_candidate(
+        image,
+        candidate,
+        max_output_dim=max_output_dim,
+        target_aspect_ratio=aspect,
+        cv2=cv2,
+        np=np,
+    )
+    lattice = {
+        "score": 1.0,
+        "vertical_lines": float(cols + 1),
+        "horizontal_lines": float(rows + 1),
+        "x_coverage": 1.0,
+        "y_coverage": 1.0,
+        "regularity": 1.0,
+        "target_aspect_ratio": aspect,
+        "pitch_x_fraction": 1.0 / cols,
+        "pitch_y_fraction": 1.0 / rows,
+        "x_min_fraction": 0.0,
+        "x_max_fraction": 1.0,
+        "y_min_fraction": 0.0,
+        "y_max_fraction": 1.0,
+        "weakest_line_support": fit["weakest_line_support"],
+        "mean_line_support": fit["mean_line_support"],
+    }
+    info = {
+        "selected": candidate.as_dict(),
+        "strategy": "expected-grid-lattice-fit",
+        "combined_score": 1.0,
+        "lattice": {key: round(float(value), 5) for key, value in lattice.items()},
+        "target_aspect_ratio": round(aspect, 6),
+        "candidates": replaced.get("candidates", []),
+        "replaced_strategy": replaced.get("strategy"),
+        "replaced_lattice": replaced.get("lattice"),
+    }
+    return board, candidate, info, matrix, inverse
+
+
 def _rectified_board(
+    image: Image.Image,
+    evaluations: Sequence[_BoardEvaluation],
+    *,
+    max_output_dim: int,
+    expected_grid: Optional[tuple[int, int]],
+    cv2: Any,
+    np: Any,
+) -> tuple[Image.Image, Optional[PhotoQuadCandidate], dict[str, Any], Optional[Any], Optional[Any]]:
+    result = _rectified_board_from_candidates(
+        image,
+        evaluations,
+        max_output_dim=max_output_dim,
+        expected_grid=expected_grid,
+        cv2=cv2,
+        np=np,
+    )
+    if expected_grid is None:
+        return result
+    info = result[2]
+    if info.get("selected") is not None and _lattice_dimensions(info.get("lattice") or {}) == tuple(
+        int(value) for value in expected_grid
+    ):
+        return result
+    # No quadrilateral candidate shows the requested grid; on busy boards
+    # (walls, warp brackets, glare) the candidates often stop a row short or
+    # reach into the level header.  Fit the known lattice directly instead.
+    fitted = _expected_lattice_board(
+        image,
+        expected_grid,
+        max_output_dim=max_output_dim,
+        replaced=info,
+        cv2=cv2,
+        np=np,
+    )
+    return fitted if fitted is not None else result
+
+
+def _rectified_board_from_candidates(
     image: Image.Image,
     evaluations: Sequence[_BoardEvaluation],
     *,
@@ -1109,8 +1813,20 @@ def _rectified_board(
             strategy = "lattice-matches-expected-grid"
     if not _board_ranking_is_confident(ranked):
         return image, None, {"selected": None, "candidates": [], "strategy": strategy}, None, None
+    # Snapping only corrects a confident outline; snaps from unconfident
+    # rankings fixed nothing measured and occasionally invented a board.
+    snap = (
+        _snapped_board_choice(image, ranked, expected_grid, cv2=cv2, np=np)
+        if expected_grid is not None
+        else None
+    )
 
-    combined, selected, lattice = ranked[0]
+    if snap is not None:
+        combined, selected, lattice, snap_info = snap
+        strategy += "+grid-snap"
+    else:
+        combined, selected, lattice = ranked[0]
+        snap_info = None
     target_aspect = (
         float(lattice.get("target_aspect_ratio", 0.0))
         if float(lattice.get("regularity", 0.0)) >= 0.55
@@ -1131,6 +1847,7 @@ def _rectified_board(
         "combined_score": round(float(combined), 5),
         "lattice": {key: round(float(value), 5) for key, value in lattice.items()},
         "target_aspect_ratio": round(float(target_aspect), 6) if target_aspect else None,
+        "grid_snap": snap_info,
         "candidates": [
             {
                 **candidate.as_dict(),
@@ -1554,6 +2271,7 @@ _CACHE_LOCK = threading.Lock()
 _DISPLAY_CACHE: "OrderedDict[Hashable, _DisplayStage]" = OrderedDict()
 _BOARD_CACHE: "OrderedDict[Hashable, tuple[_BoardEvaluation, ...]]" = OrderedDict()
 _RESULT_CACHE: "OrderedDict[Hashable, PreparedPhoto]" = OrderedDict()
+_MESH_CACHE: "OrderedDict[Hashable, dict[str, Any]]" = OrderedDict()
 
 
 def _cache_limit() -> int:
@@ -1592,6 +2310,7 @@ def clear_preparation_cache() -> None:
         _DISPLAY_CACHE.clear()
         _BOARD_CACHE.clear()
         _RESULT_CACHE.clear()
+        _MESH_CACHE.clear()
 
 
 def _copy_prepared(prepared: PreparedPhoto, *, cache_hit: bool) -> PreparedPhoto:
@@ -1649,6 +2368,335 @@ def _board_evaluations(
     return evaluations
 
 
+# Cell-traced board outlines added to the display beam beyond its width.
+BOARD_OUTLINE_BEAM_EXTRA = 1
+# Within this fraction of the photo diagonal of the voted board, an outline
+# that is the board itself replaces the winner (see the board refinement).
+BOARD_REFINE_FRACTION = 0.015
+import os as _os  # EXPERIMENT
+REFINE_ENABLED = _os.environ.get("FLOW_REFINE", "grid") != "off"  # EXPERIMENT
+REFINE_ANY_GRID = _os.environ.get("FLOW_REFINE", "grid") == "any"  # EXPERIMENT
+
+
+def _grid_not_smaller(grid: Optional[Sequence[int]], other: Optional[Sequence[int]]) -> bool:
+    if not grid:
+        return False
+    if not other:
+        return True
+    return all(int(value) >= int(reference) for value, reference in zip(grid, other))
+
+
+def _rank_board_outlines(outlines: Iterable[PhotoQuadCandidate]) -> list[PhotoQuadCandidate]:
+    """Best traced outline first.
+
+    A line mask that loses an edge row or column traces a smaller board with
+    fewer cells, so cell count outranks the outline score.
+    """
+
+    return sorted(
+        outlines,
+        key=lambda outline: (outline.score > 0.0, outline.metrics.get("cells", 0.0), outline.score),
+        reverse=True,
+    )
+
+
+def _with_board_outlines(
+    source: Image.Image,
+    display: _DisplayStage,
+    *,
+    display_key: Optional[Hashable],
+    cv2: Any,
+    np: Any,
+) -> tuple[_DisplayStage, tuple[PhotoQuadCandidate, ...]]:
+    """Trace board outlines in the photo and add the best one to the beam.
+
+    Only automatic board detection sees these candidates: the display stage
+    itself (shared with manual corners and non-square boards) is unchanged.
+    """
+
+    outline_key = (display_key, "board-outlines") if display_key is not None else None
+    outlines = _cache_get(_DISPLAY_CACHE, outline_key)
+    if outlines is None:
+        region = source
+        offset_x = offset_y = 0
+        if display.roi is not None:
+            offset_x, offset_y = display.roi["x"], display.roi["y"]
+            region = source.crop(
+                (offset_x, offset_y, offset_x + display.roi["width"], offset_y + display.roi["height"])
+            )
+        detection = region
+        if display.scale < 1.0:
+            detection = region.resize(
+                (max(2, int(round(region.width * display.scale))), max(2, int(round(region.height * display.scale)))),
+                Image.Resampling.LANCZOS,
+            )
+        outlines = tuple(
+            _board_outline_candidates(
+                np.asarray(detection.convert("RGB")),
+                offset_x=float(offset_x),
+                offset_y=float(offset_y),
+                source_scale=display.scale,
+                cv2=cv2,
+                np=np,
+            )
+        )
+        _cache_put(_DISPLAY_CACHE, outline_key, outlines)
+    beamed = list(display.candidates[:DISPLAY_BEAM_WIDTH])
+    threshold = min(display.source_size) * 0.035
+    extra: list[PhotoQuadCandidate] = []
+    corroborations: list[int] = []
+    # Added even next to a shortlisted display outline: a display outline
+    # hugging the board often loses its edge grid lines to the warp border,
+    # while the traced outline is grown to keep them.
+    for outline in _rank_board_outlines(outlines)[:BOARD_OUTLINE_BEAM_EXTRA]:
+        extra.append(outline)
+        # Other line masks that traced the same board.
+        corroborations.append(
+            len({other.source for other in outlines if other.source != outline.source and _corner_distance(other, outline) <= threshold})
+        )
+    if not extra:
+        return display, outlines
+    position = len(beamed)
+    base_corroborations = list(display.corroborations) or [0] * len(display.candidates)
+    return (
+        replace(
+            display,
+            candidates=tuple(beamed) + tuple(extra) + tuple(display.candidates[position:]),
+            corroborations=tuple(base_corroborations[:position]) + tuple(corroborations) + tuple(base_corroborations[position:]),
+        ),
+        outlines,
+    )
+
+
+def _beam_stage(
+    source: Image.Image,
+    display: _DisplayStage,
+    index: int,
+    *,
+    display_key: Optional[Hashable],
+    max_output_dim: int,
+    cv2: Any,
+    np: Any,
+) -> _DisplayStage:
+    """The display rectified by the ``index``-th shortlisted outline (cached)."""
+
+    candidate = display.candidates[index]
+    if candidate is display.selected:
+        return display
+    # Own cache namespace: the square-board beam may order its shortlist
+    # differently, and the corner check guards against a changed shortlist.
+    stage_key = (display_key, "mesh-display", index) if display_key is not None else None
+    stage = _cache_get(_DISPLAY_CACHE, stage_key)
+    if stage is None or stage.selected is None or tuple(stage.selected.corners) != tuple(candidate.corners):
+        warped, matrix, inverse = _warp_candidate(
+            source,
+            candidate,
+            max_output_dim=max(640, int(max_output_dim)),
+            cv2=cv2,
+            np=np,
+        )
+        stage = _DisplayStage(
+            image=warped,
+            matrix=matrix,
+            inverse=inverse,
+            candidates=display.candidates,
+            selected=candidate,
+            scale=display.scale,
+            roi=display.roi,
+            source_size=display.source_size,
+            corroboration=display.corroborations[index] if display.corroborations else None,
+            corroborations=display.corroborations,
+            selected_index=index,
+        )
+        _cache_put(_DISPLAY_CACHE, stage_key, stage)
+    return stage
+
+
+# A board of any geometry (square, hex, circle, region) is a cluster of
+# similar-sized enclosed cells; fewer than this many is not evidence of one.
+CELL_MESH_MIN_CELLS = 12
+# Outlines whose board sits closer than this many cells to the display edge
+# are the board outline itself: cropping there would cut the outer cells.
+CELL_MESH_MIN_MARGIN_CELLS = 0.25
+
+
+def _cell_mesh_box(image: Image.Image, *, cv2: Any, np: Any) -> Optional[dict[str, Any]]:
+    """Bounding box of the dominant cluster of similar enclosed cells.
+
+    Geometry-agnostic board finder for boards the square-lattice detector
+    cannot see.  Cell walls are locally bright lines; terminal dots are
+    compact blobs inside cells and are removed so their cells still count.
+    Returns display-pixel coordinates, or None when no cell cluster is found.
+    """
+
+    scale = min(1.0, 1000.0 / float(max(image.size)))
+    small = image
+    if scale < 1.0:
+        small = image.resize(
+            (max(2, int(round(image.width * scale))), max(2, int(round(image.height * scale)))),
+            Image.Resampling.LANCZOS,
+        )
+    rgb = np.asarray(small.convert("RGB"))
+    height, width = rgb.shape[:2]
+    if min(width, height) < 32:
+        return None
+    gray = cv2.GaussianBlur(cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY), (3, 3), 0)
+    block = max(15, int(min(width, height) / 25) | 1)
+    walls = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, -4)
+    value = rgb.max(axis=2)
+    saturation = (value.astype(np.int16) - rgb.min(axis=2)).astype(np.uint8)
+    barrier = cv2.bitwise_or(walls, np.where((saturation >= 40) & (value >= 60), 255, 0).astype(np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(barrier, connectivity=8)
+    span = float(min(width, height))
+    for label in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[label])
+        if x <= 0 or y <= 0 or x + w >= width or y + h >= height:
+            continue
+        short_side, long_side = float(min(w, h)), float(max(w, h))
+        if (
+            short_side >= max(4.0, span * 0.015)
+            and long_side <= max(14.0, span * 0.16)
+            and long_side / max(1.0, short_side) <= 1.65
+            and area / float(w * h) >= 0.42
+        ):
+            barrier[labels == label] = 0
+    barrier = cv2.morphologyEx(barrier, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(cv2.bitwise_not(barrier), connectivity=4)
+    image_area = float(width * height)
+    cells: list[int] = []
+    for label in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[label])
+        if x <= 0 or y <= 0 or x + w >= width or y + h >= height:
+            continue
+        if not image_area * 0.0002 <= area <= image_area * 0.03:
+            continue
+        if area / float(w * h) < 0.45 or max(w, h) / max(1.0, min(w, h)) > 2.2:
+            continue
+        cells.append(label)
+    if len(cells) < CELL_MESH_MIN_CELLS:
+        return None
+    log_areas = np.log(stats[cells, cv2.CC_STAT_AREA].astype(np.float64))
+    typical = float(max(log_areas, key=lambda v: int(np.count_nonzero(np.abs(log_areas - v) <= 0.4))))
+    cells = [label for label, log_area in zip(cells, log_areas) if abs(float(log_area) - typical) <= 0.8]
+    if len(cells) < CELL_MESH_MIN_CELLS:
+        return None
+    pitch = math.sqrt(math.exp(typical))
+    points = centroids[cells]
+    near = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=2) <= 1.9 * pitch
+    seen = np.zeros(len(cells), dtype=bool)
+    cluster: list[int] = []
+    for start in range(len(cells)):
+        if seen[start]:
+            continue
+        seen[start] = True
+        stack, members = [start], []
+        while stack:
+            member = stack.pop()
+            members.append(member)
+            for other in np.nonzero(near[member] & ~seen)[0]:
+                seen[other] = True
+                stack.append(int(other))
+        if len(members) > len(cluster):
+            cluster = members
+    if len(cluster) < CELL_MESH_MIN_CELLS:
+        return None
+    chosen = [cells[member] for member in cluster]
+    left = min(int(stats[label, cv2.CC_STAT_LEFT]) for label in chosen)
+    top = min(int(stats[label, cv2.CC_STAT_TOP]) for label in chosen)
+    right = max(int(stats[label, cv2.CC_STAT_LEFT] + stats[label, cv2.CC_STAT_WIDTH]) for label in chosen)
+    bottom = max(int(stats[label, cv2.CC_STAT_TOP] + stats[label, cv2.CC_STAT_HEIGHT]) for label in chosen)
+    box = (left / scale, top / scale, right / scale, bottom / scale)
+    pitch_px = pitch / scale
+    return {
+        "box": box,
+        "cells": len(chosen),
+        "pitch": pitch_px,
+        "margin_cells": min(box[0], box[1], image.width - box[2], image.height - box[3]) / max(1e-6, pitch_px),
+    }
+
+
+def _select_display_by_cell_mesh(
+    source: Image.Image,
+    display: _DisplayStage,
+    *,
+    display_key: Optional[Hashable],
+    max_output_dim: int,
+    cv2: Any,
+    np: Any,
+) -> tuple[_DisplayStage, list[dict[str, Any]]]:
+    """Display selection for boards that are not square lattices.
+
+    The square-lattice beam cannot see hex, circle or region boards, so every
+    outline falls back to its whole display and the photo frame usually wins.
+    Here every shortlisted outline votes with the cell cluster it contains:
+    outlines around the screen agree on where the board is.  Outlines that are
+    the board itself (cells touch the edge) or the photo frame are not chosen.
+    """
+
+    beam: list[dict[str, Any]] = []
+    stages: list[_DisplayStage] = []
+    for index, candidate in enumerate(display.candidates[:DISPLAY_BEAM_WIDTH]):
+        stage = _beam_stage(source, display, index, display_key=display_key, max_output_dim=max_output_dim, cv2=cv2, np=np)
+        mesh_key = (display_key, "mesh", index) if display_key is not None else None
+        mesh = _cache_get(_MESH_CACHE, mesh_key)
+        if mesh is None:
+            mesh = _cell_mesh_box(stage.image, cv2=cv2, np=np) or {}
+            _cache_put(_MESH_CACHE, mesh_key, mesh)
+        board_quad = None
+        if mesh:
+            left, top, right, bottom = mesh["box"]
+            quad = np.float64([[left, top], [right, top], [right, bottom], [left, bottom]])
+            if stage.inverse is not None:
+                quad = cv2.perspectiveTransform(quad.reshape(-1, 1, 2), np.asarray(stage.inverse, np.float64)).reshape(-1, 2)
+            board_quad = _order_points(quad.astype(np.float32), np).tolist()
+        beam.append(
+            {
+                "index": index,
+                "source": candidate.source,
+                "display_score": round(float(candidate.score), 5),
+                "board_score": 0.0,
+                "corroboration": display.corroborations[index] if display.corroborations else 0,
+                "board_quad": board_quad,
+                "mesh_cells": int(mesh.get("cells", 0)),
+                "mesh_margin_cells": round(float(mesh["margin_cells"]), 3) if mesh else None,
+                "touches_frame": int(candidate.metrics.get("touches_frame", 0.0)),
+                "area_ratio": round(float(candidate.metrics.get("area_ratio", 0.0)), 5),
+            }
+        )
+        stages.append(stage)
+    if not beam:
+        return display, beam
+    diagonal = math.hypot(*display.source_size)
+    for entry in beam:
+        entry["votes"] = sum(
+            1
+            for other in beam
+            if other is not entry
+            and entry["board_quad"] is not None
+            and other["board_quad"] is not None
+            and float(np.mean(np.linalg.norm(np.asarray(entry["board_quad"]) - np.asarray(other["board_quad"]), axis=1)))
+            <= BOARD_AGREEMENT_FRACTION * diagonal
+        )
+    # An outline touching three or more photo edges is the photo frame.  Of
+    # the outlines that contain the agreed board with room around it, the
+    # tightest is the screen rather than the phone body or the photo.
+    eligible = [
+        position
+        for position, entry in enumerate(beam)
+        if entry["board_quad"] is not None
+        and float(entry["mesh_margin_cells"]) >= CELL_MESH_MIN_MARGIN_CELLS
+        and entry["touches_frame"] < 3
+    ]
+    if eligible:
+        best = max(eligible, key=lambda position: (beam[position]["votes"], -beam[position]["area_ratio"], -position))
+    else:
+        best = next((position for position, entry in enumerate(beam) if entry["touches_frame"] < 3), 0)
+    for entry in beam:
+        if entry["board_quad"] is not None:
+            entry["board_quad"] = [[round(float(x), 1), round(float(y), 1)] for x, y in entry["board_quad"]]
+    return stages[best], beam
+
+
 def _select_display_by_board_evidence(
     source: Image.Image,
     display: _DisplayStage,
@@ -1666,10 +2714,12 @@ def _select_display_by_board_evidence(
     alone.  The result depends only on the photo, so every endpoint agrees.
     """
 
+    display, outlines = _with_board_outlines(source, display, display_key=display_key, cv2=cv2, np=np)
+    beam_size = min(len(display.candidates), DISPLAY_BEAM_WIDTH + BOARD_OUTLINE_BEAM_EXTRA)
     beam: list[dict[str, Any]] = []
     stages: list[_DisplayStage] = []
-    for index, candidate in enumerate(display.candidates[:DISPLAY_BEAM_WIDTH]):
-        if index == 0:
+    for index, candidate in enumerate(display.candidates[:beam_size]):
+        if candidate is display.selected:
             stage = display
         else:
             stage_key = (display_key, "display", index) if display_key is not None else None
@@ -1720,6 +2770,8 @@ def _select_display_by_board_evidence(
                 "board_score": round(board_score, 5),
                 "corroboration": display.corroborations[index] if display.corroborations else 0,
                 "board_quad": _order_points(board_quad.astype(np.float32), np).tolist(),
+                "board_is_display": bool(confident and ranked[0][1].source == "display-is-board"),
+                "board_grid": list(_lattice_dimensions(ranked[0][2])) if confident else None,
             }
         )
         stages.append(stage)
@@ -1729,18 +2781,47 @@ def _select_display_by_board_evidence(
     # outlines around the right screen (or the board itself) converge on the
     # same board.  Choose the outline whose board most others agree with.
     diagonal = math.hypot(*display.source_size)
-    for entry in beam:
-        entry["votes"] = sum(
-            1
-            for other in beam
-            if other is not entry
-            and float(np.mean(np.linalg.norm(np.asarray(entry["board_quad"]) - np.asarray(other["board_quad"]), axis=1)))
+
+    def agrees(quad: Any, other: Any) -> bool:
+        return (
+            float(np.mean(np.linalg.norm(np.asarray(quad, dtype=np.float64) - np.asarray(other, dtype=np.float64), axis=1)))
             <= BOARD_AGREEMENT_FRACTION * diagonal
         )
+
+    outline_quads = [
+        (outline.source, _order_points(np.asarray(outline.corners, dtype=np.float32), np)) for outline in outlines
+    ]
+    for entry in beam:
+        entry["votes"] = sum(1 for other in beam if other is not entry and agrees(entry["board_quad"], other["board_quad"]))
+        # Cell-traced board outlines are direct board evidence: each line
+        # mask's outline votes for every outline whose board lands where it
+        # traced the board, except the traced outline it produced itself.
+        entry["outline_votes"] = sum(
+            1
+            for source_name, quad in outline_quads
+            if source_name != entry["source"] and agrees(entry["board_quad"], quad)
+        )
+        entry["votes"] += entry["outline_votes"]
     # With no agreement at all the board score breaks the tie; keeping the
     # detector's top outline instead measured worse (55 vs 58 of 77 boards).
     # Either way consensus_votes == 0 sends the photo to review.
     best = max(range(len(beam)), key=lambda position: (beam[position]["votes"], beam[position]["board_score"], -position))
+    # Agreeing boards still differ by up to the agreement distance.  An
+    # outline that is itself the board needs no second, inner board search,
+    # so among outlines close to the winner's board prefer one of those, but
+    # only when it sees the same lattice: a traced outline that lost an edge
+    # row of a dense board would otherwise crop that row away.
+    if REFINE_ENABLED:
+        exact = [
+            position
+            for position, entry in enumerate(beam)
+            if entry["board_is_display"]
+            and (REFINE_ANY_GRID or _grid_not_smaller(entry["board_grid"], beam[best]["board_grid"]))
+            and float(np.mean(np.linalg.norm(np.asarray(entry["board_quad"]) - np.asarray(beam[best]["board_quad"]), axis=1)))
+            <= BOARD_REFINE_FRACTION * diagonal
+        ]
+        if exact:
+            best = max(exact, key=lambda position: (beam[position]["board_score"], -position))
     for entry in beam:
         entry["board_quad"] = [[round(float(x), 1), round(float(y), 1)] for x, y in entry["board_quad"]]
     return stages[best], beam
@@ -1757,11 +2838,17 @@ def prepare_camera_photo(
     detect_board: bool = False,
     expected_grid: Optional[tuple[int, int]] = None,
     cache_key: Optional[str] = None,
+    square_board: bool = True,
 ) -> PreparedPhoto:
     """Find and rectify a photographed display while preserving color evidence.
 
     ``cache_key`` identifies the decoded upload (for example its SHA-256);
     when given, repeated calls for the same photo reuse earlier work.
+
+    ``square_board=False`` (hex, circle and region boards) keeps the
+    straightened display instead of warping to a square lattice, chooses the
+    display outline by cell-cluster agreement, and reports the cell cluster's
+    box as ``info["board_mesh"]`` for cropping.
     """
 
     cv2, np = _imports()
@@ -1791,6 +2878,7 @@ def prepare_camera_photo(
         result_key = (
             display_key,
             bool(detect_board),
+            bool(square_board),
             tuple(int(value) for value in expected_grid) if expected_grid is not None else None,
         )
         cached = _cache_get(_RESULT_CACHE, result_key)
@@ -1813,11 +2901,12 @@ def prepare_camera_photo(
         )
         _cache_put(_DISPLAY_CACHE, display_key, display)
     beam: Optional[list[dict[str, Any]]] = None
-    if detect_board and manual_corners is None and len(display.candidates) > 1:
+    if detect_board and manual_corners is None:
         # Outline scores alone mislead (the photo frame and phone body often
         # outrank the screen), so every shortlisted outline is judged by the
         # board it produces.  Board results are cached per outline.
-        display, beam = _select_display_by_board_evidence(
+        select = _select_display_by_board_evidence if square_board else _select_display_by_cell_mesh
+        display, beam = select(
             source,
             display,
             display_key=display_key,
@@ -1825,6 +2914,7 @@ def prepare_camera_photo(
             cv2=cv2,
             np=np,
         )
+        beam = beam or None
     timings["display_ms"] = (time.perf_counter() - started) * 1000.0
 
     color_image = display.image
@@ -1839,7 +2929,24 @@ def prepare_camera_photo(
     board_info: Optional[dict[str, Any]] = None
     board_context: Optional[Image.Image] = None
     cell_size: Optional[float] = None
-    if detect_board:
+    board_mesh: Optional[dict[str, Any]] = None
+    if detect_board and not square_board:
+        mesh_key = (display_key, "mesh", display.selected_index) if display_key is not None else None
+        mesh = _cache_get(_MESH_CACHE, mesh_key)
+        if mesh is None:
+            mesh = _cell_mesh_box(color_image, cv2=cv2, np=np) or {}
+            _cache_put(_MESH_CACHE, mesh_key, mesh)
+        if mesh:
+            left, top, right, bottom = mesh["box"]
+            board_mesh = {
+                "x": round(float(left), 2),
+                "y": round(float(top), 2),
+                "width": round(float(right - left), 2),
+                "height": round(float(bottom - top), 2),
+                "cells": int(mesh["cells"]),
+                "pitch": round(float(mesh["pitch"]), 3),
+            }
+    elif detect_board:
         started = time.perf_counter()
         evaluations = _board_evaluations(
             color_image,
@@ -1914,6 +3021,7 @@ def prepare_camera_photo(
         "display_rectified_size": display_rectified_size,
         "rectified_size": {"width": color_image.width, "height": color_image.height},
         "board": board_info,
+        "board_mesh": board_mesh,
         "timings_ms": {key: round(value, 1) for key, value in timings.items()},
     }
     if matrix is not None and inverse is not None:

@@ -202,8 +202,9 @@ def _review_inputs(body: dict[str, Any]) -> dict[str, Any]:
             "terminals": detection.get("terminals"),
             "terminal_info": {"clusters": terminal_info.get("clusters")},
             "level_type": {
-                key: (detection.get("level_type") or {}).get(key) for key in ("geometry", "modifiers")
+                key: (detection.get("level_type") or {}).get(key) for key in ("geometry", "modifiers", "signals")
             } if isinstance(detection.get("level_type"), dict) else None,
+            "graph_layout": detection.get("graph_layout_auto_selected"),
         },
         "terminal_completeness": detection.get("terminal_completeness"),
         "completeness_review": bool(

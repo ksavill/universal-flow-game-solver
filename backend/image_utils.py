@@ -112,6 +112,10 @@ def _accelerated_gray(
         return cached, str(cached_backend or "cpu-cache")
     if rgb is None:
         rgb = np.asarray(image.convert("RGB"))
+    if getattr(rgb, "ndim", 3) == 2:
+        # Already single-channel (e.g. the camera path's grayscale geometry
+        # view); converting it as RGB would raise inside OpenCV.
+        return np.ascontiguousarray(rgb, dtype=np.uint8), "cpu-gray"
     try:
         from .acceleration import accelerated_gray_u8
 
@@ -3345,11 +3349,17 @@ def detect_wall_edges(
     sample_thickness_ratio: float = 0.12,
     contrast_margin: float = 0.16,
     max_wall_fraction: float = 0.65,
+    local_contrast_margin: Optional[float] = None,
 ) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
     """Heuristically detect blocked adjacencies (walls) on a square grid image.
 
     Returns undirected node-id pairs matching `build_graph_json(layout="grid")`
     (`"x,y"` ids), plus diagnostics.
+
+    ``local_contrast_margin`` (camera photos) additionally requires every wall
+    to stand out from the cells on either side of it: glare lifts whole areas
+    of a photographed board above the global brightness threshold, which
+    otherwise turns every grid line inside the glare into a wall.
     """
 
     width, height = image.size
@@ -3453,6 +3463,20 @@ def detect_wall_edges(
     wall_edges = bright_walls if len(bright_walls) >= len(dark_walls) else dark_walls
     polarity = "bright" if wall_edges is bright_walls else "dark"
     wall_edges = _dedupe_edge_pairs(wall_edges)
+    local_contrast_info: Optional[Dict[str, Any]] = None
+    if local_contrast_margin is not None and wall_edges and polarity == "bright":
+        local_contrast = _wall_local_contrast(gray, x_lines, y_lines)
+        if local_contrast:
+            ordered_contrast = sorted(local_contrast.values())
+            floor = ordered_contrast[len(ordered_contrast) // 2] + float(local_contrast_margin)
+            kept = [
+                (u, v) for u, v in wall_edges if local_contrast.get(frozenset((u, v)), 0.0) >= floor
+            ]
+            local_contrast_info = {
+                "floor": round(float(floor), 4),
+                "rejected": len(wall_edges) - len(kept),
+            }
+            wall_edges = kept
 
     warnings: List[str] = []
     if wall_edges and len(wall_edges) > int(len(candidates) * max_wall_fraction):
@@ -3477,7 +3501,86 @@ def detect_wall_edges(
         },
         "warnings": warnings,
     }
+    if local_contrast_info is not None:
+        info["local_contrast"] = local_contrast_info
     return wall_edges, info
+
+
+def _wall_local_contrast(
+    gray: Image.Image,
+    x_lines: List[float],
+    y_lines: List[float],
+) -> Dict[frozenset, float]:
+    """Normalized local contrast of each internal cell boundary.
+
+    For a strip across the boundary (half a cell long), compares the brightest
+    row/column within 0.13 cells of the grid line against the darker of the two
+    flanking cell bands (0.22-0.40 cells away), scaled by the headroom above
+    that background: ``(peak - background) / (1 - background)``.  A wall is
+    near-white on every part of the board, so it keeps a high score inside
+    glare, while a thin grid line under glare does not.
+    """
+
+    width, height = gray.size
+    pixels = gray.load()
+    rows, cols = len(y_lines) - 1, len(x_lines) - 1
+    result: Dict[frozenset, float] = {}
+
+    def score(profile: List[float], offsets: List[float]) -> Optional[float]:
+        center = [value for value, offset in zip(profile, offsets) if abs(offset) <= 0.13]
+        left = sorted(value for value, offset in zip(profile, offsets) if -0.40 <= offset <= -0.22)
+        right = sorted(value for value, offset in zip(profile, offsets) if 0.22 <= offset <= 0.40)
+        if not center or not left or not right:
+            return None
+        background = min(left[len(left) // 2], right[len(right) // 2])
+        return (max(center) - background) / max(0.05, 1.0 - background)
+
+    def column_profile(x_lo: int, x_hi: int, y_lo: int, y_hi: int, vertical: bool) -> List[float]:
+        profile: List[float] = []
+        outer = range(x_lo, x_hi) if vertical else range(y_lo, y_hi)
+        for index in outer:
+            values = sorted(
+                pixels[index, other] if vertical else pixels[other, index]
+                for other in (range(y_lo, y_hi) if vertical else range(x_lo, x_hi))
+            )
+            profile.append(values[len(values) // 2] / 255.0 if values else 0.0)
+        return profile
+
+    for y in range(rows):
+        top, bottom = y_lines[y], y_lines[y + 1]
+        middle, along = 0.5 * (top + bottom), bottom - top
+        y_lo = max(0, int(round(middle - 0.25 * along)))
+        y_hi = min(height, int(round(middle + 0.25 * along)))
+        for x in range(cols - 1):
+            line = x_lines[x + 1]
+            pitch = 0.5 * (x_lines[x + 2] - x_lines[x])
+            if pitch <= 0 or y_hi <= y_lo:
+                continue
+            x_lo = max(0, int(math.floor(line - 0.42 * pitch)))
+            x_hi = min(width, int(math.ceil(line + 0.42 * pitch)))
+            profile = column_profile(x_lo, x_hi, y_lo, y_hi, True)
+            offsets = [(index + 0.5 - line) / pitch for index in range(x_lo, x_hi)]
+            value = score(profile, offsets)
+            if value is not None:
+                result[frozenset((f"{x},{y}", f"{x + 1},{y}"))] = value
+    for x in range(cols):
+        left_edge, right_edge = x_lines[x], x_lines[x + 1]
+        middle, along = 0.5 * (left_edge + right_edge), right_edge - left_edge
+        x_lo = max(0, int(round(middle - 0.25 * along)))
+        x_hi = min(width, int(round(middle + 0.25 * along)))
+        for y in range(rows - 1):
+            line = y_lines[y + 1]
+            pitch = 0.5 * (y_lines[y + 2] - y_lines[y])
+            if pitch <= 0 or x_hi <= x_lo:
+                continue
+            y_lo = max(0, int(math.floor(line - 0.42 * pitch)))
+            y_hi = min(height, int(math.ceil(line + 0.42 * pitch)))
+            profile = column_profile(x_lo, x_hi, y_lo, y_hi, False)
+            offsets = [(index + 0.5 - line) / pitch for index in range(y_lo, y_hi)]
+            value = score(profile, offsets)
+            if value is not None:
+                result[frozenset((f"{x},{y}", f"{x},{y + 1}"))] = value
+    return result
 
 
 def detect_warp_edges(

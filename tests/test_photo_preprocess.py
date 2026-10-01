@@ -19,6 +19,7 @@ from backend.photo_preprocess import (
     _lattice_metrics,
     _order_points,
     _quality_and_views,
+    _snap_board_to_expected_grid,
     clear_preparation_cache,
     load_camera_image,
     prepare_camera_photo,
@@ -664,6 +665,20 @@ def test_camera_review_uses_terminal_and_detector_evidence() -> None:
     assert ambiguous["required"] and "equally well" in ambiguous["reasons"][0]
     assert uncorroborated["required"] and "Only one detector" in uncorroborated["reasons"][0]
 
+    def terminals(*colors: tuple[int, int, int]) -> list[dict]:
+        return [{"letter": chr(65 + index // 2), "color": list(color)} for index, color in enumerate(colors)]
+
+    clean = {"terminals": terminals((240, 50, 45), (238, 52, 44), (40, 145, 30), (42, 147, 31)), "level_type": {"geometry": "square"}}
+    # A shadowed finger over the screen reads as a dark brown "pair".
+    thumb = {**clean, "terminals": clean["terminals"] + terminals((82, 67, 45), (76, 66, 45))}
+    regions = {**clean, "graph_layout": "regions"}
+    regions_signal = {**clean, "level_type": {"geometry": "square", "signals": {"recommended_graph_layout": "regions"}}}
+
+    assert _camera_photo_review(base, detection=clean)["required"] is False
+    assert any("darker than any Flow color" in reason for reason in _camera_photo_review(base, detection=thumb)["reasons"])
+    for detection in (regions, regions_signal):
+        assert any("region layout" in reason for reason in _camera_photo_review(base, detection=detection)["reasons"])
+
 
 def test_auto_mode_without_camera_metadata_uses_pipeline_evidence() -> None:
     photo, _corners = _photographed_screen()
@@ -823,13 +838,112 @@ def test_display_beam_scores_shortlisted_outlines_by_their_board() -> None:
         np=np_module,
     )
 
-    assert 1 <= len(beam) <= photo_preprocess.DISPLAY_BEAM_WIDTH
+    assert 1 <= len(beam) <= photo_preprocess.DISPLAY_BEAM_WIDTH + photo_preprocess.BOARD_OUTLINE_BEAM_EXTRA
     # The chosen outline is the one whose board most other outlines agree on.
     best = max(beam, key=lambda entry: (entry["votes"], entry["board_score"], -entry["index"]))
-    assert chosen.selected == display.candidates[best["index"]]
+    assert chosen.selected == chosen.candidates[best["index"]]
+    assert chosen.selected.source == best["source"]
     assert chosen.selected_index == best["index"]
     assert all(len(entry["board_quad"]) == 4 for entry in beam)
     assert best["board_score"] > 0.0
+
+
+def test_board_outline_is_traced_from_the_cells() -> None:
+    from backend import photo_preprocess
+
+    photo, screen_corners = _photographed_screen()
+    cv2_module, np_module = photo_preprocess._imports()
+    outlines = photo_preprocess._board_outline_candidates(
+        np.asarray(photo),
+        offset_x=0.0,
+        offset_y=0.0,
+        source_scale=1.0,
+        cv2=cv2_module,
+        np=np_module,
+    )
+
+    to_photo = cv2.getPerspectiveTransform(
+        np.float32([[0, 0], [639, 0], [639, 919], [0, 919]]), np.float32(screen_corners)
+    )
+    board = cv2.perspectiveTransform(
+        np.float32([[100, 210], [540, 210], [540, 650], [100, 650]]).reshape(-1, 1, 2), to_photo
+    ).reshape(-1, 2)
+    assert outlines and all(outline.source.startswith("board-cells-") for outline in outlines)
+    best = photo_preprocess._rank_board_outlines(outlines)[0]
+    error = float(np.linalg.norm(_order_points(np.float32(best.corners), np) - _order_points(board, np), axis=1).mean())
+    assert error < 0.02 * float(np.hypot(*photo.size))
+
+
+def _photographed_hex_screen() -> tuple[Image.Image, list[list[float]], tuple[float, float, float, float]]:
+    """A phone showing a hex board (no square lattice) on a busy desk photo."""
+
+    screen = Image.new("RGB", (640, 1180), (12, 12, 18))
+    draw = ImageDraw.Draw(screen)
+    radius = 34.0
+    step_x = radius * 3 ** 0.5
+    left_edge, top_edge, right_edge, bottom_edge = 1e9, 1e9, 0.0, 0.0
+    colors = [(240, 65, 65), (60, 195, 245), (250, 210, 40), (80, 200, 90)]
+    for row in range(9):
+        for col in range(6):
+            cx = 70 + step_x * (col + (0.5 if row % 2 else 0.0))
+            cy = 300 + row * radius * 1.5
+            points = [
+                (cx + radius * np.cos(np.radians(90 + 60 * k)), cy + radius * np.sin(np.radians(90 + 60 * k)))
+                for k in range(6)
+            ]
+            draw.polygon(points, outline=(150, 95, 95), width=3)
+            left_edge, right_edge = min(left_edge, cx - step_x / 2), max(right_edge, cx + step_x / 2)
+            top_edge, bottom_edge = min(top_edge, cy - radius), max(bottom_edge, cy + radius)
+            if (row * 6 + col) % 7 == 0:
+                color = colors[(row + col) % len(colors)]
+                draw.ellipse((cx - 17, cy - 17, cx + 17, cy + 17), fill=color)
+    draw.text((60, 120), "level 4/5", fill=(230, 60, 60))
+
+    source = np.asarray(screen)
+    canvas = np.full((1700, 1300, 3), (196, 190, 180), dtype=np.uint8)
+    for y in range(0, canvas.shape[0], 90):
+        cv2.line(canvas, (0, y), (canvas.shape[1], y + 40), (120, 116, 110), 4)
+    phone = np.float32([[300, 170], [1040, 230], [1010, 1560], [250, 1500]])
+    cv2.fillConvexPoly(canvas, phone.astype(np.int32), (35, 35, 38))
+    src_points = np.float32([[0, 0], [639, 0], [639, 1179], [0, 1179]])
+    destination = np.float32([[330, 205], [1005, 262], [978, 1522], [282, 1468]])
+    matrix = cv2.getPerspectiveTransform(src_points, destination)
+    warped = cv2.warpPerspective(source, matrix, (canvas.shape[1], canvas.shape[0]))
+    mask = cv2.warpPerspective(np.full((screen.height, screen.width), 255, dtype=np.uint8), matrix, (canvas.shape[1], canvas.shape[0]))
+    canvas[mask > 0] = warped[mask > 0]
+    image = Image.fromarray(canvas, mode="RGB").filter(ImageFilter.GaussianBlur(0.8))
+    return image, destination.tolist(), (left_edge / 640, top_edge / 1180, right_edge / 640, bottom_edge / 1180)
+
+
+def test_cell_mesh_box_finds_a_hex_board_without_a_square_lattice() -> None:
+    from backend import photo_preprocess
+
+    photo, corners, board = _photographed_hex_screen()
+    rectified = prepare_camera_photo(photo, manual_corners=corners).color_image
+    cv2_module, np_module = photo_preprocess._imports()
+
+    mesh = photo_preprocess._cell_mesh_box(rectified, cv2=cv2_module, np=np_module)
+
+    assert mesh is not None and mesh["cells"] >= 45
+    left, top, right, bottom = mesh["box"]
+    width, height = rectified.size
+    expected = (board[0] * width, board[1] * height, board[2] * width, board[3] * height)
+    assert max(abs(a - b) for a, b in zip((left, top, right, bottom), expected)) < 0.5 * mesh["pitch"]
+    assert photo_preprocess._cell_mesh_box(Image.new("RGB", (400, 700), (20, 20, 20)), cv2=cv2_module, np=np_module) is None
+
+
+def test_non_square_boards_choose_the_display_by_cell_clusters() -> None:
+    photo, corners, _board = _photographed_hex_screen()
+
+    prepared = prepare_camera_photo(photo, detect_board=True, square_board=False)
+
+    assert prepared.info["board"] is None
+    assert prepared.info["board_mesh"] is not None and prepared.info["board_mesh"]["cells"] >= 45
+    selected = prepared.info["selected"]["corners"]
+    ordered = _order_points(np.float32(corners), np)
+    error = float(np.mean([np.hypot(selected[i]["x"] - ordered[i][0], selected[i]["y"] - ordered[i][1]) for i in range(4)]))
+    assert error < 60.0
+    assert prepared.info["selected"]["metrics"]["touches_frame"] < 3
 
 
 def test_camera_review_flags_outlines_that_disagree_about_the_board() -> None:
@@ -978,3 +1092,87 @@ def test_region_graph_replay_matches_renamed_cells() -> None:
 
     assert _region_graphs_equivalent(screenshot, photo)
     assert not _region_graphs_equivalent(screenshot, json.dumps(rewired))
+
+
+def test_expected_grid_fit_finds_the_board_below_a_header_line() -> None:
+    from backend.photo_preprocess import _fit_expected_lattice
+
+    image = np.zeros((900, 640, 3), np.uint8)
+    left, top, pitch, size = 60, 220, 86, 6
+    for index in range(size + 1):
+        cv2.line(image, (left + index * pitch, top), (left + index * pitch, top + size * pitch), (95, 95, 110), 1)
+        cv2.line(image, (left, top + index * pitch), (left + size * pitch, top + index * pitch), (95, 95, 110), 1)
+    # Header text one pitch above the board (fragmented, like words) must not
+    # become a row: every grid line runs the full width, text does not.
+    for x in range(left, left + size * pitch, 90):
+        cv2.line(image, (x, top - pitch), (x + 50, top - pitch), (200, 200, 210), 1)
+
+    fit = _fit_expected_lattice(Image.fromarray(image), (size, size), np=np)
+
+    assert fit is not None
+    assert abs(fit["x_min"] - left) <= 3 and abs(fit["x_max"] - (left + size * pitch)) <= 3
+    assert abs(fit["y_min"] - top) <= 3 and abs(fit["y_max"] - (top + size * pitch)) <= 3
+
+
+def _dashed(draw, start, end, fill, width=3, dash=10, gap=8):
+    (x0, y0), (x1, y1) = start, end
+    length = max(abs(x1 - x0), abs(y1 - y0))
+    position = 0
+    while position < length:
+        stop = min(length, position + dash)
+        if x0 == x1:
+            draw.line([(x0, y0 + position), (x0, y0 + stop)], fill=fill, width=width)
+        else:
+            draw.line([(x0 + position, y0), (x0 + stop, y0)], fill=fill, width=width)
+        position += dash + gap
+
+
+def test_grid_snap_prefers_solid_interior_over_dashed_warp_shadow_lines() -> None:
+    rows = cols = 7
+    pitch, left, top = 70, 150, 200
+    image = Image.new("RGB", (900, 1000), (12, 12, 16))
+    draw = ImageDraw.Draw(image)
+    line = (150, 110, 110)
+    right, bottom = left + cols * pitch, top + rows * pitch
+    for index in range(1, cols):
+        x = left + index * pitch
+        draw.line([(x, top), (x, bottom)], fill=line, width=3)
+        _dashed(draw, (x, top - pitch), (x, top), line)
+        _dashed(draw, (x, bottom), (x, bottom + pitch), line)
+    for index in range(1, rows):
+        y = top + index * pitch
+        draw.line([(left, y), (right, y)], fill=line, width=3)
+        _dashed(draw, (left - pitch, y), (left, y), line)
+        _dashed(draw, (right, y), (right + pitch, y), line)
+    # Warp boards draw their border dashed, and shadow lines one cell outside
+    # it run the full board length too.
+    for x in (left - pitch, left, right, right + pitch):
+        _dashed(draw, (x, top - pitch), (x, bottom + pitch), line)
+    for y in (top - pitch, top, bottom, bottom + pitch):
+        _dashed(draw, (left - pitch, y), (right + pitch, y), line)
+    for index, (cx, cy) in enumerate(((1, 1), (4, 2), (2, 5), (6, 6))):
+        center = (left + cx * pitch + pitch // 2, top + cy * pitch + pitch // 2)
+        draw.ellipse([center[0] - 24, center[1] - 24, center[0] + 24, center[1] + 24], fill=((230, 40, 40), (40, 200, 60), (40, 90, 230), (240, 220, 30))[index])
+
+    # The lattice run was shifted one column into the left shadow ring.
+    shifted = [(left - pitch, top), (right - pitch, top), (right - pitch, bottom), (left - pitch, bottom)]
+    lattice = {"pitch_x_fraction": 1.0 / cols, "pitch_y_fraction": 1.0 / rows}
+    result = _snap_board_to_expected_grid(image, shifted, lattice, (rows, cols), cv2=cv2, np=np)
+
+    assert result is not None
+    corners, _info = result
+    expected = [(left, top), (right, top), (right, bottom), (left, bottom)]
+    for (x, y), (ex, ey) in zip(corners, expected):
+        assert abs(x - ex) < 0.25 * pitch and abs(y - ey) < 0.25 * pitch
+
+
+def test_accelerated_gray_accepts_single_channel_images() -> None:
+    import cv2 as cv2_module
+
+    from backend.image_utils import _accelerated_gray
+
+    gray_image = Image.new("L", (40, 30), 120)
+
+    gray, _backend = _accelerated_gray(gray_image, cv2=cv2_module, np=np, rgb=np.asarray(gray_image))
+
+    assert gray.shape == (30, 40) and int(gray[0, 0]) == 120

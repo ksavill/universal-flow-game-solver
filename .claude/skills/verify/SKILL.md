@@ -48,9 +48,19 @@ Flows worth driving:
   `reference_puzzle_images/` (IMG_3202.PNG / IMG_3203.PNG are square 5x5 and
   detect reliably). With auto-process on, the app crops, detects, opens the
   solver, and auto-solves; wait for text `/Solved in/`.
-- **Builder**: Create tab; square-grid cells expose `data-cell="r-c"`. A
-  solvable fill-all 5x5 layout: A at 0-0 & 3-0, B at 4-0 & 4-4. (A at four
-  corners is unsolvable by parity — good for the error-path probe.)
+- **Builder**: Create tab; the square board is a game-style SVG whose cells
+  are `polygon[data-game-cell="col,row"]` (click their centers), or focus
+  `[aria-roledescription="puzzle board"]` and use arrow keys + Enter (a
+  letter key picks that color). A solvable fill-all 5x5 layout: A at row 0
+  col 0 & row 3 col 0, B at row 4 col 0 & row 4 col 4. (A at four corners is
+  unsolvable by parity — good for the error-path probe.)
+- **On-device solve** (`/local`, Solve → This device; needs no backend):
+  `input[aria-label="Choose image"]` ← IMG_3202.PNG, wait for "Check the
+  dots", click `Solve puzzle` (exact), wait for heading "Solved". Photos go
+  through "Line up the board": drag `g[role="slider"]` corner handles, set
+  rows/columns with the "More rows"/"More columns" buttons, click "Find dots".
+  `reference_camera_corpus/manifest.json` has `screen_corners` to derive
+  board corners for synthetic photos.
 - **Library**: cards have a `Solve` button (exact match — plain `getByText`
   on "Solve"/"Solution" also matches z3's `solution_blocks` stat text in Raw
   results; use `{ exact: true }`).
@@ -64,6 +74,16 @@ coordinates instead:
 const box = await loc.boundingBox();
 await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
 ```
+
+Other engines: `npx playwright-core install webkit firefox` (in the scratch
+dir) downloads builds matching the installed `playwright-core`; launch with
+`webkit.launch()` / `firefox.launch()`. Firefox ignores `isMobile`; use
+`hasTouch` only. For accessibility checks, `npm i axe-core` and inject
+`axe.min.js` with `page.addScriptTag({ path })`, then `axe.run()`.
+
+If another process already listens on port 8000 (the browser may resolve
+`localhost` to it over IPv6), run the backend with `PORT=8011` and start Vite
+with `VITE_API_PORT=8011`.
 
 Solves are fast (tens of ms for 5x5–10x10); a 120s wait is generous. The
 image pipeline (classify + OCR + grid + terminals) takes ~5–20s per image.

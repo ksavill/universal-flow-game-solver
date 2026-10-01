@@ -1734,6 +1734,7 @@ def _prepare_camera_pipeline_images(
     expected_grid: Optional[Tuple[int, int]] = None,
     cache_key: Optional[str] = None,
     board_warp: bool = True,
+    board_mesh_crop: bool = False,
 ) -> CameraPipelineImages:
     roi = (
         (crop.x, crop.y, crop.width, crop.height)
@@ -1746,8 +1747,10 @@ def _prepare_camera_pipeline_images(
             roi=roi,
             manual_corners=manual_corners,
             # The board warp assumes a square lattice; other geometries keep
-            # the straightened display and fall back to auto-crop below.
-            detect_board=auto_board_crop and board_warp,
+            # the straightened display and are cropped to their cell cluster
+            # (or auto-crop) below.
+            detect_board=auto_board_crop,
+            square_board=board_warp,
             expected_grid=expected_grid,
             cache_key=cache_key,
         )
@@ -1763,16 +1766,30 @@ def _prepare_camera_pipeline_images(
         else None
     )
     board_warp_applied = bool(detected_board and detected_board.get("selected") is not None)
-    board_crop = (
-        auto_crop(
+    padding = max(8, int(min(color_image.width, color_image.height) * 0.01))
+    board_mesh = prepared.info.get("board_mesh") if isinstance(prepared.info.get("board_mesh"), dict) else None
+    if not board_mesh_crop:
+        board_mesh = None
+    board_crop: Optional[CropBox] = None
+    if auto_board_crop and not board_warp_applied and board_mesh is not None:
+        # Crop to the detected cell cluster plus a margin that keeps the
+        # outer cell walls and some background inside the board image.  Only
+        # lattices of equal cells (hex) qualify: circle rings and free-form
+        # regions vary in size, so their cluster is a partial board.
+        margin = max(padding, int(round(0.3 * float(board_mesh["pitch"]))))
+        left = max(0, int(math.floor(float(board_mesh["x"]))) - margin)
+        top = max(0, int(math.floor(float(board_mesh["y"]))) - margin)
+        right = min(color_image.width, int(math.ceil(float(board_mesh["x"]) + float(board_mesh["width"]))) + margin)
+        bottom = min(color_image.height, int(math.ceil(float(board_mesh["y"]) + float(board_mesh["height"]))) + margin)
+        if right > left and bottom > top:
+            board_crop = CropBox(left, top, right - left, bottom - top)
+    if board_crop is None and auto_board_crop and not board_warp_applied:
+        board_crop = auto_crop(
             color_image,
             threshold=threshold,
             invert=invert,
-            padding=max(8, int(min(color_image.width, color_image.height) * 0.01)),
+            padding=padding,
         )
-        if auto_board_crop and not board_warp_applied
-        else None
-    )
     if board_crop is not None:
         color_image = apply_crop(color_image, board_crop)
         geometry_image = apply_crop(geometry_image, board_crop)
@@ -1809,7 +1826,11 @@ def _prepare_camera_pipeline_images(
     }
     auto_crop_info = {
         "applied": board_crop is not None or board_warp_applied,
-        "source": "camera-board-warp" if board_warp_applied else "camera-board",
+        "source": (
+            "camera-board-warp"
+            if board_warp_applied
+            else "camera-board-mesh" if board_mesh is not None else "camera-board"
+        ),
         "x": board_crop.x if board_crop is not None else 0,
         "y": board_crop.y if board_crop is not None else 0,
         "width": board_crop.width if board_crop is not None else color_image.width,
@@ -1841,14 +1862,23 @@ CAMERA_REVIEW_THRESHOLDS: Dict[str, float] = {
     # 347 synthetic replays, < 40 caught 29 of 176 wrong imports and 2 of 171
     # correct ones.
     "min_pair_color_separation": 40.0,
+    # Camera preparation normalizes Flow terminals to a bright strongest
+    # channel (about 240).  A terminal whose strongest channel stays below
+    # this is a shadow or a finger over the screen, not a dot: on 990
+    # synthetic replays no correct import had one below 100.
+    "min_terminal_peak_channel": 90.0,
 }
 
 
 # Measured on the synthetic scene corpora: square boards are supported from
-# photos; warps (border markers are lost) and hex/region boards (region
-# detection fails) are not yet, so their results always go to review.
+# photos; warps (border markers are lost), hex boards, and region-layout
+# boards (region detection fails) are not yet, so their results always go to
+# review.
 CAMERA_UNSUPPORTED_GEOMETRIES = {"hex", "graph", "cube", "star", "figure8"}
 CAMERA_UNSUPPORTED_MODIFIERS = {"warps", "walls"}
+# Normalized local contrast a photographed wall must exceed above the median
+# cell boundary (image_utils.detect_wall_edges local_contrast_margin).
+CAMERA_WALL_LOCAL_CONTRAST_MARGIN = 0.20
 
 
 def _camera_board_is_not_square(level_type: Dict[str, Any], graph_layout: Optional[str]) -> bool:
@@ -1861,11 +1891,14 @@ def _camera_board_is_not_square(level_type: Dict[str, Any], graph_layout: Option
     )
 
 
-def _camera_unsupported_features(level_type: Dict[str, Any]) -> Optional[str]:
+def _camera_unsupported_features(level_type: Dict[str, Any], graph_layout: Optional[str] = None) -> Optional[str]:
     features: List[str] = []
     geometry = str(level_type.get("geometry") or "").lower()
     if geometry in CAMERA_UNSUPPORTED_GEOMETRIES:
         features.append(f"{geometry} geometry")
+    signals = level_type.get("signals") if isinstance(level_type.get("signals"), dict) else {}
+    if str(graph_layout or "").lower() == "regions" or signals.get("recommended_graph_layout") == "regions":
+        features.append("region layout")
     modifiers = level_type.get("modifiers") if isinstance(level_type.get("modifiers"), list) else []
     features.extend(sorted(str(item) for item in modifiers if str(item) in CAMERA_UNSUPPORTED_MODIFIERS))
     return ", ".join(features) or None
@@ -1902,6 +1935,9 @@ def _camera_terminal_review_reasons(detection: Dict[str, Any], limits: Dict[str,
                     closest = min(closest, math.dist(color, other))
     if closest < limits["min_pair_color_separation"]:
         reasons.append("Two different terminal colors look nearly identical in the photo; check that pairs are matched correctly.")
+    peaks = [max(float(value) for value in color) for colors in by_letter.values() for color in colors if len(color)]
+    if peaks and min(peaks) < limits["min_terminal_peak_channel"]:
+        reasons.append("A terminal is much darker than any Flow color; a shadow or finger may have been read as a dot.")
     return reasons
 
 
@@ -1985,7 +2021,7 @@ def _camera_photo_review(
             reasons.append(reason)
             confidence -= 0.25
         level_type = detection.get("level_type") if isinstance(detection.get("level_type"), dict) else {}
-        unsupported = _camera_unsupported_features(level_type)
+        unsupported = _camera_unsupported_features(level_type, detection.get("graph_layout"))
         if unsupported:
             reasons.append(
                 f"Photos of boards with {unsupported} are not reliable yet; check the imported puzzle against the photo."
@@ -4399,11 +4435,11 @@ async def image_generate(
     if requested_target == "auto" and auto_level_signals.get("recommended_graph_layout") == "regions":
         target_used = "graph"
 
-    board_was_warped = bool(((photo_info or {}).get("board") or {}).get("selected"))
-    if effective_source_mode == "camera" and board_was_warped and _camera_board_is_not_square(level_type, graph_layout):
+    if effective_source_mode == "camera" and _camera_board_is_not_square(level_type, graph_layout):
         # The square-lattice board warp crops or stretches hex, circle, and
-        # region boards; redo preparation from the (cached) straightened
-        # display without it.
+        # region boards, and the square-lattice display choice cannot see
+        # them; redo preparation (display candidates are cached) without it.
+        board_was_warped = bool(((photo_info or {}).get("board") or {}).get("selected"))
         camera = _prepare_camera_pipeline_images(
             image,
             crop=crop,
@@ -4412,6 +4448,7 @@ async def image_generate(
             manual_corners=photo_corners,
             cache_key=_photo_cache_key(data),
             board_warp=False,
+            board_mesh_crop=str(level_type.get("geometry") or "").lower() == "hex",
         )
         warped = camera.color
         geometry_warped = camera.geometry
@@ -4420,7 +4457,8 @@ async def image_generate(
         perspective_info = camera.perspective_info
         auto_crop_info = camera.auto_crop_info
         photo_info = camera.photo_info
-        photo_info["board_warp_skipped"] = "non-square board"
+        if board_was_warped:
+            photo_info["board_warp_skipped"] = "non-square board"
         detection_info.update(perspective=perspective_info, auto_crop=auto_crop_info, photo=photo_info)
 
     auto_target_adjustment: Optional[Dict[str, Any]] = None
@@ -4502,7 +4540,7 @@ async def image_generate(
             payload["detection"]["photo_review"] = _camera_photo_review(
                 photo_info,
                 payload["detection"].get("terminal_completeness"),
-                detection=payload["detection"],
+                detection={**payload["detection"], "graph_layout": graph_layout},
             )
         processing = {
             "source_mode": source_mode,
@@ -5188,6 +5226,11 @@ async def image_generate(
                     warped,
                     rows=grid_height,
                     cols=grid_width,
+                    # Glare lifts whole regions of a photographed board above
+                    # the global threshold; require local wall contrast too.
+                    local_contrast_margin=(
+                        CAMERA_WALL_LOCAL_CONTRAST_MARGIN if effective_source_mode == "camera" else None
+                    ),
                 )
                 modifier_info["walls"] = wall_info
                 if not wall_edges:
