@@ -73,9 +73,14 @@ export default function StaticApp() {
       </Stack>}
       {route === "not-found" && <NotFoundView requestedPath={path} message="This page is not available in the device-only edition. Open a .flow file or choose a puzzle saved in this browser." onBack={() => window.history.length > 1 ? window.history.back() : navigate("solve")} onHome={() => navigate("solve")} />}
     </Container>
-    <Stack component="footer" direction="row" justifyContent="center" spacing={2} sx={{ px: 2, pt: 2, pb: 20 }}>
-      <Button component="a" href="/guide/" target="_blank" rel="noopener noreferrer" color="inherit">Puzzle guide ↗</Button>
-      <Button component="a" href="/privacy/" target="_blank" rel="noopener noreferrer" color="inherit">Privacy ↗</Button>
+    <Stack component="footer" alignItems="center" spacing={1} sx={{ px: 2, pt: 2, pb: 20 }}>
+      <Typography variant="body2" color="text.secondary">
+        Created by <Box component="a" href="https://bit-universe.net/" target="_blank" rel="noopener noreferrer" sx={{ color: "inherit", textUnderlineOffset: "3px" }}>Kevin Savill</Box>
+      </Typography>
+      <Stack direction="row" justifyContent="center" spacing={2}>
+        <Button component="a" href="/guide/" target="_blank" rel="noopener noreferrer" color="inherit">Puzzle guide ↗</Button>
+        <Button component="a" href="/privacy/" target="_blank" rel="noopener noreferrer" color="inherit">Privacy ↗</Button>
+      </Stack>
     </Stack>
   </Box>;
 }
